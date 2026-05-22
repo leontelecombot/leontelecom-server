@@ -1,22 +1,17 @@
 require('dotenv').config();
 const express = require('express');
-const twilio = require('twilio');
+const https = require('https');
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// CONFIGURATION
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+// CONFIGURATION - TELEGRAM
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_API_URL = 'https://api.telegram.org';
 
-// Diagnostic: print whether Twilio credentials are present (masked)
-const _sid = process.env.TWILIO_ACCOUNT_SID || '';
-const _tok = process.env.TWILIO_AUTH_TOKEN || '';
-console.log('Twilio SID set:', Boolean(_sid));
-console.log('Twilio Auth token length:', _tok.length ? `${_tok.length} chars` : 'not set');
+console.log('Telegram Bot Token set:', Boolean(TELEGRAM_BOT_TOKEN));
+console.log('Telegram Token length:', TELEGRAM_BOT_TOKEN.length ? `${TELEGRAM_BOT_TOKEN.length} chars` : 'not set');
 
 let AI_PROVIDER = (process.env.AI_PROVIDER || 'ollama').toLowerCase();
 if (AI_PROVIDER === 'openai') AI_PROVIDER = 'openai-compatible';
@@ -163,18 +158,36 @@ function getPlanMediaUrls() {
   return [FIBER_PLAN_MEDIA_URL, WIRELESS_PLAN_MEDIA_URL].filter(Boolean);
 }
 
-async function sendWhatsAppMessage(to, body, mediaUrls = []) {
-  const payload = {
-    from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-    to,
-    body,
-  };
-
+async function sendTelegramMessage(chatId, body, mediaUrls = []) {
+  // If there are media URLs, send first photo with caption, then text
   if (mediaUrls.length > 0) {
-    payload.mediaUrl = mediaUrls;
+    try {
+      // Send first image with caption
+      const photoUrl = mediaUrls[0];
+      await fetch(`${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          photo: photoUrl,
+          caption: body.substring(0, 1024), // Telegram caption limit
+        }),
+      });
+    } catch (photoError) {
+      console.error('Error sending photo:', photoError.message);
+    }
   }
 
-  return twilioClient.messages.create(payload);
+  // Send text message
+  return fetch(`${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: body,
+      parse_mode: 'HTML',
+    }),
+  }).then(res => res.json());
 }
 
 function extractTextFromResponse(response) {
@@ -334,10 +347,10 @@ function buildResponseForMessage(message) {
 app.get('/', (_req, res) => {
   res.json({
     ok: true,
-    service: 'leontelecom-bot-server',
+    service: 'leontelecom-bot-server (Telegram)',
     provider: AI_PROVIDER,
     model: AI_MODEL,
-    whatsapp: Boolean(process.env.TWILIO_WHATSAPP_NUMBER),
+    telegram: Boolean(TELEGRAM_BOT_TOKEN),
   });
 });
 
@@ -345,53 +358,66 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-// TWILIO WEBHOOK
+// TELEGRAM WEBHOOK
 app.post('/webhook', async (req, res) => {
-  const from = req.body.From;
-  const message = req.body.Body?.trim();
-
-  console.log(`[${from}] ${message}`);
-
-  if (!message) {
-    return res.sendStatus(200);
-  }
-
-  addToHistory(from, 'user', message);
-
-  let reply;
-  let mediaUrls = [];
-
   try {
-    // Always try AI first, only use scripted fallback if AI fails
+    // Telegram sends updates via /webhook
+    const update = req.body;
+    
+    // Only process messages
+    if (!update.message) {
+      return res.sendStatus(200);
+    }
+
+    const message = update.message;
+    const chatId = message.chat.id;
+    const userId = message.from.id;
+    const text = message.text?.trim();
+
+    if (!text) {
+      return res.sendStatus(200);
+    }
+
+    console.log(`[telegram:${userId}] ${text}`);
+
+    addToHistory(userId, 'user', text);
+
+    let reply;
+    let mediaUrls = [];
+
     try {
-      reply = await generateReply(from);
-      // Attach media if it's a plan request (even for AI-generated reply)
-      if (isPlanRequest(message)) {
-        mediaUrls = getPlanMediaUrls();
+      // Always try AI first, only use scripted fallback if AI fails
+      try {
+        reply = await generateReply(userId);
+        // Attach media if it's a plan request
+        if (isPlanRequest(text)) {
+          mediaUrls = getPlanMediaUrls();
+        }
+      } catch (aiError) {
+        console.error('AI error, using fallback:', aiError.message);
+        reply = buildFallbackReply(text);
+        mediaUrls = isPlanRequest(text) ? getPlanMediaUrls() : [];
       }
-    } catch (aiError) {
-      console.error('AI error, using fallback:', aiError.message);
-      reply = buildFallbackReply(message);
-      mediaUrls = isPlanRequest(message) ? getPlanMediaUrls() : [];
+    } catch (error) {
+      console.error('Error generating reply:', error.message);
+      reply = buildDefaultReply();
+    }
+
+    addToHistory(userId, 'assistant', reply);
+
+    try {
+      await sendTelegramMessage(chatId, reply, mediaUrls);
+      console.log(`[Bot -> ${userId}] ${reply}`);
+      if (mediaUrls.length > 0) {
+        console.log(`  [with ${mediaUrls.length} image(s)]`);
+      }
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error('Error sending Telegram message:', error);
+      return res.sendStatus(200);
     }
   } catch (error) {
-    console.error('Error generating reply:', error.message);
-    return res.sendStatus(500);
-  }
-
-  addToHistory(from, 'assistant', reply);
-
-  try {
-    await sendWhatsAppMessage(from, reply, mediaUrls);
-
-    console.log(`[Bot -> ${from}] ${reply}`);
-    if (mediaUrls.length > 0) {
-      console.log(`  [with ${mediaUrls.length} image(s)]`);
-    }
-    return res.sendStatus(200);
-  } catch (error) {
-    console.error('Error sending Twilio message:', error);
-    // Still return 200 to acknowledge the webhook (don't retry)
+    console.error('Webhook error:', error);
     return res.sendStatus(200);
   }
 });
@@ -402,4 +428,5 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`Webhook ready at http://localhost:${PORT}/webhook`);
   console.log(`AI provider: ${AI_PROVIDER} (${AI_MODEL})`);
+  console.log(`Telegram Bot: ${TELEGRAM_BOT_TOKEN ? 'configured' : 'NOT SET'}`);
 });
