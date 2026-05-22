@@ -18,7 +18,8 @@ const _tok = process.env.TWILIO_AUTH_TOKEN || '';
 console.log('Twilio SID set:', Boolean(_sid));
 console.log('Twilio Auth token length:', _tok.length ? `${_tok.length} chars` : 'not set');
 
-const AI_PROVIDER = (process.env.AI_PROVIDER || 'ollama').toLowerCase();
+let AI_PROVIDER = (process.env.AI_PROVIDER || 'ollama').toLowerCase();
+if (AI_PROVIDER === 'openai') AI_PROVIDER = 'openai-compatible';
 const AI_MODEL = process.env.AI_MODEL || 'llama3.1';
 const AI_BASE_URL = (process.env.AI_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const AI_API_KEY = process.env.AI_API_KEY || '';
