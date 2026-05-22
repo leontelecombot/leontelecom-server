@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: leontelecom-bot
+    runtime: node
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      # Add your Twilio credentials below or set them in Render dashboard
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        value: +14155238886
+      - key: AI_PROVIDER
+        value: ollama
+      - key: AI_BASE_URL
+        value: http://127.0.0.1:11434
+      - key: AI_MODEL
+        value: llama3.1
+      - key: DEMO_MODE
+        value: "true"
+      - key: LEON_CONTACT_NUMBER
+        value: 9511603125
