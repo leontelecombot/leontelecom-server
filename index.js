@@ -209,15 +209,27 @@ async function sendTelegramMessage(chatId, text, mediaUrls = []) {
   const messageResponse = await fetch(`${TELEGRAM_API_BASE}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text })
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true,
+      allow_sending_without_reply: true
+    })
   });
 
-  if (!messageResponse.ok) {
-    const errorText = await messageResponse.text();
-    throw new Error(`Telegram sendMessage failed (${messageResponse.status}): ${errorText}`);
+  const rawMessageText = await messageResponse.text();
+  let messagePayload = null;
+
+  try {
+    messagePayload = rawMessageText ? JSON.parse(rawMessageText) : null;
+  } catch (_error) {
+    messagePayload = null;
   }
 
-  const messagePayload = await messageResponse.json();
+  if (!messageResponse.ok || !messagePayload?.ok) {
+    throw new Error(`Telegram sendMessage failed (${messageResponse.status}): ${rawMessageText}`);
+  }
+
   const sentMessageId = messagePayload?.result?.message_id;
   console.log(`[Telegram send ok] chat=${chatId} message_id=${sentMessageId || 'unknown'}`);
 
