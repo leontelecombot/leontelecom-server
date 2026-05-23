@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: leontelecom-server
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_PROVIDER
+        value: openai-compatible
+      - key: AI_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: AI_MODEL
+        value: llama-3.1-8b-instant
+      - key: DEMO_MODE
+        value: "true"
+      - key: FIBER_PLAN_MEDIA_URL
+        value: https://via.placeholder.com/800x600?text=Planes+Fibra+Optica+Leon+Telecom
+      - key: WIRELESS_PLAN_MEDIA_URL
+        value: https://via.placeholder.com/800x600?text=Planes+Inalambricos+Leon+Telecom
+      - key: LEON_CONTACT_NUMBER
+        value: "9511603125"
