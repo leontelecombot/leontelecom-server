@@ -47,6 +47,11 @@ function isTechnicalIssue(text) {
   return /\b(falla|sin servicio|no funciona|intermitente|lento|reiniciar|conectar|conexion|caido|caída|soporte)\b/.test(value);
 }
 
+function isGreetingMessage(text) {
+  const value = normalizeText(text).trim();
+  return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)$/i.test(value);
+}
+
 function buildPlanReply(text) {
   const value = normalizeText(text);
   const fiber = /\bfibra\b/.test(value);
@@ -92,6 +97,21 @@ function buildTechnicalReply(text) {
       'Vamos a revisarlo. Primero reinicia tu router o equipo y espera 2 minutos.',
       'Si sigue igual, dime si el problema es sin internet, lento o intermitente y te doy el siguiente paso.'
     ].join(' '),
+    mediaUrls: []
+  };
+}
+
+function buildGreetingReply(text) {
+  const replies = [
+    'Hola, soy Leo, tu asistente de León Telecom. ¿En qué te ayudo hoy?',
+    '¡Hola! Estoy listo para ayudarte con planes, cobertura o soporte. Cuéntame qué necesitas.',
+    'Hola, ¿buscas información de internet, cobertura o soporte técnico? Te ayudo ahorita.'
+  ];
+
+  const normalized = normalizeText(text);
+  const seed = normalized.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return {
+    text: replies[seed % replies.length],
     mediaUrls: []
   };
 }
@@ -159,6 +179,10 @@ async function generateReply(userText) {
     }
   } catch (error) {
     console.error('AI reply error:', error.message);
+  }
+
+  if (isGreetingMessage(userText)) {
+    return buildGreetingReply(userText);
   }
 
   return buildFallbackReply(userText);
