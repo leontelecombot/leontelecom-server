@@ -25,3 +25,7 @@ services:
         value: https://via.placeholder.com/800x600?text=Planes+Inalambricos+Leon+Telecom
       - key: LEON_CONTACT_NUMBER
         value: "9511603125"
+      - key: AGENT_NOTIFY_CHAT_ID
+        value: ""
+      - key: AGENT_NOTIFY_WEBHOOK_URL
+        value: ""

@@ -24,6 +24,28 @@ const TELEGRAM_API_BASE = TELEGRAM_BOT_TOKEN
 const FIBER_PLAN_MEDIA_URL = process.env.FIBER_PLAN_MEDIA_URL || '';
 const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL || '';
 const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
+const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
+const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
+
+const LOCATIONS = {
+  huitzo: 'Huitzo',
+  telixtlahuaca: 'Telixtlahuaca',
+  suchilquitongo: 'Suchilquitongo'
+};
+
+const FIBER_PLANS = [
+  { name: 'Lite', speed: '30 Mbps', price: '$289/mes' },
+  { name: 'Basic', speed: '80 Mbps', price: '$320/mes' },
+  { name: 'Medium', speed: '150 Mbps', price: '$440/mes' },
+  { name: 'Advanced', speed: '200 Mbps', price: '$560/mes' },
+  { name: 'Ultra', speed: '300 Mbps', price: '$680/mes' }
+];
+
+const WIRELESS_PLANS = [
+  { name: '15 Mbps', speed: '15 Mbps', price: '$290/mes' },
+  { name: '20 Mbps', speed: '20 Mbps', price: '$340/mes' },
+  { name: '30 Mbps', speed: '30 Mbps', price: '$440/mes' }
+];
 
 function normalizeText(text) {
   return String(text || '')
@@ -47,45 +69,115 @@ function isTechnicalIssue(text) {
   return /\b(falla|sin servicio|no funciona|intermitente|lento|reiniciar|conectar|conexion|caido|caída|soporte)\b/.test(value);
 }
 
+function isAgentRequest(text) {
+  const value = normalizeText(text);
+  return /\b(agente|asesor|ejecutivo|humano|persona|llamar|contactar|ventas|atencion|atención)\b/.test(value);
+}
+
+function detectLocation(text) {
+  const value = normalizeText(text);
+
+  if (/\bhuitzo\b/.test(value)) {
+    return LOCATIONS.huitzo;
+  }
+
+  if (/\btelixtlahuaca\b/.test(value) || /\btelix\b/.test(value)) {
+    return LOCATIONS.telixtlahuaca;
+  }
+
+  if (/\bsuchilquitongo\b/.test(value) || /\bsuchil\b/.test(value)) {
+    return LOCATIONS.suchilquitongo;
+  }
+
+  return '';
+}
+
 function isGreetingMessage(text) {
   const value = normalizeText(text).trim();
   return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)$/i.test(value);
 }
 
-function buildPlanReply(text) {
+function isPlanListRequest(text) {
   const value = normalizeText(text);
-  const fiber = /\bfibra\b/.test(value);
-  const wireless = /\binalambr|\binalambrica\b|\binternet\s+inalambrico\b/.test(value);
+  return /\b(todos los planes|planes|paquetes|precios|tarifas|internet|wifi|wifis|servicio)\b/.test(value);
+}
 
-  if (fiber && FIBER_PLAN_MEDIA_URL) {
-    return {
-      text: 'Te comparto la info de fibra óptica. Si quieres, también te digo cuál te conviene según tu zona.',
-      mediaUrls: [FIBER_PLAN_MEDIA_URL]
-    };
-  }
+function buildPlanLines(plans) {
+  return plans.map((plan) => `- ${plan.name}: ${plan.speed} → ${plan.price}`).join('\n');
+}
 
-  if (wireless && WIRELESS_PLAN_MEDIA_URL) {
-    return {
-      text: 'Te comparto la info de internet inalámbrico. Si me dices tu colonia, te recomiendo la mejor opción.',
-      mediaUrls: [WIRELESS_PLAN_MEDIA_URL]
-    };
-  }
-
+function buildLocationPrompt() {
   return {
     text: [
-      'Manejamos opciones de internet para distintos tipos de zona.',
-      `Si me dices si buscas fibra o inalámbrico y tu colonia, te doy una recomendación más exacta.`,
-      `También te puedo ayudar por WhatsApp al ${LEON_CONTACT_NUMBER}.`
+      'Te puedo mostrar los planes según tu zona.',
+      'Dime dónde vives: Huitzo, Telixtlahuaca o Suchilquitongo.'
     ].join(' '),
     mediaUrls: []
   };
 }
 
-function buildCoverageReply(text) {
+function buildPlanReplyForLocation(location) {
+  if (location === LOCATIONS.huitzo) {
+    return {
+      text: [
+        'Estos son nuestros planes de fibra óptica para Huitzo:',
+        buildPlanLines(FIBER_PLANS),
+        'Si quieres, te recomiendo el mejor según cuántas personas usan internet en tu casa.'
+      ].join('\n'),
+      mediaUrls: FIBER_PLAN_MEDIA_URL ? [FIBER_PLAN_MEDIA_URL] : []
+    };
+  }
+
+  if (location === LOCATIONS.telixtlahuaca || location === LOCATIONS.suchilquitongo) {
+    return {
+      text: [
+        `Estos son nuestros planes de internet inalámbrico para ${location}:`,
+        buildPlanLines(WIRELESS_PLANS),
+        'Si quieres, te recomiendo el mejor según cuántas personas usan internet en tu casa.'
+      ].join('\n'),
+      mediaUrls: WIRELESS_PLAN_MEDIA_URL ? [WIRELESS_PLAN_MEDIA_URL] : []
+    };
+  }
+
+  return buildLocationPrompt();
+}
+
+function buildAgentReply() {
   return {
     text: [
-      'Pásame tu colonia, localidad o referencia y te confirmo si hay cobertura.',
-      `Si prefieres, también te atendemos al ${LEON_CONTACT_NUMBER}.`
+      'Claro, te paso con un agente.',
+      'En cuanto esté disponible, te contactamos por aquí.'
+    ].join(' '),
+    mediaUrls: []
+  };
+}
+
+function buildPlanReply(text) {
+  const location = detectLocation(text);
+  const value = normalizeText(text);
+
+  if (location) {
+    return buildPlanReplyForLocation(location);
+  }
+
+  if (/\bhuitzo\b/.test(value) || /\btelixtlahuaca\b/.test(value) || /\bsuchilquitongo\b/.test(value)) {
+    return buildLocationPrompt();
+  }
+
+  return buildLocationPrompt();
+}
+
+function buildCoverageReply(text) {
+  const location = detectLocation(text);
+
+  if (location) {
+    return buildPlanReplyForLocation(location);
+  }
+
+  return {
+    text: [
+      'Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo y te digo qué servicio te toca.',
+      'También puedes pedir hablar con un agente si quieres que te atienda una persona.'
     ].join(' '),
     mediaUrls: []
   };
@@ -103,9 +195,9 @@ function buildTechnicalReply(text) {
 
 function buildGreetingReply(text) {
   const replies = [
-    'Hola, soy Leo, tu asistente de León Telecom. ¿En qué te ayudo hoy?',
-    '¡Hola! Estoy listo para ayudarte con planes, cobertura o soporte. Cuéntame qué necesitas.',
-    'Hola, ¿buscas información de internet, cobertura o soporte técnico? Te ayudo ahorita.'
+    'Hola, soy Leo, tu asistente de León Telecom. Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo y te muestro los planes.',
+    '¡Hola! Estoy listo para ayudarte con planes, cobertura o soporte. Solo dime tu zona: Huitzo, Telixtlahuaca o Suchilquitongo.',
+    'Hola, te ayudo ahorita. Dime en qué zona vives y te enseño los planes correctos con fotos.'
   ];
 
   const normalized = normalizeText(text);
@@ -120,11 +212,52 @@ function buildFallbackReply(text) {
   return {
     text: [
       'Hola, soy el asistente de León Telecom.',
-      'Puedo ayudarte con planes, cobertura y soporte técnico.',
-      'Escríbeme qué necesitas y te respondo directo.'
+      'Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo y te muestro los planes.',
+      'También puedes pedir hablar con un agente.'
     ].join(' '),
     mediaUrls: []
   };
+}
+
+async function notifyAgentRequest(chatId, userText, location = '') {
+  const payload = {
+    source: 'telegram',
+    chatId,
+    location,
+    userText,
+    timestamp: new Date().toISOString()
+  };
+
+  if (AGENT_NOTIFY_WEBHOOK_URL) {
+    const response = await fetch(AGENT_NOTIFY_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Agent webhook failed (${response.status}): ${errorText}`);
+    }
+
+    return true;
+  }
+
+  if (AGENT_NOTIFY_CHAT_ID) {
+    await sendTelegramMessage(
+      AGENT_NOTIFY_CHAT_ID,
+      [
+        'Solicitud de agente recibida.',
+        `Chat: ${chatId}`,
+        location ? `Zona: ${location}` : 'Zona: no indicada',
+        `Mensaje: ${userText}`
+      ].join('\n')
+    );
+
+    return true;
+  }
+
+  return false;
 }
 
 async function generateAIReply(userText) {
@@ -160,6 +293,16 @@ async function generateAIReply(userText) {
 }
 
 async function generateReply(userText) {
+  const location = detectLocation(userText);
+
+  if (isAgentRequest(userText)) {
+    return buildAgentReply();
+  }
+
+  if (isPlanListRequest(userText)) {
+    return buildPlanReplyForLocation(location);
+  }
+
   if (isPlanRequest(userText)) {
     return buildPlanReply(userText);
   }
@@ -262,6 +405,14 @@ app.post('/webhook', async (req, res) => {
   try {
     const reply = await generateReply(message.text);
     await sendTelegramMessage(chatId, reply.text, reply.mediaUrls);
+
+    if (isAgentRequest(message.text)) {
+      try {
+        await notifyAgentRequest(chatId, message.text, detectLocation(message.text));
+      } catch (notifyError) {
+        console.error('Agent notification error:', notifyError.message);
+      }
+    }
   } catch (error) {
     console.error('Webhook handling error:', error.message);
     try {
