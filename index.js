@@ -8,7 +8,8 @@ app.use(express.json());
 const SYSTEM_PROMPT = [
   'Eres el asistente virtual de León Telecom.',
   'Responde siempre en español, con tono claro, breve y útil.',
-  'Ayuda con planes, cobertura, soporte técnico y pasos de contacto.',
+  'Ayuda solo con internet, cobertura, planes y pasos de contacto.',
+  'Nunca menciones servicios distintos al internet que no ofrecemos.',
   'Si no tienes un dato confirmado, dilo de forma transparente y ofrece escalarlo.'
 ].join(' ');
 
@@ -195,9 +196,9 @@ function buildTechnicalReply(text) {
 
 function buildGreetingReply(text) {
   const replies = [
-    'Hola, soy Leo, tu asistente de León Telecom. Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo y te muestro los planes.',
-    '¡Hola! Estoy listo para ayudarte con planes, cobertura o soporte. Solo dime tu zona: Huitzo, Telixtlahuaca o Suchilquitongo.',
-    'Hola, te ayudo ahorita. Dime en qué zona vives y te enseño los planes correctos con fotos.'
+    'Hola, soy Leo, tu asistente de León Telecom. Te ayudo con internet, cobertura y planes. Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo.',
+    '¡Hola! Estoy listo para ayudarte con internet, cobertura y planes. Solo dime tu zona: Huitzo, Telixtlahuaca o Suchilquitongo.',
+    'Hola, te ayudo ahorita. Dime en qué zona vives y te enseño los planes de internet correctos con fotos.'
   ];
 
   const normalized = normalizeText(text);
@@ -212,8 +213,8 @@ function buildFallbackReply(text) {
   return {
     text: [
       'Hola, soy el asistente de León Telecom.',
-      'Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo y te muestro los planes.',
-      'También puedes pedir hablar con un agente.'
+      'Te ayudo con internet, cobertura y planes.',
+      'Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo o pide hablar con un agente.'
     ].join(' '),
     mediaUrls: []
   };
@@ -293,6 +294,10 @@ async function generateAIReply(userText) {
 }
 
 async function generateReply(userText) {
+  if (isGreetingMessage(userText)) {
+    return buildGreetingReply(userText);
+  }
+
   const location = detectLocation(userText);
 
   if (isAgentRequest(userText)) {
@@ -322,10 +327,6 @@ async function generateReply(userText) {
     }
   } catch (error) {
     console.error('AI reply error:', error.message);
-  }
-
-  if (isGreetingMessage(userText)) {
-    return buildGreetingReply(userText);
   }
 
   return buildFallbackReply(userText);
