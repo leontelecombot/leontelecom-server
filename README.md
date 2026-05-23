@@ -28,6 +28,8 @@ Servidor Node.js para el bot de León Telecom con webhook de Telegram, respuesta
 
 El bot ya no pide colonia. Solo pregunta la zona y muestra los planes correctos con sus fotos cuando están configuradas.
 
+Para las imágenes de planes, usa enlaces públicos directos. Los links de Google Drive deben estar compartidos para cualquiera con el enlace y, de preferencia, apuntar a una URL directa tipo `uc?export=view&id=...`.
+
 ## Agente humano
 
 Si el usuario pide hablar con un agente, el bot puede notificar a un chat de Telegram interno o a un webhook externo, por ejemplo un flujo de n8n.
