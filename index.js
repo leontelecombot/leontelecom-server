@@ -1,432 +1,280 @@
 require('dotenv').config();
+
 const express = require('express');
-const https = require('https');
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// CONFIGURATION - TELEGRAM
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const TELEGRAM_API_URL = 'https://api.telegram.org';
+const SYSTEM_PROMPT = [
+  'Eres el asistente virtual de León Telecom.',
+  'Responde siempre en español, con tono claro, breve y útil.',
+  'Ayuda con planes, cobertura, soporte técnico y pasos de contacto.',
+  'Si no tienes un dato confirmado, dilo de forma transparente y ofrece escalarlo.'
+].join(' ');
 
-console.log('Telegram Bot Token set:', Boolean(TELEGRAM_BOT_TOKEN));
-console.log('Telegram Token length:', TELEGRAM_BOT_TOKEN.length ? `${TELEGRAM_BOT_TOKEN.length} chars` : 'not set');
-
-let AI_PROVIDER = (process.env.AI_PROVIDER || 'ollama').toLowerCase();
-if (AI_PROVIDER === 'openai') AI_PROVIDER = 'openai-compatible';
-const AI_MODEL = process.env.AI_MODEL || 'llama3.1';
-const AI_BASE_URL = (process.env.AI_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
+const AI_PROVIDER = process.env.AI_PROVIDER || 'openai-compatible';
+const AI_BASE_URL = (process.env.AI_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/$/, '');
+const AI_MODEL = process.env.AI_MODEL || 'llama-3.1-8b-instant';
 const AI_API_KEY = process.env.AI_API_KEY || '';
-const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 25000);
-const DEMO_MODE = (process.env.DEMO_MODE || 'true').toLowerCase() !== 'false';
-const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_API_BASE = TELEGRAM_BOT_TOKEN
+  ? `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`
+  : '';
+
 const FIBER_PLAN_MEDIA_URL = process.env.FIBER_PLAN_MEDIA_URL || '';
 const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL || '';
+const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
 
-const FIBER_COVERAGE = ['Huitzo'];
-const WIRELESS_COVERAGE = ['Telixtlahuaca', 'Suchilquitongo'];
-const WIRELESS_COVERAGE_NOTE = 'En Telixtlahuaca y Suchilquitongo el servicio es por antena inalambrica.';
-
-const FIBER_PLANS = [
-  { name: 'Lite', speed: '30 Mbps', price: '$289/mo' },
-  { name: 'Basic', speed: '80 Mbps', price: '$320/mo' },
-  { name: 'Medium', speed: '150 Mbps', price: '$440/mo' },
-  { name: 'Advanced', speed: '200 Mbps', price: '$560/mo' },
-  { name: 'Ultra', speed: '300 Mbps', price: '$680/mo' },
-];
-
-const WIRELESS_PLANS = [
-  { speed: '15 Mbps', price: '$290/mo' },
-  { speed: '20 Mbps', price: '$340/mo' },
-  { speed: '30 Mbps', price: '$440/mo' },
-];
-
-// BOT PERSONA
-const SYSTEM_PROMPT = `
-Eres "Leo", el asistente amigable de León Telecom 🚀
-Ayudas a clientes en Oaxaca con internet de fibra óptica (en Huitzo) e inalámbrico con antena (en Telixtlahuaca y Suchilquitongo).
-
-📋 PLANES DISPONIBLES:
-
-🔌 FIBRA ÓPTICA (en Huitzo):
-  • Lite: 30 Mbps → $289/mes
-  • Basic: 80 Mbps → $320/mes
-  • Medium: 150 Mbps → $440/mes
-  • Advanced: 200 Mbps → $560/mes
-  • Ultra: 300 Mbps → $680/mes
-
-📡 INALÁMBRICO CON ANTENA (Telixtlahuaca, Suchilquitongo):
-  • 15 Mbps → $290/mes
-  • 20 Mbps → $340/mes
-  • 30 Mbps → $440/mes
-
-✨ PROMOCIÓN: Nuevos clientes reciben el doble de velocidad el primer mes.
-
-🏘️ COBERTURA:
-  • Huitzo: fibra óptica ✓
-  • Telixtlahuaca: antena inalámbrica ✓
-  • Suchilquitongo: antena inalámbrica ✓
-
-📞 CONTACTO DIRECTO: ${LEON_CONTACT_NUMBER}
-
-🎯 INSTRUCCIONES:
-- Eres amable, natural y conversacional. Habla como un amigo.
-- Responde breve y directo (máximo 3-4 líneas). Usa máximo 1-2 emojis por mensaje.
-- Cuando pregunten por planes, sugiere basándote en: cuántas personas, qué usan internet, dónde viven.
-- Cuando pregunten sobre cobertura, confirma su localidad y ofrece la opción disponible.
-- Si reportan problemas técnicos, pide nombre y dirección. Promete contacto en 2 horas (lun-sab, 8am-8pm).
-- NUNCA inventes planes o precios fuera de la lista.
-- Sé proactivo: haz preguntas abiertas para entender mejor sus necesidades.
-- Si no sabes algo específico, ofrece pasar al equipo de ventas: ${LEON_CONTACT_NUMBER}.
-- Responde en español de México (informal, amable).
-`.trim();
-
-// PER-USER HISTORY IN MEMORY
-const conversations = new Map();
-
-function getHistory(phone) {
-  if (!conversations.has(phone)) {
-    conversations.set(phone, []);
-  }
-
-  return conversations.get(phone);
+function normalizeText(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
 }
 
-function addToHistory(phone, role, content) {
-  const history = getHistory(phone);
-  history.push({ role, content });
-
-  if (history.length > 20) {
-    history.splice(0, 2);
-  }
+function isPlanRequest(text) {
+  const value = normalizeText(text);
+  return /\b(plan|paquete|planes|precio|precios|tarifa|tarifas|costo|costos|promocion|internet)\b/.test(value);
 }
 
-function buildConversation(phone) {
-  return [
-    { role: 'system', content: SYSTEM_PROMPT },
-    ...getHistory(phone).map(({ role, content }) => ({ role, content })),
-  ];
+function isCoverageRequest(text) {
+  const value = normalizeText(text);
+  return /\b(cobertura|cubre|disponible en|tienen servicio|llega a|zona|colonia|fraccionamiento)\b/.test(value);
 }
 
-function isPlanRequest(message) {
-  return /\b(plan|planes|paquete|paquetes|precio|precios|tarifa|tarifas|costo|costos|paquetes?|promocion|promoci[oó]n)\b/i.test(message);
+function isTechnicalIssue(text) {
+  const value = normalizeText(text);
+  return /\b(falla|sin servicio|no funciona|intermitente|lento|reiniciar|conectar|conexion|caido|caída|soporte)\b/.test(value);
 }
 
-function isCoverageRequest(message) {
-  return /\b(cobertura|cubre|zona|llega|disponible|servicio|huitzo|telixtlahuaca|suchil|fibra|antena)\b/i.test(message);
+function isGreetingMessage(text) {
+  const value = normalizeText(text).trim();
+  return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)$/i.test(value);
 }
 
-function isTechnicalIssue(message) {
-  return /\b(falla|sin internet|caido|ca[ií]do|lento|servicio|no sirve|averia|aver[ií]a)\b/i.test(message);
-}
+function buildPlanReply(text) {
+  const value = normalizeText(text);
+  const fiber = /\bfibra\b/.test(value);
+  const wireless = /\binalambr|\binalambrica\b|\binternet\s+inalambrico\b/.test(value);
 
-function buildPlanReply() {
-  return [
-    'Claro, estos son los planes de Leon Telecom:',
-    `Fibra: ${FIBER_PLANS.map(plan => `${plan.name} ${plan.speed} ${plan.price}`).join(' | ')}`,
-    `Inalambrico: ${WIRELESS_PLANS.map(plan => `${plan.speed} ${plan.price}`).join(' | ')}`,
-    `Si me dices cuantas personas son y tu localidad, te recomiendo el ideal.`,
-  ].join('\n');
-}
-
-function buildCoverageReply() {
-  return [
-    `Tenemos fibra optica en ${FIBER_COVERAGE.join(', ')}.`,
-    `En ${WIRELESS_COVERAGE.join(', ')} el servicio es por antena inalambrica.`,
-    `Si me dices tu localidad exacta, te confirmo el servicio y te paso al ${LEON_CONTACT_NUMBER}.`,
-  ].join('\n');
-}
-
-function buildTechnicalReply() {
-  return [
-    'Lamento la falla. Pasame tu nombre y direccion completa y lo revisamos.',
-    'Un tecnico te contactara en maximo 2 horas en horario lun-sab 8am-8pm.',
-    `Si quieres, tambien te atienden por WhatsApp al ${LEON_CONTACT_NUMBER}.`,
-  ].join('\n');
-}
-
-function buildDefaultReply() {
-  return [
-    'Hola, soy Leo de Leon Telecom.',
-    'Te puedo ayudar con planes, cobertura, contratacion o reportes tecnicos.',
-    'Huitzo tiene fibra optica; Telixtlahuaca y Suchil van por antena inalambrica.',
-  ].join('\n');
-}
-
-function getPlanMediaUrls() {
-  return [FIBER_PLAN_MEDIA_URL, WIRELESS_PLAN_MEDIA_URL].filter(Boolean);
-}
-
-async function sendTelegramMessage(chatId, body, mediaUrls = []) {
-  // If there are media URLs, send first photo with caption, then text
-  if (mediaUrls.length > 0) {
-    try {
-      // Send first image with caption
-      const photoUrl = mediaUrls[0];
-      await fetch(`${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          photo: photoUrl,
-          caption: body.substring(0, 1024), // Telegram caption limit
-        }),
-      });
-    } catch (photoError) {
-      console.error('Error sending photo:', photoError.message);
-    }
-  }
-
-  // Send text message
-  return fetch(`${TELEGRAM_API_URL}/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: body,
-      parse_mode: 'HTML',
-    }),
-  }).then(res => res.json());
-}
-
-function extractTextFromResponse(response) {
-  if (!response) {
-    return '';
-  }
-
-  if (typeof response === 'string') {
-    return response.trim();
-  }
-
-  if (typeof response.message?.content === 'string') {
-    return response.message.content.trim();
-  }
-
-  const choiceText = response.choices?.[0]?.message?.content;
-  if (typeof choiceText === 'string') {
-    return choiceText.trim();
-  }
-
-  if (Array.isArray(response.content)) {
-    return response.content
-      .map(block => (typeof block?.text === 'string' ? block.text : ''))
-      .join('')
-      .trim();
-  }
-
-  return '';
-}
-
-function buildFallbackReply(message) {
-  if (isTechnicalIssue(message)) {
-    return buildTechnicalReply();
-  }
-
-  if (isCoverageRequest(message)) {
-    return buildCoverageReply();
-  }
-
-  if (isPlanRequest(message)) {
-    return buildPlanReply();
-  }
-
-  return buildDefaultReply();
-}
-
-async function fetchWithTimeout(url, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function generateReply(phone) {
-  const messages = buildConversation(phone);
-
-  if (AI_PROVIDER === 'ollama') {
-    const response = await fetchWithTimeout(`${AI_BASE_URL}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        messages,
-        stream: false,
-        options: {
-          temperature: 0.4,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama responded ${response.status}`);
-    }
-
-    const data = await response.json();
-    const reply = extractTextFromResponse(data);
-
-    if (!reply) {
-      throw new Error('Ollama did not return text');
-    }
-
-    return reply;
-  }
-
-  if (AI_PROVIDER === 'openai-compatible') {
-    const response = await fetchWithTimeout(`${AI_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        messages,
-        temperature: 0.4,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Compatible API responded ${response.status}`);
-    }
-
-    const data = await response.json();
-    const reply = extractTextFromResponse(data);
-
-    if (!reply) {
-      throw new Error('Compatible API did not return text');
-    }
-
-    return reply;
-  }
-
-  throw new Error(`Unsupported AI_PROVIDER: ${AI_PROVIDER}`);
-}
-
-function shouldUseFallback() {
-  return DEMO_MODE;
-}
-
-function buildResponseForMessage(message) {
-  if (isTechnicalIssue(message)) {
+  if (fiber && FIBER_PLAN_MEDIA_URL) {
     return {
-      body: buildTechnicalReply(),
-      mediaUrls: [],
+      text: 'Te comparto la info de fibra óptica. Si quieres, también te digo cuál te conviene según tu zona.',
+      mediaUrls: [FIBER_PLAN_MEDIA_URL]
     };
   }
 
-  if (isCoverageRequest(message)) {
+  if (wireless && WIRELESS_PLAN_MEDIA_URL) {
     return {
-      body: buildCoverageReply(),
-      mediaUrls: [],
-    };
-  }
-
-  if (isPlanRequest(message)) {
-    return {
-      body: buildPlanReply(),
-      mediaUrls: getPlanMediaUrls(),
+      text: 'Te comparto la info de internet inalámbrico. Si me dices tu colonia, te recomiendo la mejor opción.',
+      mediaUrls: [WIRELESS_PLAN_MEDIA_URL]
     };
   }
 
   return {
-    body: null,
-    mediaUrls: [],
+    text: [
+      'Manejamos opciones de internet para distintos tipos de zona.',
+      `Si me dices si buscas fibra o inalámbrico y tu colonia, te doy una recomendación más exacta.`,
+      `También te puedo ayudar por WhatsApp al ${LEON_CONTACT_NUMBER}.`
+    ].join(' '),
+    mediaUrls: []
   };
 }
 
-app.get('/', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'leontelecom-bot-server (Telegram)',
-    provider: AI_PROVIDER,
-    model: AI_MODEL,
-    telegram: Boolean(TELEGRAM_BOT_TOKEN),
+function buildCoverageReply(text) {
+  return {
+    text: [
+      'Pásame tu colonia, localidad o referencia y te confirmo si hay cobertura.',
+      `Si prefieres, también te atendemos al ${LEON_CONTACT_NUMBER}.`
+    ].join(' '),
+    mediaUrls: []
+  };
+}
+
+function buildTechnicalReply(text) {
+  return {
+    text: [
+      'Vamos a revisarlo. Primero reinicia tu router o equipo y espera 2 minutos.',
+      'Si sigue igual, dime si el problema es sin internet, lento o intermitente y te doy el siguiente paso.'
+    ].join(' '),
+    mediaUrls: []
+  };
+}
+
+function buildGreetingReply(text) {
+  const replies = [
+    'Hola, soy Leo, tu asistente de León Telecom. ¿En qué te ayudo hoy?',
+    '¡Hola! Estoy listo para ayudarte con planes, cobertura o soporte. Cuéntame qué necesitas.',
+    'Hola, ¿buscas información de internet, cobertura o soporte técnico? Te ayudo ahorita.'
+  ];
+
+  const normalized = normalizeText(text);
+  const seed = normalized.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return {
+    text: replies[seed % replies.length],
+    mediaUrls: []
+  };
+}
+
+function buildFallbackReply(text) {
+  return {
+    text: [
+      'Hola, soy el asistente de León Telecom.',
+      'Puedo ayudarte con planes, cobertura y soporte técnico.',
+      'Escríbeme qué necesitas y te respondo directo.'
+    ].join(' '),
+    mediaUrls: []
+  };
+}
+
+async function generateAIReply(userText) {
+  if (!AI_API_KEY) {
+    return null;
+  }
+
+  const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${AI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userText }
+      ],
+      temperature: 0.4
+    })
   });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`AI request failed (${response.status}): ${errorText}`);
+  }
+
+  const payload = await response.json();
+  const reply = payload?.choices?.[0]?.message?.content;
+
+  return typeof reply === 'string' ? reply.trim() : null;
+}
+
+async function generateReply(userText) {
+  if (isPlanRequest(userText)) {
+    return buildPlanReply(userText);
+  }
+
+  if (isCoverageRequest(userText)) {
+    return buildCoverageReply(userText);
+  }
+
+  if (isTechnicalIssue(userText)) {
+    return buildTechnicalReply(userText);
+  }
+
+  try {
+    const aiReply = await generateAIReply(userText);
+    if (aiReply) {
+      return { text: aiReply, mediaUrls: [] };
+    }
+  } catch (error) {
+    console.error('AI reply error:', error.message);
+  }
+
+  if (isGreetingMessage(userText)) {
+    return buildGreetingReply(userText);
+  }
+
+  return buildFallbackReply(userText);
+}
+
+async function sendTelegramMessage(chatId, text, mediaUrls = []) {
+  if (!TELEGRAM_API_BASE) {
+    throw new Error('TELEGRAM_BOT_TOKEN is missing');
+  }
+
+  for (const mediaUrl of mediaUrls) {
+    const photoResponse = await fetch(`${TELEGRAM_API_BASE}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, photo: mediaUrl })
+    });
+
+    if (!photoResponse.ok) {
+      const errorText = await photoResponse.text();
+      throw new Error(`Telegram sendPhoto failed (${photoResponse.status}): ${errorText}`);
+    }
+  }
+
+  const messageResponse = await fetch(`${TELEGRAM_API_BASE}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true,
+      allow_sending_without_reply: true
+    })
+  });
+
+  const rawMessageText = await messageResponse.text();
+  let messagePayload = null;
+
+  try {
+    messagePayload = rawMessageText ? JSON.parse(rawMessageText) : null;
+  } catch (_error) {
+    messagePayload = null;
+  }
+
+  if (!messageResponse.ok || !messagePayload?.ok) {
+    throw new Error(`Telegram sendMessage failed (${messageResponse.status}): ${rawMessageText}`);
+  }
+
+  const sentMessageId = messagePayload?.result?.message_id;
+  console.log(`[Telegram send ok] chat=${chatId} message_id=${sentMessageId || 'unknown'}`);
+
+  return messagePayload;
+}
+
+app.get('/', (_req, res) => {
+  res.json({ ok: true, service: 'leontelecom-server' });
 });
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-// TELEGRAM WEBHOOK
 app.post('/webhook', async (req, res) => {
+  const update = req.body || {};
+  const message = update.message;
+
+  res.sendStatus(200);
+
+  if (!message || typeof message.text !== 'string') {
+    return;
+  }
+
+  const chatId = message.chat?.id;
+  if (!chatId) {
+    return;
+  }
+
   try {
-    // Telegram sends updates via /webhook
-    const update = req.body;
-    
-    // Only process messages
-    if (!update.message) {
-      return res.sendStatus(200);
-    }
-
-    const message = update.message;
-    const chatId = message.chat.id;
-    const userId = message.from.id;
-    const text = message.text?.trim();
-
-    if (!text) {
-      return res.sendStatus(200);
-    }
-
-    console.log(`[telegram:${userId}] ${text}`);
-
-    addToHistory(userId, 'user', text);
-
-    let reply;
-    let mediaUrls = [];
-
-    try {
-      // Always try AI first, only use scripted fallback if AI fails
-      try {
-        reply = await generateReply(userId);
-        // Attach media if it's a plan request
-        if (isPlanRequest(text)) {
-          mediaUrls = getPlanMediaUrls();
-        }
-      } catch (aiError) {
-        console.error('AI error, using fallback:', aiError.message);
-        reply = buildFallbackReply(text);
-        mediaUrls = isPlanRequest(text) ? getPlanMediaUrls() : [];
-      }
-    } catch (error) {
-      console.error('Error generating reply:', error.message);
-      reply = buildDefaultReply();
-    }
-
-    addToHistory(userId, 'assistant', reply);
-
-    try {
-      await sendTelegramMessage(chatId, reply, mediaUrls);
-      console.log(`[Bot -> ${userId}] ${reply}`);
-      if (mediaUrls.length > 0) {
-        console.log(`  [with ${mediaUrls.length} image(s)]`);
-      }
-      return res.sendStatus(200);
-    } catch (error) {
-      console.error('Error sending Telegram message:', error);
-      return res.sendStatus(200);
-    }
+    const reply = await generateReply(message.text);
+    await sendTelegramMessage(chatId, reply.text, reply.mediaUrls);
   } catch (error) {
-    console.error('Webhook error:', error);
-    return res.sendStatus(200);
+    console.error('Webhook handling error:', error.message);
+    try {
+      await sendTelegramMessage(chatId, 'Tu mensaje llegó, pero hubo un error al procesarlo. Intenta de nuevo en unos segundos.');
+    } catch (sendError) {
+      console.error('Fallback Telegram send error:', sendError.message);
+    }
   }
 });
 
-// START SERVER
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Webhook ready at http://localhost:${PORT}/webhook`);
-  console.log(`AI provider: ${AI_PROVIDER} (${AI_MODEL})`);
-  console.log(`Telegram Bot: ${TELEGRAM_BOT_TOKEN ? 'configured' : 'NOT SET'}`);
+const port = Number(process.env.PORT || 3000);
+
+app.listen(port, () => {
+  console.log(`León Telecom server listening on port ${port}`);
+  console.log(`AI provider: ${AI_PROVIDER}`);
 });
