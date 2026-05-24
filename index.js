@@ -225,6 +225,16 @@ function buildPlanReplyForLocation(location) {
   return buildLocationPrompt();
 }
 
+function buildRecommendationPrompt() {
+  return {
+    text: [
+      'Perfecto. Dime cualquier duda sobre ese plan y te respondo breve.',
+      'Por ejemplo: si quieres más velocidad, si te conviene menos, o si necesitas que te lo compare con tu uso en casa.'
+    ].join(' '),
+    mediaUrls: []
+  };
+}
+
 function buildAgentReply() {
   return {
     text: [
@@ -298,8 +308,8 @@ async function generateNaturalPlanRecommendationReply(context) {
     : chooseRecommendedWirelessPlan(context.householdSize);
 
   const fallbackText = context.location === LOCATIONS.huitzo
-    ? `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.name} (${baseRecommendation.speed}) por ${baseRecommendation.price}. Si quieres, te digo si te conviene subir o bajar según el uso.`
-    : `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.speed} por ${baseRecommendation.price}. Si quieres, te digo si te conviene subir o bajar según el uso.`;
+    ? `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.name} (${baseRecommendation.speed}) por ${baseRecommendation.price}. Si quieres, te digo rápido por qué encaja.`
+    : `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.speed} por ${baseRecommendation.price}. Si quieres, te digo rápido por qué encaja.`;
 
   if (!AI_API_KEY) {
     return {
@@ -356,6 +366,72 @@ async function generateNaturalPlanRecommendationReply(context) {
     }
   } catch (error) {
     console.error('Natural plan recommendation AI error:', error.message);
+  }
+
+  return {
+    text: fallbackText,
+    mediaUrls: []
+  };
+}
+
+async function generateFollowupRecommendationReply(context, userText) {
+  const baseRecommendation = context.location === LOCATIONS.huitzo
+    ? chooseRecommendedFiberPlan(context.householdSize)
+    : chooseRecommendedWirelessPlan(context.householdSize);
+
+  const fallbackText = `Si quieres, te explico por qué te conviene ${baseRecommendation.name || baseRecommendation.speed} para ${context.householdSize} personas en ${context.location}.`;
+
+  if (!AI_API_KEY) {
+    return {
+      text: fallbackText,
+      mediaUrls: []
+    };
+  }
+
+  try {
+    const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Eres Leo, asesor de León Telecom.',
+              'Responde de forma corta, natural y concreta, máximo dos frases.',
+              'Mantén coherencia con el plan sugerido y la cantidad de personas en casa.',
+              'No des una lista ni un formulario.',
+              'Si el usuario pregunta algo distinto, vuelve a orientar brevemente al plan o a la recomendación.'
+            ].join(' ')
+          },
+          {
+            role: 'user',
+            content: [
+              `Contexto: zona ${context.location}, ${context.householdSize} personas en casa, plan sugerido ${baseRecommendation.name || baseRecommendation.speed} (${baseRecommendation.speed}) por ${baseRecommendation.price}.`,
+              `Mensaje del cliente: ${userText}`,
+              'Responde como asesor humano, breve y coherente. Si el cliente dice que no sabe de dispositivos, dale una explicación simple y una recomendación concreta.'
+            ].join('\n')
+          }
+        ],
+        temperature: 0.7
+      })
+    });
+
+    if (!response.ok) {
+      return { text: fallbackText, mediaUrls: [] };
+    }
+
+    const payload = await response.json();
+    const reply = payload?.choices?.[0]?.message?.content;
+    if (typeof reply === 'string' && reply.trim()) {
+      return { text: reply.trim().split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').trim(), mediaUrls: [] };
+    }
+  } catch (error) {
+    console.error('Follow-up recommendation AI error:', error.message);
   }
 
   return {
@@ -722,9 +798,10 @@ app.post('/webhook', async (req, res) => {
       const location = session.data?.location || detectLocation(text);
 
       if (householdSize && location) {
-        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_recommendation_followup', data: { location, householdSize } });
         const recommendation = await generateNaturalPlanRecommendationReply({ location, householdSize });
         await sendTelegramMessage(chatId, recommendation.text, recommendation.mediaUrls || []);
+        await sendTelegramMessage(chatId, 'Si quieres, dime qué necesitas y te lo explico rápido.');
         return;
       }
 
@@ -734,6 +811,20 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      await sendReplyObject(buildMenuReply());
+      return;
+    }
+
+    // If we already recommended a plan, keep the context alive for short follow-ups.
+    if (session.state === 'awaiting_recommendation_followup') {
+      const context = session.data || {};
+      if (context.location && context.householdSize) {
+        const reply = await generateFollowupRecommendationReply(context, text);
+        await sendTelegramMessage(chatId, reply.text, reply.mediaUrls || []);
+        return;
+      }
+
+      clearSession(chatId);
       await sendReplyObject(buildMenuReply());
       return;
     }
