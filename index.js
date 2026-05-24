@@ -100,6 +100,20 @@ function isReportRequest(text) {
   return /\b(reportar|reporte|reporto|report|denunciar|problema|reportar problema)\b/.test(value);
 }
 
+function isInstallationRequest(text) {
+  const value = normalizeText(text);
+  return /\b(instal|instalar|instalacion|instalación|agendar|cita|programar|agenda)\b/.test(value);
+}
+
+function sanitizeAIReply(reply) {
+  if (!reply || typeof reply !== 'string') return '';
+  // Split into sentences and remove obvious greetings/intro sentences
+  const parts = reply.trim().split(/(?<=[.!?])\s+/);
+  const filtered = parts.filter((s) => !/^(\s*¡?hola\b|\s*me alegra\b|\s*encantad[oa]\b|\s*gracias\b|\s*estoy feliz\b)/i.test(s));
+  const result = (filtered.length ? filtered : parts).slice(0, 2).join(' ').trim();
+  return result || reply.trim().split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').trim();
+}
+
 function detectLocation(text) {
   const value = normalizeText(text);
 
@@ -428,7 +442,7 @@ async function generateFollowupRecommendationReply(context, userText) {
     const payload = await response.json();
     const reply = payload?.choices?.[0]?.message?.content;
     if (typeof reply === 'string' && reply.trim()) {
-      return { text: reply.trim().split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').trim(), mediaUrls: [] };
+      return { text: sanitizeAIReply(reply), mediaUrls: [] };
     }
   } catch (error) {
     console.error('Follow-up recommendation AI error:', error.message);
@@ -817,10 +831,28 @@ app.post('/webhook', async (req, res) => {
 
     // If we already recommended a plan, keep the context alive for short follow-ups.
     if (session.state === 'awaiting_recommendation_followup') {
+      // If user asks about scheduling installation, prioritize that and notify agent.
+      if (isInstallationRequest(text)) {
+        try {
+          await notifyAgentRequest(chatId, `Solicitud de instalación: ${text}`, session.data?.location || detectLocation(text));
+        } catch (notifyError) {
+          console.error('Agent notification error:', notifyError.message);
+        }
+        await sendTelegramMessage(chatId, 'Perfecto — he solicitado a un asesor que te contacte para programar la instalación.');
+        return;
+      }
+
       const context = session.data || {};
       if (context.location && context.householdSize) {
         const reply = await generateFollowupRecommendationReply(context, text);
-        await sendTelegramMessage(chatId, reply.text, reply.mediaUrls || []);
+        // If AI reply looks like a generic greeting only, fallback to a short message
+        const sanitized = (reply && reply.text) ? reply.text : String(reply || '');
+        if (/^\s*(¡?hola\b|me alegra|gracias|estoy feliz)/i.test(sanitized)) {
+          await sendTelegramMessage(chatId, 'Te confirmo la recomendación. ¿Quieres que programe un contacto con un asesor?');
+          return;
+        }
+
+        await sendTelegramMessage(chatId, sanitized, reply.mediaUrls || []);
         return;
       }
 
