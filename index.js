@@ -34,6 +34,21 @@ const LOCATIONS = {
   suchilquitongo: 'Suchilquitongo'
 };
 
+// Simple in-memory session store keyed by chatId. Keeps short conversational state.
+const sessions = new Map();
+
+function getSession(chatId) {
+  return sessions.get(String(chatId)) || { state: null, data: {} };
+}
+
+function setSession(chatId, session) {
+  sessions.set(String(chatId), session);
+}
+
+function clearSession(chatId) {
+  sessions.delete(String(chatId));
+}
+
 const FIBER_PLANS = [
   { name: 'Lite', speed: '30 Mbps', price: '$289/mes' },
   { name: 'Basic', speed: '80 Mbps', price: '$320/mes' },
@@ -75,6 +90,16 @@ function isAgentRequest(text) {
   return /\b(agente|asesor|ejecutivo|humano|persona|llamar|contactar|ventas|atencion|atención)\b/.test(value);
 }
 
+function isExistingCustomer(text) {
+  const value = normalizeText(text);
+  return /\b(ya tengo un plan|ya tengo servicio|soy cliente|tengo un plan|mi plan|ya soy cliente|cliente)\b/.test(value);
+}
+
+function isReportRequest(text) {
+  const value = normalizeText(text);
+  return /\b(reportar|reporte|reporto|report|denunciar|problema|reportar problema)\b/.test(value);
+}
+
 function detectLocation(text) {
   const value = normalizeText(text);
 
@@ -95,7 +120,7 @@ function detectLocation(text) {
 
 function isGreetingMessage(text) {
   const value = normalizeText(text).trim();
-  return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)$/i.test(value);
+  return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)(\b|\s|,|!|\.)/i.test(value);
 }
 
 function isPlanListRequest(text) {
@@ -111,9 +136,14 @@ function buildLocationPrompt() {
   return {
     text: [
       'Te puedo mostrar los planes según tu zona.',
-      'Dime dónde vives: Huitzo, Telixtlahuaca o Suchilquitongo.'
+      'Elige una opción: Huitzo, Telixtlahuaca o Suchilquitongo.'
     ].join(' '),
-    mediaUrls: []
+    mediaUrls: [],
+    replyMarkup: {
+      keyboard: [[{ text: 'Huitzo' }, { text: 'Telixtlahuaca' }, { text: 'Suchilquitongo' }]],
+      one_time_keyboard: true,
+      resize_keyboard: true
+    }
   };
 }
 
@@ -153,16 +183,32 @@ function buildAgentReply() {
   };
 }
 
+function buildExistingCustomerReply() {
+  return {
+    text: [
+      'Perfecto — eres cliente. ¿Cuál es tu plan actual?',
+      'Dime el nombre del plan o copia el mensaje que te llegó y te ayudo con facturación, velocidad o fallas.'
+    ].join(' '),
+    mediaUrls: []
+  };
+}
+
+function buildReportPrompt() {
+  return {
+    text: [
+      'Entendido. Por favor descríbeme brevemente el problema que quieres reportar (por ejemplo: sin internet, muy lento, intermitente).',
+      'Si quieres, puedes incluir horarios o capturas.'
+    ].join(' '),
+    mediaUrls: []
+  };
+}
+
 function buildPlanReply(text) {
   const location = detectLocation(text);
   const value = normalizeText(text);
 
   if (location) {
     return buildPlanReplyForLocation(location);
-  }
-
-  if (/\bhuitzo\b/.test(value) || /\btelixtlahuaca\b/.test(value) || /\bsuchilquitongo\b/.test(value)) {
-    return buildLocationPrompt();
   }
 
   return buildLocationPrompt();
@@ -195,28 +241,57 @@ function buildTechnicalReply(text) {
 }
 
 function buildGreetingReply(text) {
-  const replies = [
-    'Hola, soy Leo, tu asistente de León Telecom. Te ayudo con internet, cobertura y planes. Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo.',
-    '¡Hola! Estoy listo para ayudarte con internet, cobertura y planes. Solo dime tu zona: Huitzo, Telixtlahuaca o Suchilquitongo.',
-    'Hola, te ayudo ahorita. Dime en qué zona vives y te enseño los planes de internet correctos con fotos.'
-  ];
-
-  const normalized = normalizeText(text);
-  const seed = normalized.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  // Present a short menu so the user picks an explicit action.
   return {
-    text: replies[seed % replies.length],
-    mediaUrls: []
+    text: [
+      'Hola, soy Leo, el asistente de León Telecom.',
+      '¿En qué te puedo ayudar hoy? Elige una opción o escribe su número:'
+    ].join('\n'),
+    mediaUrls: [],
+    replyMarkup: {
+      keyboard: [
+        [{ text: '1) Ver planes disponibles' }, { text: '2) Ya soy cliente (tengo un plan)' }],
+        [{ text: '3) Quiero hablar con un asesor' }, { text: '4) Reportar un problema' }]
+      ],
+      one_time_keyboard: true,
+      resize_keyboard: true
+    }
   };
 }
 
 function buildFallbackReply(text) {
   return {
     text: [
-      'Hola, soy el asistente de León Telecom.',
-      'Te ayudo con internet, cobertura y planes.',
-      'Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo o pide hablar con un agente.'
-    ].join(' '),
-    mediaUrls: []
+      'No entendí bien. Puedes elegir una de estas opciones:',
+      '1) Ver planes',
+      '2) Ya soy cliente (dime tu plan)',
+      '3) Hablar con un asesor',
+      '4) Reportar un problema'
+    ].join('\n'),
+    mediaUrls: [],
+    replyMarkup: {
+      keyboard: [[{ text: '1) Ver planes' }, { text: '2) Ya soy cliente (dime tu plan)' }], [{ text: '3) Hablar con un asesor' }, { text: '4) Reportar un problema' }]],
+      one_time_keyboard: true,
+      resize_keyboard: true
+    }
+  };
+}
+
+function buildMenuReply() {
+  return {
+    text: [
+      'Hola, soy Leo, el asistente de León Telecom.',
+      '¿En qué te puedo ayudar hoy? Elige una opción o escribe su número:'
+    ].join('\n'),
+    mediaUrls: [],
+    replyMarkup: {
+      keyboard: [
+        [{ text: '1) Ver planes disponibles' }, { text: '2) Ya soy cliente (tengo un plan)' }],
+        [{ text: '3) Quiero hablar con un asesor' }, { text: '4) Reportar un problema' }]
+      ],
+      one_time_keyboard: true,
+      resize_keyboard: true
+    }
   };
 }
 
@@ -295,13 +370,21 @@ async function generateAIReply(userText) {
 
 async function generateReply(userText) {
   if (isGreetingMessage(userText)) {
-    return buildGreetingReply(userText);
+    return buildMenuReply();
   }
 
   const location = detectLocation(userText);
 
   if (isAgentRequest(userText)) {
     return buildAgentReply();
+  }
+
+  if (isReportRequest(userText)) {
+    return buildTechnicalReply(userText);
+  }
+
+  if (isExistingCustomer(userText)) {
+    return buildExistingCustomerReply();
   }
 
   if (isPlanListRequest(userText)) {
@@ -320,64 +403,90 @@ async function generateReply(userText) {
     return buildTechnicalReply(userText);
   }
 
-  try {
-    const aiReply = await generateAIReply(userText);
-    if (aiReply) {
-      return { text: aiReply, mediaUrls: [] };
-    }
-  } catch (error) {
-    console.error('AI reply error:', error.message);
-  }
-
   return buildFallbackReply(userText);
 }
 
-async function sendTelegramMessage(chatId, text, mediaUrls = []) {
+async function sendTelegramMessage(chatId, text, mediaUrls = [], options = {}) {
   if (!TELEGRAM_API_BASE) {
     throw new Error('TELEGRAM_BOT_TOKEN is missing');
   }
 
-  for (const mediaUrl of mediaUrls) {
-    const photoResponse = await fetch(`${TELEGRAM_API_BASE}/sendPhoto`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, photo: mediaUrl })
-    });
+  // Send photos first (if any). Retry each media up to 2 times.
+  for (const mediaUrl of mediaUrls || []) {
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const photoResponse = await fetch(`${TELEGRAM_API_BASE}/sendPhoto`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, photo: mediaUrl })
+        });
 
-    if (!photoResponse.ok) {
-      const errorText = await photoResponse.text();
-      throw new Error(`Telegram sendPhoto failed (${photoResponse.status}): ${errorText}`);
+        if (!photoResponse.ok) {
+          const errorText = await photoResponse.text();
+          lastErr = new Error(`Telegram sendPhoto failed (${photoResponse.status}): ${errorText}`);
+          await new Promise((r) => setTimeout(r, 300 * attempt));
+          continue;
+        }
+
+        // success
+        break;
+      } catch (err) {
+        lastErr = err;
+        await new Promise((r) => setTimeout(r, 300 * attempt));
+      }
+    }
+
+    if (lastErr) throw lastErr;
+  }
+
+  // Prepare message payload with optional reply markup
+  const messageBody = {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true,
+    allow_sending_without_reply: true
+  };
+
+  if (options.replyMarkup) {
+    messageBody.reply_markup = options.replyMarkup;
+  }
+
+  // Retry sendMessage a few times to handle transient network/Telegram errors
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const messageResponse = await fetch(`${TELEGRAM_API_BASE}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(messageBody)
+      });
+
+      const rawMessageText = await messageResponse.text();
+      let messagePayload = null;
+
+      try {
+        messagePayload = rawMessageText ? JSON.parse(rawMessageText) : null;
+      } catch (_error) {
+        messagePayload = null;
+      }
+
+      if (!messageResponse.ok || !messagePayload?.ok) {
+        lastError = new Error(`Telegram sendMessage failed (${messageResponse.status}): ${rawMessageText}`);
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+        continue;
+      }
+
+      const sentMessageId = messagePayload?.result?.message_id;
+      console.log(`[Telegram send ok] chat=${chatId} message_id=${sentMessageId || 'unknown'}`);
+      return messagePayload;
+    } catch (err) {
+      lastError = err;
+      await new Promise((r) => setTimeout(r, 500 * attempt));
     }
   }
 
-  const messageResponse = await fetch(`${TELEGRAM_API_BASE}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true,
-      allow_sending_without_reply: true
-    })
-  });
-
-  const rawMessageText = await messageResponse.text();
-  let messagePayload = null;
-
-  try {
-    messagePayload = rawMessageText ? JSON.parse(rawMessageText) : null;
-  } catch (_error) {
-    messagePayload = null;
-  }
-
-  if (!messageResponse.ok || !messagePayload?.ok) {
-    throw new Error(`Telegram sendMessage failed (${messageResponse.status}): ${rawMessageText}`);
-  }
-
-  const sentMessageId = messagePayload?.result?.message_id;
-  console.log(`[Telegram send ok] chat=${chatId} message_id=${sentMessageId || 'unknown'}`);
-
-  return messagePayload;
+  throw lastError || new Error('Unknown Telegram sendMessage error');
 }
 
 app.get('/', (_req, res) => {
@@ -404,9 +513,141 @@ app.post('/webhook', async (req, res) => {
   }
 
   try {
-    const reply = await generateReply(message.text);
-    await sendTelegramMessage(chatId, reply.text, reply.mediaUrls);
+    // Session-aware handling
+    const text = String(message.text || '').trim();
+    const session = getSession(chatId);
 
+    // Helper to send reply objects (which may include replyMarkup)
+    async function sendReplyObject(replyObj) {
+      const opts = {};
+      if (replyObj.replyMarkup) opts.replyMarkup = replyObj.replyMarkup;
+      await sendTelegramMessage(chatId, replyObj.text, replyObj.mediaUrls || [], opts);
+    }
+
+    // Parse simple numeric/menu choices
+    function parseMenuChoice(input) {
+      const v = normalizeText(input);
+      if (/^1$|^1\b|\buno\b|ver planes|planes|paquetes/.test(v)) return 1;
+      if (/^2$|^2\b|\bdos\b|ya soy cliente|tengo un plan|soy cliente/.test(v)) return 2;
+      if (/^3$|^3\b|\btres\b|hablar con|asesor|agente/.test(v)) return 3;
+      if (/^4$|^4\b|\bcuatro\b|reportar|problema|reporte/.test(v)) return 4;
+      return null;
+    }
+
+    // If we previously showed menu, expect a numeric choice or text
+    if (session.state === 'awaiting_menu_choice') {
+      const choice = parseMenuChoice(text);
+      if (choice === 1) {
+        setSession(chatId, { state: 'awaiting_location', data: {} });
+        await sendReplyObject(buildLocationPrompt());
+        return;
+      }
+
+      if (choice === 2) {
+        setSession(chatId, { state: 'awaiting_plan_name', data: {} });
+        await sendReplyObject(buildExistingCustomerReply());
+        return;
+      }
+
+      if (choice === 3) {
+        clearSession(chatId);
+        const reply = buildAgentReply();
+        await sendReplyObject(reply);
+        try {
+          await notifyAgentRequest(chatId, text, detectLocation(text));
+        } catch (notifyError) {
+          console.error('Agent notification error:', notifyError.message);
+        }
+        return;
+      }
+
+      if (choice === 4) {
+        setSession(chatId, { state: 'awaiting_report', data: {} });
+        await sendReplyObject(buildReportPrompt());
+        return;
+      }
+
+      // If no valid choice, re-send menu/fallback
+      await sendReplyObject(buildFallbackReply(text));
+      return;
+    }
+
+    // If awaiting location from user
+    if (session.state === 'awaiting_location') {
+      const location = detectLocation(text);
+      if (location) {
+        clearSession(chatId);
+        const reply = buildPlanReplyForLocation(location);
+        await sendReplyObject(reply);
+        return;
+      }
+
+      // If user replied something vague, ask to pick from listed zones
+      await sendReplyObject({
+        text: 'No reconozco la colonia indicada. Por favor elige una de estas zonas o escríbela exactamente: Huitzo, Telixtlahuaca o Suchilquitongo.',
+        mediaUrls: [],
+        replyMarkup: { keyboard: [[{ text: 'Huitzo' }, { text: 'Telixtlahuaca' }, { text: 'Suchilquitongo' }]], one_time_keyboard: true, resize_keyboard: true }
+      });
+      return;
+    }
+
+    // If awaiting plan name (existing customer)
+    if (session.state === 'awaiting_plan_name') {
+      // Use the provided text as plan identifier and ask what they need
+      setSession(chatId, { state: 'awaiting_plan_issue', data: { plan: text } });
+      await sendTelegramMessage(chatId, `Gracias. Indica en qué necesitas ayuda con el plan "${text}": facturación, velocidad, falla, o cambio de plan.`);
+      return;
+    }
+
+    // If awaiting plan issue details
+    if (session.state === 'awaiting_plan_issue') {
+      const plan = session.data?.plan || 'tu plan';
+      clearSession(chatId);
+      await sendTelegramMessage(chatId, `Recibido sobre ${plan}. He registrado tu consulta: "${text}". Un agente podrá revisarla y te contactará si es necesario.`);
+      try {
+        await notifyAgentRequest(chatId, `Cliente: ${plan} - ${text}`, detectLocation(text));
+      } catch (notifyError) {
+        console.error('Agent notification error:', notifyError.message);
+      }
+      return;
+    }
+
+    // If awaiting report description
+    if (session.state === 'awaiting_report') {
+      clearSession(chatId);
+      await sendTelegramMessage(chatId, 'Gracias por el reporte. Lo he registrado y un agente lo revisará.');
+      try {
+        await notifyAgentRequest(chatId, `Reporte de problema: ${text}`, detectLocation(text));
+      } catch (notifyError) {
+        console.error('Agent notification error:', notifyError.message);
+      }
+      return;
+    }
+
+    // Default: no session state — use intent resolution, but always lock into menu for unclear text.
+    if (isGreetingMessage(message.text)) {
+      setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+      await sendReplyObject(buildMenuReply());
+      return;
+    }
+
+    const hasDirectIntent = isPlanRequest(message.text) || isCoverageRequest(message.text) || isTechnicalIssue(message.text) || isAgentRequest(message.text) || isExistingCustomer(message.text) || isReportRequest(message.text);
+
+    if (!hasDirectIntent) {
+      setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+      await sendReplyObject(buildMenuReply());
+      return;
+    }
+
+    const reply = await generateReply(message.text);
+
+    if (reply.replyMarkup) {
+      await sendTelegramMessage(chatId, reply.text, reply.mediaUrls || [], { replyMarkup: reply.replyMarkup });
+    } else {
+      await sendTelegramMessage(chatId, reply.text, reply.mediaUrls || []);
+    }
+
+    // If user explicitly asks for an agent outside the menu flow
     if (isAgentRequest(message.text)) {
       try {
         await notifyAgentRequest(chatId, message.text, detectLocation(message.text));
