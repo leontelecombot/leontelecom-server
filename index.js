@@ -128,6 +128,58 @@ function isPlanListRequest(text) {
   return /\b(todos los planes|planes|paquetes|precios|tarifas|internet|wifi|wifis|servicio)\b/.test(value);
 }
 
+function parseHouseholdSize(text) {
+  const value = normalizeText(text);
+  const numericMatch = value.match(/\b(\d{1,2})\b/);
+  if (numericMatch) {
+    const parsed = Number(numericMatch[1]);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  const wordMap = {
+    uno: 1,
+    una: 1,
+    dos: 2,
+    tres: 3,
+    cuatro: 4,
+    cinco: 5,
+    seis: 6,
+    siete: 7,
+    ocho: 8,
+    nueve: 9,
+    diez: 10,
+    once: 11,
+    doce: 12,
+    trece: 13,
+    catorce: 14,
+    quince: 15
+  };
+
+  for (const [word, count] of Object.entries(wordMap)) {
+    if (new RegExp(`\\b${word}\\b`).test(value)) {
+      return count;
+    }
+  }
+
+  return null;
+}
+
+function chooseRecommendedFiberPlan(householdSize) {
+  if (householdSize >= 9) return FIBER_PLANS.find((plan) => plan.name === 'Ultra') || FIBER_PLANS[FIBER_PLANS.length - 1];
+  if (householdSize >= 6) return FIBER_PLANS.find((plan) => plan.name === 'Advanced') || FIBER_PLANS[FIBER_PLANS.length - 2];
+  if (householdSize >= 4) return FIBER_PLANS.find((plan) => plan.name === 'Medium') || FIBER_PLANS[2];
+  if (householdSize >= 2) return FIBER_PLANS.find((plan) => plan.name === 'Basic') || FIBER_PLANS[1];
+  return FIBER_PLANS.find((plan) => plan.name === 'Lite') || FIBER_PLANS[0];
+}
+
+function chooseRecommendedWirelessPlan(householdSize) {
+  if (householdSize >= 8) return WIRELESS_PLANS[2];
+  if (householdSize >= 4) return WIRELESS_PLANS[1];
+  return WIRELESS_PLANS[0];
+}
+
 function buildPlanLines(plans) {
   return plans.map((plan) => `- ${plan.name}: ${plan.speed} → ${plan.price}`).join('\n');
 }
@@ -236,6 +288,78 @@ function buildTechnicalReply(text) {
       'Vamos a revisarlo. Primero reinicia tu router o equipo y espera 2 minutos.',
       'Si sigue igual, dime si el problema es sin internet, lento o intermitente y te doy el siguiente paso.'
     ].join(' '),
+    mediaUrls: []
+  };
+}
+
+async function generateNaturalPlanRecommendationReply(context) {
+  const baseRecommendation = context.location === LOCATIONS.huitzo
+    ? chooseRecommendedFiberPlan(context.householdSize)
+    : chooseRecommendedWirelessPlan(context.householdSize);
+
+  const fallbackText = context.location === LOCATIONS.huitzo
+    ? `Para ${context.householdSize} personas en ${context.location}, yo te recomendaría ${baseRecommendation.name} (${baseRecommendation.speed}) por ${baseRecommendation.price}. Si me dices si usan streaming, videollamadas o varios celulares al mismo tiempo, te lo afino mejor.`
+    : `Para ${context.householdSize} personas en ${context.location}, te recomendaría ${baseRecommendation.speed} por ${baseRecommendation.price}. Si me dices si usan streaming, videollamadas o varios celulares al mismo tiempo, te lo afino mejor.`;
+
+  if (!AI_API_KEY) {
+    return {
+      text: fallbackText,
+      mediaUrls: []
+    };
+  }
+
+  try {
+    const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${AI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Eres el asistente de León Telecom.',
+              'Escribe una recomendación breve, natural y específica.',
+              'No inventes planes ni precios.',
+              'Usa solo la información proporcionada.',
+              'Si falta detalle, sugiere una pregunta de seguimiento simple.'
+            ].join(' ')
+          },
+          {
+            role: 'user',
+            content: [
+              `Zona: ${context.location}`,
+              `Personas en la casa: ${context.householdSize}`,
+              `Tipo de servicio: ${context.location === LOCATIONS.huitzo ? 'fibra óptica' : 'internet inalámbrico'}`,
+              `Plan sugerido: ${baseRecommendation.name || baseRecommendation.speed}`,
+              `Velocidad: ${baseRecommendation.speed}`,
+              `Precio: ${baseRecommendation.price}`,
+              'Responde como si fueras un asesor humano, en una o dos frases.'
+            ].join('\n')
+          }
+        ],
+        temperature: 0.5
+      })
+    });
+
+    if (!response.ok) {
+      return { text: fallbackText, mediaUrls: [] };
+    }
+
+    const payload = await response.json();
+    const reply = payload?.choices?.[0]?.message?.content;
+    if (typeof reply === 'string' && reply.trim()) {
+      return { text: reply.trim(), mediaUrls: [] };
+    }
+  } catch (error) {
+    console.error('Natural plan recommendation AI error:', error.message);
+  }
+
+  return {
+    text: fallbackText,
     mediaUrls: []
   };
 }
@@ -576,9 +700,10 @@ app.post('/webhook', async (req, res) => {
     if (session.state === 'awaiting_location') {
       const location = detectLocation(text);
       if (location) {
-        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_household_size', data: { location } });
         const reply = buildPlanReplyForLocation(location);
         await sendReplyObject(reply);
+        await sendTelegramMessage(chatId, 'Si quieres una recomendación, dime cuántas personas usan internet en tu casa.');
         return;
       }
 
@@ -588,6 +713,28 @@ app.post('/webhook', async (req, res) => {
         mediaUrls: [],
         replyMarkup: { keyboard: [[{ text: 'Huitzo' }, { text: 'Telixtlahuaca' }, { text: 'Suchilquitongo' }]], one_time_keyboard: true, resize_keyboard: true }
       });
+      return;
+    }
+
+    // If awaiting household size for a plan recommendation
+    if (session.state === 'awaiting_household_size') {
+      const householdSize = parseHouseholdSize(text);
+      const location = session.data?.location || detectLocation(text);
+
+      if (householdSize && location) {
+        clearSession(chatId);
+        const recommendation = await generateNaturalPlanRecommendationReply({ location, householdSize });
+        await sendTelegramMessage(chatId, recommendation.text, recommendation.mediaUrls || []);
+        return;
+      }
+
+      const fallbackLocation = location || session.data?.location;
+      if (fallbackLocation) {
+        await sendTelegramMessage(chatId, `Dime cuántas personas viven en tu casa para recomendarte mejor el plan de ${fallbackLocation}. Por ejemplo: 4, 6 o 10.`);
+        return;
+      }
+
+      await sendReplyObject(buildMenuReply());
       return;
     }
 
@@ -629,6 +776,10 @@ app.post('/webhook', async (req, res) => {
       setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
       await sendReplyObject(buildMenuReply());
       return;
+    }
+
+    if (isPlanRequest(message.text) && !detectLocation(message.text)) {
+      setSession(chatId, { state: 'awaiting_location', data: {} });
     }
 
     const hasDirectIntent = isPlanRequest(message.text) || isCoverageRequest(message.text) || isTechnicalIssue(message.text) || isAgentRequest(message.text) || isExistingCustomer(message.text) || isReportRequest(message.text);
