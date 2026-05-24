@@ -298,8 +298,8 @@ async function generateNaturalPlanRecommendationReply(context) {
     : chooseRecommendedWirelessPlan(context.householdSize);
 
   const fallbackText = context.location === LOCATIONS.huitzo
-    ? `Para ${context.householdSize} personas en ${context.location}, yo te recomendaría ${baseRecommendation.name} (${baseRecommendation.speed}) por ${baseRecommendation.price}. Si me dices si usan streaming, videollamadas o varios celulares al mismo tiempo, te lo afino mejor.`
-    : `Para ${context.householdSize} personas en ${context.location}, te recomendaría ${baseRecommendation.speed} por ${baseRecommendation.price}. Si me dices si usan streaming, videollamadas o varios celulares al mismo tiempo, te lo afino mejor.`;
+    ? `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.name} (${baseRecommendation.speed}) por ${baseRecommendation.price}. Si quieres, te digo si te conviene subir o bajar según el uso.`
+    : `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.speed} por ${baseRecommendation.price}. Si quieres, te digo si te conviene subir o bajar según el uso.`;
 
   if (!AI_API_KEY) {
     return {
@@ -322,10 +322,10 @@ async function generateNaturalPlanRecommendationReply(context) {
             role: 'system',
             content: [
               'Eres el asistente de León Telecom.',
-              'Escribe una recomendación breve, natural y específica.',
+              'Escribe una recomendación breve, natural y específica en máximo dos frases.',
               'No inventes planes ni precios.',
               'Usa solo la información proporcionada.',
-              'Si falta detalle, sugiere una pregunta de seguimiento simple.'
+              'Da una recomendación concreta y, si hace falta, agrega una sola pregunta de seguimiento simple.'
             ].join(' ')
           },
           {
@@ -337,11 +337,11 @@ async function generateNaturalPlanRecommendationReply(context) {
               `Plan sugerido: ${baseRecommendation.name || baseRecommendation.speed}`,
               `Velocidad: ${baseRecommendation.speed}`,
               `Precio: ${baseRecommendation.price}`,
-              'Responde como si fueras un asesor humano, en una o dos frases.'
+              'Responde como si fueras un asesor humano, natural, seguro y breve. No des un discurso; solo una recomendación corta con una razón simple.'
             ].join('\n')
           }
         ],
-        temperature: 0.5
+        temperature: 0.65
       })
     });
 
@@ -352,7 +352,7 @@ async function generateNaturalPlanRecommendationReply(context) {
     const payload = await response.json();
     const reply = payload?.choices?.[0]?.message?.content;
     if (typeof reply === 'string' && reply.trim()) {
-      return { text: reply.trim(), mediaUrls: [] };
+      return { text: reply.trim().split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').trim(), mediaUrls: [] };
     }
   } catch (error) {
     console.error('Natural plan recommendation AI error:', error.message);
