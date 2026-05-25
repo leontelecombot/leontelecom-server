@@ -1306,6 +1306,15 @@ app.post('/webhook', async (req, res) => {
         return;
       }
       await sendTelegramMessage(chatId, 'Por favor, escribe: Huitzo, Telixtlahuaca o Suchilquitongo');
+      await sendReplyObject({
+        text: '',
+        mediaUrls: [],
+        replyMarkup: {
+          keyboard: [[{ text: 'Huitzo' }, { text: 'Telixtlahuaca' }, { text: 'Suchilquitongo' }]],
+          one_time_keyboard: true,
+          resize_keyboard: true
+        }
+      });
       return;
     }
 
@@ -1360,6 +1369,15 @@ app.post('/webhook', async (req, res) => {
         return;
       }
       await sendTelegramMessage(chatId, 'Por favor, escribe: Huitzo, Telixtlahuaca o Suchilquitongo');
+      await sendReplyObject({
+        text: '',
+        mediaUrls: [],
+        replyMarkup: {
+          keyboard: [[{ text: 'Huitzo' }, { text: 'Telixtlahuaca' }, { text: 'Suchilquitongo' }]],
+          one_time_keyboard: true,
+          resize_keyboard: true
+        }
+      });
       return;
     }
 
