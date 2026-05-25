@@ -972,12 +972,40 @@ app.post('/webhook', async (req, res) => {
       const installationData = session.data || {};
       setSession(chatId, { state: 'awaiting_installation_address', data: { ...installationData, name: text } });
       const location = installationData.location || 'tu zona';
-      await sendTelegramMessage(chatId, `¿Cuál es la dirección de la instalación en ${location}?`);
+      await sendTelegramMessage(chatId, `¿La dirección de instalación es en ${location}?`);
       return;
     }
 
-    // If awaiting installation address
+    // If awaiting installation address (confirmation of location)
     if (session.state === 'awaiting_installation_address') {
+      const confirmYes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|verdad|sale)\b/);
+      const confirmNo = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
+      
+      if (confirmYes) {
+        const installationData = session.data || {};
+        // Now ask for the actual address
+        const location = installationData.location || 'tu zona';
+        setSession(chatId, { state: 'awaiting_installation_address_input', data: installationData });
+        await sendTelegramMessage(chatId, `¿Cuál es la dirección específica en ${location}?`);
+        return;
+      }
+      
+      if (confirmNo) {
+        // Return to location selection
+        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_location', data: {} });
+        await sendTelegramMessage(chatId, '¿En dónde vives?', null, buildLocationKeyboard());
+        return;
+      }
+      
+      // If unclear, ask again
+      const location = session.data?.location || 'tu zona';
+      await sendTelegramMessage(chatId, `¿La dirección de instalación es en ${location}? Responde sí o no.`);
+      return;
+    }
+
+    // If awaiting actual address input
+    if (session.state === 'awaiting_installation_address_input') {
       const installationData = session.data || {};
       setSession(chatId, { state: 'awaiting_installation_neighborhood', data: { ...installationData, address: text } });
       await sendTelegramMessage(chatId, '¿Cuál es tu colonia, barrio o sección?');
