@@ -81,6 +81,11 @@ function isOtherPlansQuestion(text) {
   return /\b(otros planes|otras opciones|alternativas|cual es la diferencia|que diferencia hay|que diferencia|compara|comparar|como se compara|cual es mejor|mas rapido|mas barato|faster|cheaper)\b/.test(value);
 }
 
+function areaDifferentFromContext(queryText, currentLocation) {
+  const detectedLocation = detectLocation(queryText);
+  return detectedLocation && detectedLocation !== currentLocation;
+}
+
 function isCoverageRequest(text) {
   const value = normalizeText(text);
   return /\b(cobertura|cubre|disponible en|tienen servicio|llega a|zona|colonia|fraccionamiento)\b/.test(value);
@@ -411,7 +416,13 @@ async function generateNaturalPlanRecommendationReply(context) {
 }
 
 async function generateFollowupRecommendationReply(context, userText) {
-  // If asking about other plans, show real list without AI
+  // Check if asking about plans from a DIFFERENT zone
+  const queriedLocation = detectLocation(userText);
+  if (queriedLocation && queriedLocation !== context.location) {
+    return buildAllPlansForLocation(queriedLocation);
+  }
+
+  // If asking about other plans in current zone, show real list without AI
   if (isOtherPlansQuestion(userText)) {
     return buildAllPlansForLocation(context.location);
   }
@@ -815,6 +826,58 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // If awaiting installation day
+    if (session.state === 'awaiting_installation_day') {
+      const installationData = session.data || {};
+      setSession(chatId, { state: 'awaiting_installation_name', data: { ...installationData, day: text } });
+      await sendTelegramMessage(chatId, '¿A qué nombre va la instalación?');
+      return;
+    }
+
+    // If awaiting installation name
+    if (session.state === 'awaiting_installation_name') {
+      const installationData = session.data || {};
+      setSession(chatId, { state: 'awaiting_installation_address', data: { ...installationData, name: text } });
+      await sendTelegramMessage(chatId, '¿Cuál es la dirección donde se hará la instalación?');
+      return;
+    }
+
+    // If awaiting installation address
+    if (session.state === 'awaiting_installation_address') {
+      const installationData = session.data || {};
+      const fullDetails = {
+        ...installationData,
+        address: text,
+        timestamp: new Date().toISOString()
+      };
+      clearSession(chatId);
+      
+      // Notify agent with full details
+      try {
+        await notifyAgentRequest(chatId, [
+          `SOLICITUD DE INSTALACIÓN`,
+          `Día propuesto: ${installationData.day}`,
+          `Nombre: ${installationData.name}`,
+          `Dirección: ${text}`,
+          `Ubicación: ${installationData.location}`,
+          `Observaciones: ${installationData.initialRequest || 'Sin detalles adicionales'}`
+        ].join('\n'), installationData.location);
+      } catch (notifyError) {
+        console.error('Agent notification error:', notifyError.message);
+      }
+      
+      await sendTelegramMessage(chatId, [
+        '✅ Perfecto. Registro tu solicitud con los datos:',
+        `📅 Día propuesto: ${installationData.day}`,
+        `👤 Nombre: ${installationData.name}`,
+        `📍 Dirección: ${text}`,
+        '',
+        '⏳ Un asesor revisará tu solicitud y te contactará en el chat para confirmar el día exacto y los detalles finales.',
+        'Mantén el chat abierto para que no te pierdan el contacto. 📱'
+      ].join('\n'));
+      return;
+    }
+
     // If awaiting location from user
     if (session.state === 'awaiting_location') {
       const location = detectLocation(text);
@@ -860,14 +923,10 @@ app.post('/webhook', async (req, res) => {
 
     // If we already recommended a plan, keep the context alive for short follow-ups.
     if (session.state === 'awaiting_recommendation_followup') {
-      // If user asks about scheduling installation, prioritize that and notify agent.
+      // If user asked for installation, start multi-step process
       if (isInstallationRequest(text)) {
-        try {
-          await notifyAgentRequest(chatId, `Solicitud de instalación: ${text}`, session.data?.location || detectLocation(text));
-        } catch (notifyError) {
-          console.error('Agent notification error:', notifyError.message);
-        }
-        await sendTelegramMessage(chatId, 'Perfecto — he solicitado a un asesor que te contacte para programar la instalación.');
+        setSession(chatId, { state: 'awaiting_installation_day', data: { location: session.data?.location, initialRequest: text, householdSize: session.data?.householdSize } });
+        await sendTelegramMessage(chatId, '📅 ¿Qué día tienes disponibilidad para la instalación? (Ej: mañana, el jueves, el 30 de mayo)\n\n(Nota: Será a acordar con un asesor)');
         return;
       }
 
