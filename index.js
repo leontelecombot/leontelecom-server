@@ -654,13 +654,14 @@ function buildFallbackReply(text) {
   return {
     text: [
       '💭 Oye, no atrapé bien eso.',
-      'Presiona 1️⃣, 2️⃣, 3️⃣ o 4️⃣ de arriba. 👍'
+      'Presiona 1️⃣, 2️⃣, 3️⃣, 4️⃣ o 5️⃣ de arriba. 👍'
     ].join(' '),
     mediaUrls: [],
     replyMarkup: {
       keyboard: [
         [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
-        [{ text: '3️⃣ Hablar con asesor' }, { text: '4️⃣ Reportar falla' }]
+        [{ text: '3️⃣ Hablar con asesor' }, { text: '4️⃣ Reportar falla' }],
+        [{ text: '5️⃣ Migrar servicio' }, { text: '❌ Cancelar cita' }]
       ],
       one_time_keyboard: true,
       resize_keyboard: true
@@ -951,6 +952,8 @@ app.post('/webhook', async (req, res) => {
       if (/^2$|^2\b|\bdos\b|ya soy cliente|tengo un plan|soy cliente/.test(v)) return 2;
       if (/^3$|^3\b|\btres\b|hablar con|asesor|agente/.test(v)) return 3;
       if (/^4$|^4\b|\bcuatro\b|reportar|problema|reporte/.test(v)) return 4;
+      if (/^5$|^5\b|\bcinco\b|migrar|migracion|migraci/.test(v)) return 5;
+      if (/^6$|^6\b|\bseis\b|cancelar|cancel|no quiero/.test(v)) return 6;
       return null;
     }
 
