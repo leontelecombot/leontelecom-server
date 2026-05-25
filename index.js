@@ -1132,10 +1132,8 @@ app.post('/webhook', async (req, res) => {
       }
       
       if (rejectsOrientation) {
-        clearSession(chatId);
-        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-        await sendTelegramMessage(chatId, 'Okej. ¿Qué necesitas hacer?');
-        await sendReplyObject(buildMenuReply());
+        setSession(chatId, { state: 'awaiting_installation_confirmation', data: session.data });
+        await sendTelegramMessage(chatId, `Perfecto. Tu elección es ${session.data?.selectedPlan} (${session.data?.selectedSpeed} → ${session.data?.selectedPrice}). ¿Quieres agendar la instalación?`);
         return;
       }
 
