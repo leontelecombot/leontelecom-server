@@ -872,8 +872,7 @@ app.post('/webhook', async (req, res) => {
         `👤 Nombre: ${installationData.name}`,
         `📍 Dirección: ${text}`,
         '',
-        '⏳ Un asesor revisará tu solicitud y te contactará en el chat para confirmar el día exacto y los detalles finales.',
-        'Mantén el chat abierto para que no te pierdan el contacto. 📱'
+        `⏳ En un momento un asesor se va a poner en contacto con ${installationData.name} para confirmar todos los detalles. 📱`
       ].join('\n'));
       return;
     }
