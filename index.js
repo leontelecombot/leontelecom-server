@@ -72,6 +72,27 @@ function clearSession(chatId) {
   sessions.delete(String(chatId));
 }
 
+// In-memory folio store - tracks active appointment folios for cancellation
+// Structure: folios[folio] = { chatId, type, location, createdAt }
+const folios = new Map();
+
+function storeFolio(folio, chatId, type, location) {
+  folios.set(folio, {
+    chatId: String(chatId),
+    type: type, // 'installation' or 'migration'
+    location: location,
+    createdAt: new Date()
+  });
+}
+
+function retrieveFolio(folio) {
+  return folios.get(folio) || null;
+}
+
+function cancelFolio(folio) {
+  return folios.delete(folio);
+}
+
 // Chat history store - maintains conversation memory per chat
 // Structure: chatHistory[chatId] = { createdAt, updatedAt, messages: [{role, text, timestamp}] }
 // Ready for persistence: Can be easily migrated to MongoDB/PostgreSQL for WhatsApp integration
@@ -1056,12 +1077,10 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Choice 6: Cancel appointment
+      // Choice 6: Cancel appointment - ask for folio
       if (choice === 6 || normalizeText(text).match(/\b(cancelar|cancel|no quiero|ya no)\b/)) {
-        clearSession(chatId);
-        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-        await sendTelegramMessage(chatId, '❌ Cita cancelada. Cuando quieras agendar de nuevo, me avisas. 👍');
-        await sendReplyObject(buildMenuReply());
+        setSession(chatId, { state: 'awaiting_folio_to_cancel', data: {} });
+        await sendTelegramMessage(chatId, '⚠️ Para cancelar tu cita, necesito tu folio.\n\n¿Cuál es tu folio? (ej: LT-12345-ABCDE)');
         return;
       }
 
@@ -1179,6 +1198,9 @@ app.post('/webhook', async (req, res) => {
         const folio = generateRandomFolio();
         installationData.folio = folio;
         installationData.bookedAt = new Date().toISOString();
+        
+        // Store folio for later cancellation
+        storeFolio(folio, chatId, 'installation', installationData.location);
         
         clearSession(chatId);
         
@@ -1385,6 +1407,9 @@ app.post('/webhook', async (req, res) => {
         const folio = generateRandomFolio();
         migrationData.folio = folio;
         migrationData.bookedAt = new Date().toISOString();
+        
+        // Store folio for later cancellation
+        storeFolio(folio, chatId, 'migration', migrationData.newLocation);
         
         clearSession(chatId);
         
@@ -1721,6 +1746,46 @@ app.post('/webhook', async (req, res) => {
       }
       await sendTelegramMessage(chatId, [`✅ Perfecto ${agentData.agentName}.`, `En unos momentos un asesor te atenderá en el chat. 📱`].join('\n'));
       return;
+    }
+
+    // If awaiting folio to cancel appointment
+    if (session.state === 'awaiting_folio_to_cancel') {
+      // Check for "volver" / "back" / cancel
+      if (normalizeText(text).match(/\b(volver|back|atras|cancelar|no|menu)\b/)) {
+        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+        await sendTelegramMessage(chatId, 'Ok, regresando al menú. 👋');
+        await sendReplyObject(buildMenuReply());
+        return;
+      }
+      
+      const folioInput = normalizeText(text).toUpperCase();
+      const folio = retrieveFolio(folioInput);
+      
+      if (folio) {
+        // Folio found - cancel it
+        cancelFolio(folioInput);
+        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+        
+        await sendTelegramMessage(chatId, [
+          `✅ Cita cancelada correctamente.`,
+          ``,
+          `Folio ${folioInput} ha sido eliminado.`,
+          `Cuando quieras agendar de nuevo, me avisas. 👍`
+        ].join('\n'));
+        await sendReplyObject(buildMenuReply());
+        return;
+      } else {
+        // Folio not found
+        await sendTelegramMessage(chatId, [
+          `❌ No encontré ese folio en el sistema.`,
+          ``,
+          `Verifica que esté correcto. (ej: LT-12345-ABCDE)`,
+          `o escribe "volver" para regresar al menú.`
+        ].join('\n'));
+        return;
+      }
     }
 
     // Default: no session state — use intent resolution, but always lock into menu for unclear text.
