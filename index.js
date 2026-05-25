@@ -72,6 +72,55 @@ function clearSession(chatId) {
   sessions.delete(String(chatId));
 }
 
+// Chat history store - maintains conversation memory per chat
+// Structure: chatHistory[chatId] = { createdAt, updatedAt, messages: [{role, text, timestamp}] }
+// Ready for persistence: Can be easily migrated to MongoDB/PostgreSQL for WhatsApp integration
+const chatHistory = new Map();
+
+function getHistory(chatId) {
+  const id = String(chatId);
+  if (!chatHistory.has(id)) {
+    chatHistory.set(id, {
+      chatId: id,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      messages: []
+    });
+  }
+  return chatHistory.get(id);
+}
+
+function addMessageToHistory(chatId, role, text) {
+  const id = String(chatId);
+  const history = getHistory(id);
+  history.messages.push({
+    role: role, // 'user' or 'bot'
+    text: text,
+    timestamp: new Date()
+  });
+  history.updatedAt = new Date();
+  // Keep last 100 messages per chat to manage memory
+  if (history.messages.length > 100) {
+    history.messages = history.messages.slice(-100);
+  }
+}
+
+function clearHistory(chatId) {
+  chatHistory.delete(String(chatId));
+}
+
+function getFullChatContext(chatId) {
+  const history = getHistory(chatId);
+  return {
+    chatId: String(chatId),
+    createdAt: history.createdAt,
+    updatedAt: history.updatedAt,
+    messageCount: history.messages.length,
+    recentMessages: history.messages.slice(-10), // Last 10 messages
+    fullHistory: history.messages // Full history if needed
+  };
+}
+
 const FIBER_PLANS = [
   { name: 'Lite', speed: '30 Mbps', price: '$289/mes' },
   { name: 'Basic', speed: '80 Mbps', price: '$320/mes' },
@@ -746,6 +795,11 @@ async function sendTelegramMessage(chatId, text, mediaUrls = [], options = {}) {
     throw new Error('TELEGRAM_BOT_TOKEN is missing');
   }
 
+  // Save bot message to chat history
+  if (text) {
+    addMessageToHistory(chatId, 'bot', text);
+  }
+
   // Send photos first (if any). Retry each media up to 2 times.
   for (const mediaUrl of mediaUrls || []) {
     let lastErr = null;
@@ -832,6 +886,24 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+// Get chat history context (ready for WhatsApp or other channels)
+app.get('/chat/:chatId/history', (req, res) => {
+  const { chatId } = req.params;
+  const context = getFullChatContext(chatId);
+  res.json(context);
+});
+
+// Get recent messages from a chat (last 10)
+app.get('/chat/:chatId/recent', (req, res) => {
+  const { chatId } = req.params;
+  const history = getHistory(chatId);
+  res.json({
+    chatId: String(chatId),
+    recentMessages: history.messages.slice(-10),
+    totalMessages: history.messages.length
+  });
+});
+
 app.post('/webhook', async (req, res) => {
   const update = req.body || {};
   const message = update.message;
@@ -851,11 +923,16 @@ app.post('/webhook', async (req, res) => {
     // Session-aware handling
     const text = String(message.text || '').trim();
     const session = getSession(chatId);
+    
+    // Save user message to chat history
+    addMessageToHistory(chatId, 'user', text);
 
     // Helper to send reply objects (which may include replyMarkup)
     async function sendReplyObject(replyObj) {
       const opts = {};
       if (replyObj.replyMarkup) opts.replyMarkup = replyObj.replyMarkup;
+      // Save bot response to history
+      addMessageToHistory(chatId, 'bot', replyObj.text);
       await sendTelegramMessage(chatId, replyObj.text, replyObj.mediaUrls || [], opts);
     }
 
