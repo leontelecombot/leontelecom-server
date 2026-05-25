@@ -35,6 +35,28 @@ const LOCATIONS = {
   suchilquitongo: 'Suchilquitongo'
 };
 
+const NEIGHBORHOODS = {
+  huitzo: [
+    'Colonia Primera Sección', 'Centro de la Segunda Sección', 'Centro de la Tercera Sección',
+    'Colonia San Pablo', 'San Pablo Huitzo', 'Cabecera Municipal',
+    'Santa María Tenéxpam', 'Agua Blanca', 'Cañada del Chisme',
+    'Ojo de Agua', 'Yutetoto', 'Cañada Guayabal', 'Joyas de Río Blanco'
+  ],
+  telixtlahuaca: [
+    'Colonia Centro', 'Barrio Bajo', 'Colonia Y Griega', 'Colonia Yuquenchi',
+    'Colonia Independencia', 'San Sebastián Sedas', 'Plan Seco', 'Ojo de Agua',
+    'Santa Cruz el Salto', 'Las Trancas', 'La Carbonera', 'El Nuevo Manzanito',
+    'Cañada las Sedas', 'Faustino G. Olivera', 'Boca de León', 'Tierra Colorada', 'El Moral',
+    'Camino Nacional'
+  ],
+  suchilquitongo: [
+    'Santiago Suchilquitongo Centro', 'Cabecera Municipal', 'Barrio de La Santa Cruz',
+    'Barrio de Tetiche', 'Colonia del Sol', 'Colonia Las Torres', 'Santa Cruz Lachixolana',
+    'Santo Domingo Tlaltinango', 'El Pocito', 'El Zapotal', 'El Llano Grande',
+    'El Guajal', 'La Pila', 'El Pedregal'
+  ]
+};
+
 // Simple in-memory session store keyed by chatId. Keeps short conversational state.
 const sessions = new Map();
 
@@ -189,6 +211,17 @@ function parseDayToDate(dayText) {
   const formattedMonth = monthName.charAt(0).toUpperCase() + monthName.slice(1);
   
   return `${formattedDay} ${day} de ${formattedMonth} del ${year}`;
+}
+
+function findNeighborhood(text, location) {
+  if (!location || !NEIGHBORHOODS[location.toLowerCase()]) return null;
+  
+  const value = normalizeText(text).toLowerCase().trim();
+  const neighborhoods = NEIGHBORHOODS[location.toLowerCase()];
+  
+  // Find best match
+  const match = neighborhoods.find(n => normalizeText(n).includes(value) || value.includes(normalizeText(n).split(' ')[0]));
+  return match ? { name: match, location } : null;
 }
 
 function isGreetingMessage(text) {
@@ -888,37 +921,72 @@ app.post('/webhook', async (req, res) => {
     // If awaiting installation address
     if (session.state === 'awaiting_installation_address') {
       const installationData = session.data || {};
-      const detectedLocationFromAddress = detectLocation(text) || installationData.location;
-      const fullDetails = {
-        ...installationData,
-        address: text,
-        location: detectedLocationFromAddress,
-        timestamp: new Date().toISOString()
-      };
-      clearSession(chatId);
+      setSession(chatId, { state: 'awaiting_installation_neighborhood', data: { ...installationData, address: text } });
+      await sendTelegramMessage(chatId, '¿Cuál es tu colonia, barrio o sección?');
+      return;
+    }
+
+    // If awaiting installation neighborhood
+    if (session.state === 'awaiting_installation_neighborhood') {
+      const installationData = session.data || {};
+      const location = installationData.location || 'Huitzo';
+      const neighborhoodMatch = findNeighborhood(text, location);
       
-      // Notify agent with full details
-      try {
-        await notifyAgentRequest(chatId, [
-          `SOLICITUD DE INSTALACIÓN`,
-          `Día propuesto: ${installationData.day}`,
-          `Nombre: ${installationData.name}`,
-          `Dirección: ${text}`,
-          `Ubicación: ${detectedLocationFromAddress || installationData.location}`,
-          `Observaciones: ${installationData.initialRequest || 'Sin detalles adicionales'}`
-        ].join('\n'), detectedLocationFromAddress || installationData.location);
-      } catch (notifyError) {
-        console.error('Agent notification error:', notifyError.message);
+      if (neighborhoodMatch) {
+        setSession(chatId, { state: 'awaiting_installation_location_confirm', data: { ...installationData, neighborhood: neighborhoodMatch.name } });
+        await sendTelegramMessage(chatId, `¿Es correcto que la instalación es en ${neighborhoodMatch.name} ${neighborhoodMatch.location}?`);
+        return;
+      }
+
+      // If not found, ask again
+      await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo o escribe el nombre más claramente.`);
+      return;
+    }
+
+    // If awaiting location confirmation
+    if (session.state === 'awaiting_installation_location_confirm') {
+      const confirmYes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|verdad|sale)\b/);
+      const confirmNo = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
+      
+      if (confirmYes) {
+        const installationData = session.data || {};
+        clearSession(chatId);
+        
+        // Notify agent with full details including neighborhood
+        try {
+          await notifyAgentRequest(chatId, [
+            `SOLICITUD DE INSTALACIÓN`,
+            `Día propuesto: ${installationData.day}`,
+            `Nombre: ${installationData.name}`,
+            `Dirección: ${installationData.address}`,
+            `Barrio/Colonia: ${installationData.neighborhood}`,
+            `Ubicación: ${installationData.location}`,
+            `Observaciones: ${installationData.initialRequest || 'Sin detalles adicionales'}`
+          ].join('\n'), installationData.location);
+        } catch (notifyError) {
+          console.error('Agent notification error:', notifyError.message);
+        }
+        
+        await sendTelegramMessage(chatId, [
+          '✅ Perfecto. Registro tu solicitud con los datos:',
+          `📅 Día propuesto: ${installationData.day}`,
+          `👤 Nombre: ${installationData.name}`,
+          `📍 Dirección: ${installationData.address}`,
+          `🏘️ Barrio: ${installationData.neighborhood}`,
+          '',
+          `⏳ En un momento un asesor se va a poner en contacto con ${installationData.name} para confirmar todos los detalles. 📱`
+        ].join('\n'));
+        return;
       }
       
-      await sendTelegramMessage(chatId, [
-        '✅ Perfecto. Registro tu solicitud con los datos:',
-        `📅 Día propuesto: ${installationData.day}`,
-        `👤 Nombre: ${installationData.name}`,
-        `📍 Dirección: ${text}`,
-        '',
-        `⏳ En un momento un asesor se va a poner en contacto con ${installationData.name} para confirmar todos los detalles. 📱`
-      ].join('\n'));
+      if (confirmNo) {
+        setSession(chatId, { state: 'awaiting_installation_neighborhood', data: session.data });
+        await sendTelegramMessage(chatId, 'Entendido. ¿Cuál es tu colonia, barrio o sección correcta?');
+        return;
+      }
+
+      // If unclear, ask again
+      await sendTelegramMessage(chatId, '¿Es correcto o no? Responde sí o no.');
       return;
     }
 
@@ -1075,29 +1143,68 @@ app.post('/webhook', async (req, res) => {
     // If awaiting report address
     if (session.state === 'awaiting_report_address') {
       const reportData = session.data || {};
-      clearSession(chatId);
+      const location = detectLocation(reportData.problemDescription) || 'Ubicación no especificada';
+      setSession(chatId, { state: 'awaiting_report_neighborhood', data: { ...reportData, address: text, location } });
+      await sendTelegramMessage(chatId, '¿Cuál es tu colonia, barrio o sección?');
+      return;
+    }
+
+    // If awaiting report neighborhood
+    if (session.state === 'awaiting_report_neighborhood') {
+      const reportData = session.data || {};
+      const location = reportData.location;
+      const neighborhoodMatch = location !== 'Ubicación no especificada' ? findNeighborhood(text, location) : null;
       
-      // Notify agent with full details
-      try {
-        await notifyAgentRequest(chatId, [
-          `REPORTE DE PROBLEMA`,
-          `Problema: ${reportData.problemDescription}`,
-          `Nombre: ${reportData.name}`,
-          `Dirección: ${text}`,
-          `Ubicación: ${detectLocation(reportData.problemDescription) || 'Ubicación no especificada'}`
-        ].join('\n'), detectLocation(reportData.problemDescription));
-      } catch (notifyError) {
-        console.error('Agent notification error:', notifyError.message);
+      if (neighborhoodMatch) {
+        setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...reportData, neighborhood: neighborhoodMatch.name } });
+        await sendTelegramMessage(chatId, `¿Es correcto que el problema es en ${neighborhoodMatch.name} ${neighborhoodMatch.location}?`);
+        return;
       }
+
+      // If location is unknown or not found, still accept the neighborhood info
+      const fallbackNeighborhood = text;
+      setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...reportData, neighborhood: fallbackNeighborhood } });
+      await sendTelegramMessage(chatId, `¿Es correcto? Tu reporte es de ${fallbackNeighborhood}.`);
+      return;
+    }
+
+    // If awaiting report location confirmation
+    if (session.state === 'awaiting_report_location_confirm') {
+      const confirmYes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|verdad|sale)\b/);
       
-      await sendTelegramMessage(chatId, [
-        '✅ Perfecto. He registrado tu reporte:',
-        `🔧 Problema: ${reportData.problemDescription}`,
-        `👤 Nombre: ${reportData.name}`,
-        `📍 Dirección: ${text}`,
-        '',
-        `⏳ En un momento un asesor se va a poner en contacto con ${reportData.name} para asistirte. 📱`
-      ].join('\n'));
+      if (confirmYes) {
+        const reportData = session.data || {};
+        clearSession(chatId);
+        
+        // Notify agent with full details
+        try {
+          await notifyAgentRequest(chatId, [
+            `REPORTE DE PROBLEMA`,
+            `Problema: ${reportData.problemDescription}`,
+            `Nombre: ${reportData.name}`,
+            `Dirección: ${reportData.address}`,
+            `Barrio/Colonia: ${reportData.neighborhood}`,
+            `Ubicación: ${reportData.location}`
+          ].join('\n'), reportData.location);
+        } catch (notifyError) {
+          console.error('Agent notification error:', notifyError.message);
+        }
+        
+        await sendTelegramMessage(chatId, [
+          '✅ Perfecto. He registrado tu reporte:',
+          `🔧 Problema: ${reportData.problemDescription}`,
+          `👤 Nombre: ${reportData.name}`,
+          `📍 Dirección: ${reportData.address}`,
+          `🏘️ Barrio: ${reportData.neighborhood}`,
+          '',
+          `⏳ En un momento un asesor se va a poner en contacto con ${reportData.name} para asistirte. 📱`
+        ].join('\n'));
+        return;
+      }
+
+      // If not confirmed, go back
+      setSession(chatId, { state: 'awaiting_report_neighborhood', data: session.data });
+      await sendTelegramMessage(chatId, 'Entendido. ¿Cuál es tu colonia, barrio o sección correcta?');
       return;
     }
 
@@ -1112,15 +1219,46 @@ app.post('/webhook', async (req, res) => {
     // If awaiting agent need (mid-conversation agent request)
     if (session.state === 'awaiting_agent_need') {
       const agentData = session.data || {};
+      setSession(chatId, { state: 'awaiting_agent_neighborhood', data: { ...agentData, need: text } });
+      await sendTelegramMessage(chatId, '¿Cuál es tu colonia, barrio o sección?');
+      return;
+    }
+
+    // If awaiting agent neighborhood
+    if (session.state === 'awaiting_agent_neighborhood') {
+      const agentData = session.data || {};
+      const location = agentData.location;
+      const neighborhoodMatch = location && location !== 'Ubicación no especificada' ? findNeighborhood(text, location) : null;
+      
+      if (neighborhoodMatch) {
+        clearSession(chatId);
+        try {
+          await notifyAgentRequest(chatId, [
+            `SOLICITUD DIRECTA DE ASESOR`,
+            `Nombre: ${agentData.agentName}`,
+            `Necesidad: ${agentData.need}`,
+            `Barrio/Colonia: ${neighborhoodMatch.name}`,
+            `Ubicación: ${neighborhoodMatch.location}`,
+            `Contexto: ${agentData.initialRequest || 'Sin contexto adicional'}`
+          ].join('\n'), location);
+        } catch (notifyError) {
+          console.error('Agent notification error:', notifyError.message);
+        }
+        await sendTelegramMessage(chatId, [`✅ Perfecto ${agentData.agentName}.`, `En unos momentos un asesor te atenderá en el chat. 📱`].join('\n'));
+        return;
+      }
+
+      // If location is unknown, still accept and notify
       clearSession(chatId);
+      const fallbackNeighborhood = text;
       try {
         await notifyAgentRequest(chatId, [
           `SOLICITUD DIRECTA DE ASESOR`,
           `Nombre: ${agentData.agentName}`,
-          `Necesidad: ${text}`,
-          `Ubicación: ${agentData.location || 'Ubicación no especificada'}`,
+          `Necesidad: ${agentData.need}`,
+          `Ubicación mencionada: ${fallbackNeighborhood}`,
           `Contexto: ${agentData.initialRequest || 'Sin contexto adicional'}`
-        ].join('\n'), agentData.location);
+        ].join('\n'), location);
       } catch (notifyError) {
         console.error('Agent notification error:', notifyError.message);
       }
