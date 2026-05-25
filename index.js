@@ -76,6 +76,11 @@ function isPlanRequest(text) {
   return /\b(plan|paquete|planes|precio|precios|tarifa|tarifas|costo|costos|promocion|internet)\b/.test(value);
 }
 
+function isOtherPlansQuestion(text) {
+  const value = normalizeText(text);
+  return /\b(otros planes|otras opciones|alternativas|cual es la diferencia|que diferencia hay|que diferencia|compara|comparar|como se compara|cual es mejor|mas rapido|mas barato|faster|cheaper)\b/.test(value);
+}
+
 function isCoverageRequest(text) {
   const value = normalizeText(text);
   return /\b(cobertura|cubre|disponible en|tienen servicio|llega a|zona|colonia|fraccionamiento)\b/.test(value);
@@ -319,6 +324,20 @@ function buildTechnicalReply(text) {
   };
 }
 
+function buildAllPlansForLocation(location) {
+  const plans = location === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
+  const planList = plans.map(p => `• ${p.name}: ${p.speed} - ${p.price}`).join('\n');
+  
+  return {
+    text: [
+      `📋 Todos nuestros planes en ${location}:`,
+      planList,
+      '¿Cuál te llama la atención? Cuéntame para darte más detalles.'
+    ].join('\n'),
+    mediaUrls: []
+  };
+}
+
 async function generateNaturalPlanRecommendationReply(context) {
   const baseRecommendation = context.location === LOCATIONS.huitzo
     ? chooseRecommendedFiberPlan(context.householdSize)
@@ -336,6 +355,9 @@ async function generateNaturalPlanRecommendationReply(context) {
     };
   }
 
+  const allPlans = context.location === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
+  const plansSummary = allPlans.map(p => `${p.name}: ${p.speed} (${p.price})`).join('; ');
+
   try {
     const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
       method: 'POST',
@@ -349,27 +371,23 @@ async function generateNaturalPlanRecommendationReply(context) {
           {
             role: 'system',
             content: [
-              'Eres Leo, un asesor de internet amable de León Telecom.',
-              'Tu tono: cálido, confiado, y orientado a la acción.',
-              'Máximo dos frases. Sé específico: por qué este plan, no otro.',
-              'Nunca inventes; usa solo datos reales.',
-              'Cierra siempre con una invitación a actuar: instalación, más info, o hablar con alguien.'
+              'Eres Leo, asesor de León Telecom.',
+              `PLANES REALES EN ${context.location.toUpperCase()}: ${plansSummary}. SOLO menciona estos planes.`,
+              'Máximo dos frases. PROHIBIDO inventar planes.',
+              'Sé específico, cálido, directo.',
+              'Termina con: "¿Instalamos?", "¿Dudas?", o "¿Te paso con asesor?"'
             ].join(' ')
           },
           {
             role: 'user',
             content: [
-              `Zona: ${context.location}`,
-              `Personas en la casa: ${context.householdSize}`,
-              `Tipo de servicio: ${context.location === LOCATIONS.huitzo ? 'fibra óptica (la mejor)' : 'internet inalámbrico'}`,
-              `Plan sugerido: ${baseRecommendation.name || baseRecommendation.speed}`,
-              `Velocidad: ${baseRecommendation.speed}`,
-              `Precio: ${baseRecommendation.price}`,
-              'Responde como vendedor amable: explica por qué este plan resuelve su necesidad específica, luego invita a actuar (instalar, más info, o hablar con asesor).'
+              `Zona: ${context.location}, Personas: ${context.householdSize}`,
+              `Plan recomendado: ${baseRecommendation.name} (${baseRecommendation.speed}/${baseRecommendation.price})`,
+              'Explica brevemente por qué encaja. Invita a actuar.'
             ].join('\n')
           }
         ],
-        temperature: 0.7
+        temperature: 0.65
       })
     });
 
@@ -393,6 +411,11 @@ async function generateNaturalPlanRecommendationReply(context) {
 }
 
 async function generateFollowupRecommendationReply(context, userText) {
+  // If asking about other plans, show real list without AI
+  if (isOtherPlansQuestion(userText)) {
+    return buildAllPlansForLocation(context.location);
+  }
+
   const baseRecommendation = context.location === LOCATIONS.huitzo
     ? chooseRecommendedFiberPlan(context.householdSize)
     : chooseRecommendedWirelessPlan(context.householdSize);
@@ -405,6 +428,9 @@ async function generateFollowupRecommendationReply(context, userText) {
       mediaUrls: []
     };
   }
+
+  const allPlans = context.location === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
+  const plansSummary = allPlans.map(p => `${p.name}: ${p.speed} (${p.price})`).join('; ');
 
   try {
     const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
@@ -419,23 +445,22 @@ async function generateFollowupRecommendationReply(context, userText) {
           {
             role: 'system',
             content: [
-              'Eres Leo, asesor de León Telecom. Tu tono es amable, directo, y orientado a resolver.',
-              'Máximo dos frases cortas. Sé específico y útil, no genérico.',
-              'Siempre mantén el contexto: zona, personas, y el plan recomendado.',
-              'Si hay duda, responde con confianza; si no sabes, ofrece contactar a un asesor.',
-              'Termina con una acción clara: "¿Instalamos?", "¿Más info?", o "¿Te paso con alguien?"'
+              'Eres Leo, asesor de León Telecom.',
+              `PLANES DISPONIBLES: ${plansSummary}. SOLO responde de esta lista. PROHIBIDO inventar.`,
+              'Máximo dos frases. Sé amable, directo.',
+              'Termina siempre con una acción: "¿Instalamos?", "¿Más info?", o "¿Te paso con asesor?"'
             ].join(' ')
           },
           {
             role: 'user',
             content: [
-              `Contexto: zona ${context.location}, ${context.householdSize} personas en casa, plan recomendado ${baseRecommendation.name || baseRecommendation.speed} (${baseRecommendation.speed}/${baseRecommendation.price}).`,
-              `Cliente pregunta: ${userText}`,
-              'Responde como vendedor amable: valida la pregunta, da una respuesta clara y concreta, y termina con una acción (instalar, más info, o hablar con asesor). Si no tienes la info, ofrece escalarlo.'
+              `Zona: ${context.location}, ${context.householdSize} personas, plan recomendado: ${baseRecommendation.name} (${baseRecommendation.speed}/${baseRecommendation.price}).`,
+              `Cliente dice: ${userText}`,
+              'Responde brevemente manteniendo continuidad.'
             ].join('\n')
           }
         ],
-        temperature: 0.75
+        temperature: 0.65
       })
     });
 
