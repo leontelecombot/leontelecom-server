@@ -869,6 +869,63 @@ app.post('/webhook', async (req, res) => {
       return null;
     }
 
+    // ===== INTENT INTERRUPTION LAYER =====
+    // At ANY point in the conversation, detect if user wants to switch contexts
+    // This takes priority over the current session state
+    const detectedChoice = parseMenuChoice(text);
+    if (session.state && session.state !== 'awaiting_menu_choice' && detectedChoice !== null) {
+      // User is mid-flow but explicitly chose a menu option
+      if (detectedChoice === 1) {
+        // User wants to see plans
+        setSession(chatId, { state: 'awaiting_location', data: {} });
+        await sendReplyObject(buildLocationPrompt());
+        return;
+      }
+      if (detectedChoice === 2) {
+        // User is existing customer
+        setSession(chatId, { state: 'awaiting_plan_name', data: {} });
+        await sendReplyObject(buildExistingCustomerReply());
+        return;
+      }
+      if (detectedChoice === 3) {
+        // User wants to talk to an agent
+        setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
+        await sendTelegramMessage(chatId, '¿Cuál es tu nombre?');
+        return;
+      }
+      if (detectedChoice === 4) {
+        // User wants to report a problem
+        setSession(chatId, { state: 'awaiting_report', data: {} });
+        await sendReplyObject(buildReportPrompt());
+        return;
+      }
+    }
+
+    // Also detect intents by keyword, anywhere in the flow
+    if (session.state && session.state !== 'awaiting_menu_choice') {
+      if (isPlanRequest(text) && !session.state.includes('installation') && !session.state.includes('plan')) {
+        setSession(chatId, { state: 'awaiting_location', data: {} });
+        await sendReplyObject(buildLocationPrompt());
+        return;
+      }
+      if (isAgentRequest(text) && session.state !== 'awaiting_agent_name' && session.state !== 'awaiting_agent_neighborhood') {
+        setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
+        await sendTelegramMessage(chatId, '¿Cuál es tu nombre?');
+        return;
+      }
+      if (isReportRequest(text) && session.state !== 'awaiting_report' && !session.state.includes('report')) {
+        setSession(chatId, { state: 'awaiting_report', data: {} });
+        await sendReplyObject(buildReportPrompt());
+        return;
+      }
+      if (isExistingCustomer(text) && session.state !== 'awaiting_plan_name' && !session.state.includes('installation')) {
+        setSession(chatId, { state: 'awaiting_plan_name', data: {} });
+        await sendReplyObject(buildExistingCustomerReply());
+        return;
+      }
+    }
+    // ===== END INTENT INTERRUPTION LAYER =====
+
     // If we previously showed menu, expect a numeric choice or text
     if (session.state === 'awaiting_menu_choice') {
       const choice = parseMenuChoice(text);
