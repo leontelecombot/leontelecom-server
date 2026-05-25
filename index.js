@@ -1038,10 +1038,11 @@ app.post('/webhook', async (req, res) => {
       }
       
       if (confirmNo) {
-        // Go back to location selection and restart the flow
-        const locationData = session.data || {};
-        setSession(chatId, { state: 'awaiting_location', data: { selectedPlan: locationData.selectedPlan, selectedSpeed: locationData.selectedSpeed, selectedPrice: locationData.selectedPrice } });
-        await sendTelegramMessage(chatId, 'Entendido. Vamos a empezar de nuevo. ¿En dónde vives?', null, buildLocationKeyboard());
+        // Reset to main menu on rejection
+        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+        await sendTelegramMessage(chatId, 'Okej. ¿Qué necesitas hacer?');
+        await sendReplyObject(buildMenuReply());
         return;
       }
 
@@ -1103,8 +1104,10 @@ app.post('/webhook', async (req, res) => {
       }
       
       if (rejectsOrientation) {
-        setSession(chatId, { state: 'awaiting_installation_confirmation', data: session.data });
-        await sendTelegramMessage(chatId, `Perfecto. Tu elección es ${session.data?.selectedPlan} (${session.data?.selectedSpeed} → ${session.data?.selectedPrice}). ¿Quieres agendar la instalación?`);
+        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+        await sendTelegramMessage(chatId, 'Okej. ¿Qué necesitas hacer?');
+        await sendReplyObject(buildMenuReply());
         return;
       }
 
@@ -1126,7 +1129,9 @@ app.post('/webhook', async (req, res) => {
       
       if (rejectsInstallation) {
         clearSession(chatId);
-        await sendTelegramMessage(chatId, 'Sin problema. Si en otro momento quieres agendar, me contactas. ¡Estamos aquí para ayudarte! 📱');
+        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+        await sendTelegramMessage(chatId, 'Okej. ¿Qué necesitas hacer?');
+        await sendReplyObject(buildMenuReply());
         return;
       }
 
@@ -1231,6 +1236,7 @@ app.post('/webhook', async (req, res) => {
     // If awaiting report location confirmation
     if (session.state === 'awaiting_report_location_confirm') {
       const confirmYes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|verdad|sale)\b/);
+      const confirmNo = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
       
       if (confirmYes) {
         const reportData = session.data || {};
@@ -1259,6 +1265,15 @@ app.post('/webhook', async (req, res) => {
           '',
           `⏳ En un momento un asesor se va a poner en contacto con ${reportData.name} para asistirte. 📱`
         ].join('\n'));
+        return;
+      }
+
+      if (confirmNo) {
+        // Reset to main menu on rejection
+        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+        await sendTelegramMessage(chatId, 'Okej. ¿Qué necesitas hacer?');
+        await sendReplyObject(buildMenuReply());
         return;
       }
 
