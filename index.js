@@ -971,13 +971,46 @@ app.post('/webhook', async (req, res) => {
 
     // If awaiting report description
     if (session.state === 'awaiting_report') {
+      const reportData = { problemDescription: text };
+      setSession(chatId, { state: 'awaiting_report_name', data: reportData });
+      await sendTelegramMessage(chatId, '¿A qué nombre está el servicio?');
+      return;
+    }
+
+    // If awaiting report name
+    if (session.state === 'awaiting_report_name') {
+      const reportData = session.data || {};
+      setSession(chatId, { state: 'awaiting_report_address', data: { ...reportData, name: text } });
+      await sendTelegramMessage(chatId, '¿Dónde está ubicada la casa de la instalación?');
+      return;
+    }
+
+    // If awaiting report address
+    if (session.state === 'awaiting_report_address') {
+      const reportData = session.data || {};
       clearSession(chatId);
-      await sendTelegramMessage(chatId, 'Gracias por el reporte. Lo he registrado y un agente lo revisará.');
+      
+      // Notify agent with full details
       try {
-        await notifyAgentRequest(chatId, `Reporte de problema: ${text}`, detectLocation(text));
+        await notifyAgentRequest(chatId, [
+          `REPORTE DE PROBLEMA`,
+          `Problema: ${reportData.problemDescription}`,
+          `Nombre: ${reportData.name}`,
+          `Dirección: ${text}`,
+          `Ubicación: ${detectLocation(reportData.problemDescription) || 'Ubicación no especificada'}`
+        ].join('\n'), detectLocation(reportData.problemDescription));
       } catch (notifyError) {
         console.error('Agent notification error:', notifyError.message);
       }
+      
+      await sendTelegramMessage(chatId, [
+        '✅ Perfecto. He registrado tu reporte:',
+        `🔧 Problema: ${reportData.problemDescription}`,
+        `👤 Nombre: ${reportData.name}`,
+        `📍 Dirección: ${text}`,
+        '',
+        `⏳ En un momento un asesor se va a poner en contacto con ${reportData.name} para asistirte. 📱`
+      ].join('\n'));
       return;
     }
 
