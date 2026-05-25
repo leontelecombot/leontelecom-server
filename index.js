@@ -1119,19 +1119,26 @@ app.post('/webhook', async (req, res) => {
 
     // If awaiting installation neighborhood
     if (session.state === 'awaiting_installation_neighborhood') {
-      const installationData = session.data || {};
-      const location = installationData.location || 'Huitzo';
-      const neighborhoodMatch = findNeighborhood(text, location);
-      
-      if (neighborhoodMatch) {
-        setSession(chatId, { state: 'awaiting_installation_location_confirm', data: { ...installationData, neighborhood: neighborhoodMatch.name } });
-        await sendTelegramMessage(chatId, `¿Es correcto que la instalación es en ${neighborhoodMatch.name} ${neighborhoodMatch.location}?`);
+      try {
+        const installationData = session.data || {};
+        const location = installationData.location || 'Huitzo';
+        const neighborhoodMatch = findNeighborhood(text, location);
+        
+        if (neighborhoodMatch) {
+          setSession(chatId, { state: 'awaiting_installation_location_confirm', data: { ...installationData, neighborhood: neighborhoodMatch.name } });
+          await sendTelegramMessage(chatId, `¿Es correcto que la instalación es en ${neighborhoodMatch.name} ${neighborhoodMatch.location}?`);
+          return;
+        }
+
+        // If not found, ask again
+        await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo o escribe el nombre más claramente.`);
+        return;
+      } catch (err) {
+        console.error('Installation neighborhood error:', err.message);
+        const location = (session.data || {}).location || 'Huitzo';
+        await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo.`);
         return;
       }
-
-      // If not found, ask again
-      await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo o escribe el nombre más claramente.`);
-      return;
     }
 
     // If awaiting location confirmation
@@ -1303,17 +1310,23 @@ app.post('/webhook', async (req, res) => {
     }
 
     if (session.state === 'awaiting_migration_current_neighborhood') {
-      const migrationData = session.data || {};
-      const location = migrationData.currentLocation || 'Huitzo';
-      const neighborhoodMatch = findNeighborhood(text, location);
-      
-      if (neighborhoodMatch) {
-        setSession(chatId, { state: 'awaiting_migration_current_street', data: { ...migrationData, currentNeighborhood: neighborhoodMatch.name } });
-        await sendTelegramMessage(chatId, '¿Cuál es la CALLE de la instalación actual?');
+      try {
+        const migrationData = session.data || {};
+        const location = migrationData.currentLocation || 'Huitzo';
+        const neighborhoodMatch = findNeighborhood(text, location);
+        
+        if (neighborhoodMatch) {
+          setSession(chatId, { state: 'awaiting_migration_current_street', data: { ...migrationData, currentNeighborhood: neighborhoodMatch.name } });
+          await sendTelegramMessage(chatId, '¿Cuál es la CALLE de la instalación actual?');
+          return;
+        }
+        await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo.`);
+        return;
+      } catch (err) {
+        console.error('Migration neighborhood error:', err.message);
+        await sendTelegramMessage(chatId, `No encontré tu colonia/barrio. Intenta de nuevo.`);
         return;
       }
-      await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo.`);
-      return;
     }
 
     if (session.state === 'awaiting_migration_current_street') {
@@ -1351,17 +1364,23 @@ app.post('/webhook', async (req, res) => {
     }
 
     if (session.state === 'awaiting_migration_new_neighborhood') {
-      const migrationData = session.data || {};
-      const location = migrationData.newLocation || 'Huitzo';
-      const neighborhoodMatch = findNeighborhood(text, location);
-      
-      if (neighborhoodMatch) {
-        setSession(chatId, { state: 'awaiting_migration_new_street', data: { ...migrationData, newNeighborhood: neighborhoodMatch.name } });
-        await sendTelegramMessage(chatId, '¿Cuál es la CALLE de la nueva instalación?');
+      try {
+        const migrationData = session.data || {};
+        const location = migrationData.newLocation || 'Huitzo';
+        const neighborhoodMatch = findNeighborhood(text, location);
+        
+        if (neighborhoodMatch) {
+          setSession(chatId, { state: 'awaiting_migration_new_street', data: { ...migrationData, newNeighborhood: neighborhoodMatch.name } });
+          await sendTelegramMessage(chatId, '¿Cuál es la CALLE de la nueva instalación?');
+          return;
+        }
+        await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo.`);
+        return;
+      } catch (err) {
+        console.error('Migration new neighborhood error:', err.message);
+        await sendTelegramMessage(chatId, `No encontré tu colonia/barrio. Intenta de nuevo.`);
         return;
       }
-      await sendTelegramMessage(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo.`);
-      return;
     }
 
     if (session.state === 'awaiting_migration_new_street') {
@@ -1623,21 +1642,29 @@ app.post('/webhook', async (req, res) => {
 
     // If awaiting report neighborhood
     if (session.state === 'awaiting_report_neighborhood') {
-      const reportData = session.data || {};
-      const location = reportData.location;
-      const neighborhoodMatch = location !== 'Ubicación no especificada' ? findNeighborhood(text, location) : null;
-      
-      if (neighborhoodMatch) {
-        setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...reportData, neighborhood: neighborhoodMatch.name } });
-        await sendTelegramMessage(chatId, `¿Es correcto que el problema es en ${neighborhoodMatch.name} ${neighborhoodMatch.location}?`);
+      try {
+        const reportData = session.data || {};
+        const location = reportData.location;
+        const neighborhoodMatch = location !== 'Ubicación no especificada' ? findNeighborhood(text, location) : null;
+        
+        if (neighborhoodMatch) {
+          setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...reportData, neighborhood: neighborhoodMatch.name } });
+          await sendTelegramMessage(chatId, `¿Es correcto que el problema es en ${neighborhoodMatch.name} ${neighborhoodMatch.location}?`);
+          return;
+        }
+
+        // If location is unknown or not found, still accept the neighborhood info
+        const fallbackNeighborhood = text;
+        setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...reportData, neighborhood: fallbackNeighborhood } });
+        await sendTelegramMessage(chatId, `¿Es correcto? Tu reporte es de ${fallbackNeighborhood}.`);
+        return;
+      } catch (err) {
+        console.error('Report neighborhood error:', err.message);
+        const fallbackNeighborhood = text;
+        setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...reportData, neighborhood: fallbackNeighborhood } });
+        await sendTelegramMessage(chatId, `¿Es correcto? Tu reporte es de ${fallbackNeighborhood}.`);
         return;
       }
-
-      // If location is unknown or not found, still accept the neighborhood info
-      const fallbackNeighborhood = text;
-      setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...reportData, neighborhood: fallbackNeighborhood } });
-      await sendTelegramMessage(chatId, `¿Es correcto? Tu reporte es de ${fallbackNeighborhood}.`);
-      return;
     }
 
     // If awaiting report location confirmation
