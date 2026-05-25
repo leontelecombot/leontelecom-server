@@ -143,6 +143,54 @@ function detectLocation(text) {
   return '';
 }
 
+function parseDayToDate(dayText) {
+  const monthNames = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  const dayNames = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  
+  const value = normalizeText(dayText).toLowerCase().trim();
+  const now = new Date();
+  let targetDate = null;
+
+  // Check for relative dates
+  if (/\bmanana\b|\bmañana\b|\bmaana\b/.test(value)) {
+    targetDate = new Date(now);
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else if (/\bhoy\b|\bahorita\b|\bahorita/.test(value)) {
+    targetDate = new Date(now);
+  } else if (/\bpasado manana\b|\bpasado mañana\b|\bpasado maana\b/.test(value)) {
+    targetDate = new Date(now);
+    targetDate.setDate(targetDate.getDate() + 2);
+  } else {
+    // Try to parse specific date patterns like "25", "25 de mayo", etc.
+    const numberMatch = value.match(/(\d{1,2})/);
+    if (numberMatch) {
+      const day = parseInt(numberMatch[1], 10);
+      targetDate = new Date(now.getFullYear(), now.getMonth(), day);
+      // If the date is in the past, assume next month
+      if (targetDate < now) {
+        targetDate.setMonth(targetDate.getMonth() + 1);
+      }
+    }
+  }
+
+  if (!targetDate) {
+    // If we can't parse, return the text as-is
+    return dayText;
+  }
+
+  // Format as "Lunes 25 de Mayo del 2026"
+  const dayName = dayNames[targetDate.getDay()];
+  const monthName = monthNames[targetDate.getMonth()];
+  const day = targetDate.getDate();
+  const year = targetDate.getFullYear();
+  
+  // Capitalize first letter
+  const formattedDay = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+  const formattedMonth = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+  
+  return `${formattedDay} ${day} de ${formattedMonth} del ${year}`;
+}
+
 function isGreetingMessage(text) {
   const value = normalizeText(text).trim();
   return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)(\b|\s|,|!|\.)/i.test(value);
@@ -804,14 +852,8 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (choice === 3) {
-        clearSession(chatId);
-        const reply = buildAgentReply();
-        await sendReplyObject(reply);
-        try {
-          await notifyAgentRequest(chatId, text, detectLocation(text));
-        } catch (notifyError) {
-          console.error('Agent notification error:', notifyError.message);
-        }
+        setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
+        await sendTelegramMessage(chatId, '¿Cuál es tu nombre?');
         return;
       }
 
@@ -829,7 +871,8 @@ app.post('/webhook', async (req, res) => {
     // If awaiting installation day
     if (session.state === 'awaiting_installation_day') {
       const installationData = session.data || {};
-      setSession(chatId, { state: 'awaiting_installation_name', data: { ...installationData, day: text } });
+      const formattedDay = parseDayToDate(text);
+      setSession(chatId, { state: 'awaiting_installation_name', data: { ...installationData, day: formattedDay } });
       await sendTelegramMessage(chatId, '¿A qué nombre va la instalación?');
       return;
     }
@@ -845,9 +888,11 @@ app.post('/webhook', async (req, res) => {
     // If awaiting installation address
     if (session.state === 'awaiting_installation_address') {
       const installationData = session.data || {};
+      const detectedLocationFromAddress = detectLocation(text) || installationData.location;
       const fullDetails = {
         ...installationData,
         address: text,
+        location: detectedLocationFromAddress,
         timestamp: new Date().toISOString()
       };
       clearSession(chatId);
@@ -859,9 +904,9 @@ app.post('/webhook', async (req, res) => {
           `Día propuesto: ${installationData.day}`,
           `Nombre: ${installationData.name}`,
           `Dirección: ${text}`,
-          `Ubicación: ${installationData.location}`,
+          `Ubicación: ${detectedLocationFromAddress || installationData.location}`,
           `Observaciones: ${installationData.initialRequest || 'Sin detalles adicionales'}`
-        ].join('\n'), installationData.location);
+        ].join('\n'), detectedLocationFromAddress || installationData.location);
       } catch (notifyError) {
         console.error('Agent notification error:', notifyError.message);
       }
@@ -922,6 +967,13 @@ app.post('/webhook', async (req, res) => {
 
     // If we already recommended a plan, keep the context alive for short follow-ups.
     if (session.state === 'awaiting_recommendation_followup') {
+      // Check for mid-conversation agent request
+      if (isAgentRequest(text)) {
+        setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
+        await sendTelegramMessage(chatId, '¿Cuál es tu nombre?');
+        return;
+      }
+
       // If user asked for installation, start multi-step process
       if (isInstallationRequest(text)) {
         setSession(chatId, { state: 'awaiting_installation_day', data: { location: session.data?.location, initialRequest: text, householdSize: session.data?.householdSize } });
@@ -1014,6 +1066,33 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // If awaiting agent name (mid-conversation agent request)
+    if (session.state === 'awaiting_agent_name') {
+      const currentData = session.data || {};
+      setSession(chatId, { state: 'awaiting_agent_need', data: { ...currentData, agentName: text } });
+      await sendTelegramMessage(chatId, '¿Qué necesitas o qué preguntas tienes?');
+      return;
+    }
+
+    // If awaiting agent need (mid-conversation agent request)
+    if (session.state === 'awaiting_agent_need') {
+      const agentData = session.data || {};
+      clearSession(chatId);
+      try {
+        await notifyAgentRequest(chatId, [
+          `SOLICITUD DIRECTA DE ASESOR`,
+          `Nombre: ${agentData.agentName}`,
+          `Necesidad: ${text}`,
+          `Ubicación: ${agentData.location || 'Ubicación no especificada'}`,
+          `Contexto: ${agentData.initialRequest || 'Sin contexto adicional'}`
+        ].join('\n'), agentData.location);
+      } catch (notifyError) {
+        console.error('Agent notification error:', notifyError.message);
+      }
+      await sendTelegramMessage(chatId, [`✅ Perfecto ${agentData.agentName}.`, `En unos momentos un asesor te atenderá en el chat. 📱`].join('\n'));
+      return;
+    }
+
     // Default: no session state — use intent resolution, but always lock into menu for unclear text.
     if (isGreetingMessage(message.text)) {
       setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
@@ -1021,8 +1100,11 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    if (isPlanRequest(message.text) && !detectLocation(message.text)) {
-      setSession(chatId, { state: 'awaiting_location', data: {} });
+    if (isPlanRequest(message.text)) {
+      const detectedLoc = detectLocation(message.text);
+      if (!detectedLoc) {
+        setSession(chatId, { state: 'awaiting_location', data: { ...session.data } });
+      }
     }
 
     const hasDirectIntent = isPlanRequest(message.text) || isCoverageRequest(message.text) || isTechnicalIssue(message.text) || isAgentRequest(message.text) || isExistingCustomer(message.text) || isReportRequest(message.text);
