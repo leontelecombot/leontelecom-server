@@ -914,7 +914,8 @@ app.post('/webhook', async (req, res) => {
     if (session.state === 'awaiting_installation_name') {
       const installationData = session.data || {};
       setSession(chatId, { state: 'awaiting_installation_address', data: { ...installationData, name: text } });
-      await sendTelegramMessage(chatId, '¿Cuál es la dirección donde se hará la instalación?');
+      const location = installationData.location || 'tu zona';
+      await sendTelegramMessage(chatId, `¿Cuál es la dirección de la instalación en ${location}?`);
       return;
     }
 
@@ -980,8 +981,10 @@ app.post('/webhook', async (req, res) => {
       }
       
       if (confirmNo) {
-        setSession(chatId, { state: 'awaiting_installation_neighborhood', data: session.data });
-        await sendTelegramMessage(chatId, 'Entendido. ¿Cuál es tu colonia, barrio o sección correcta?');
+        // Go back to location selection and restart the flow
+        const locationData = session.data || {};
+        setSession(chatId, { state: 'awaiting_location', data: { selectedPlan: locationData.selectedPlan, selectedSpeed: locationData.selectedSpeed, selectedPrice: locationData.selectedPrice } });
+        await sendTelegramMessage(chatId, 'Entendido. Vamos a empezar de nuevo. ¿En dónde vives?', null, buildLocationKeyboard());
         return;
       }
 
