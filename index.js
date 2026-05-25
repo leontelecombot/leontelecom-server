@@ -926,10 +926,10 @@ app.post('/webhook', async (req, res) => {
     if (session.state === 'awaiting_location') {
       const location = detectLocation(text);
       if (location) {
-        setSession(chatId, { state: 'awaiting_household_size', data: { location } });
+        setSession(chatId, { state: 'awaiting_plan_selection', data: { location } });
         const reply = buildPlanReplyForLocation(location);
         await sendReplyObject(reply);
-        await sendTelegramMessage(chatId, 'Si quieres una recomendación, dime cuántas personas usan internet en tu casa.');
+        await sendTelegramMessage(chatId, '¿Cuál plan te gustaría?');
         return;
       }
 
@@ -942,26 +942,68 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // If awaiting household size for a plan recommendation
-    if (session.state === 'awaiting_household_size') {
-      const householdSize = parseHouseholdSize(text);
-      const location = session.data?.location || detectLocation(text);
-
-      if (householdSize && location) {
-        setSession(chatId, { state: 'awaiting_recommendation_followup', data: { location, householdSize } });
-        const recommendation = await generateNaturalPlanRecommendationReply({ location, householdSize });
-        await sendTelegramMessage(chatId, recommendation.text, recommendation.mediaUrls || []);
-        await sendTelegramMessage(chatId, 'Si quieres, dime qué necesitas y te lo explico rápido.');
+    // If awaiting plan selection
+    if (session.state === 'awaiting_plan_selection') {
+      const location = session.data?.location;
+      const plans = location === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
+      const selectedPlan = plans.find(p => normalizeText(text).includes(normalizeText(p.name)) || normalizeText(text).includes(normalizeText(p.speed)));
+      
+      if (selectedPlan) {
+        setSession(chatId, { state: 'awaiting_orientation_choice', data: { ...session.data, selectedPlan: selectedPlan.name, selectedSpeed: selectedPlan.speed, selectedPrice: selectedPlan.price } });
+        await sendTelegramMessage(chatId, `Entendido, el plan ${selectedPlan.name} (${selectedPlan.speed} → ${selectedPlan.price}). ¿Quieres que te dé orientación sobre por qué este plan es una buena opción?`);
         return;
       }
 
-      const fallbackLocation = location || session.data?.location;
-      if (fallbackLocation) {
-        await sendTelegramMessage(chatId, `Dime cuántas personas viven en tu casa para recomendarte mejor el plan de ${fallbackLocation}. Por ejemplo: 4, 6 o 10.`);
+      // If plan not recognized, ask again
+      await sendTelegramMessage(chatId, 'No reconozco el plan. Por favor elige uno de los planes mencionados (Lite, Basic, Medium, Advanced o Ultra según tu zona).');
+      return;
+    }
+
+    // If awaiting orientation choice
+    if (session.state === 'awaiting_orientation_choice') {
+      const wantsOrientation = normalizeText(text).match(/\b(si|sí|yes|claro|dale|ok|okay|adelante|ok dale|quiero)\b/);
+      const rejectsOrientation = normalizeText(text).match(/\b(no|nope|nah|no quiero|no gracias|sin orientacion|sin orientación)\b/);
+      
+      if (wantsOrientation) {
+        const location = session.data?.location;
+        const selectedPlan = session.data?.selectedPlan;
+        const orientation = `El ${selectedPlan} es ideal para ${location} porque ofrece excelente velocidad y estabilidad. Te permitirá navegar, ver películas y trabajar sin problemas.`;
+        setSession(chatId, { state: 'awaiting_installation_confirmation', data: session.data });
+        await sendTelegramMessage(chatId, orientation);
+        await sendTelegramMessage(chatId, '¿Quieres agendar la instalación de este plan?');
+        return;
+      }
+      
+      if (rejectsOrientation) {
+        setSession(chatId, { state: 'awaiting_installation_confirmation', data: session.data });
+        await sendTelegramMessage(chatId, `Perfecto. Tu elección es ${session.data?.selectedPlan} (${session.data?.selectedSpeed} → ${session.data?.selectedPrice}). ¿Quieres agendar la instalación?`);
         return;
       }
 
-      await sendReplyObject(buildMenuReply());
+      // If unclear, ask again
+      await sendTelegramMessage(chatId, '¿Quieres orientación sí o no?');
+      return;
+    }
+
+    // If awaiting installation confirmation
+    if (session.state === 'awaiting_installation_confirmation') {
+      const wantsInstallation = normalizeText(text).match(/\b(si|sí|yes|claro|dale|ok|okay|adelante|ok dale|instalar|quiero|agend|agendar)\b/);
+      const rejectsInstallation = normalizeText(text).match(/\b(no|nope|nah|no quiero|no gracias|luego)\b/);
+      
+      if (wantsInstallation) {
+        setSession(chatId, { state: 'awaiting_installation_day', data: { ...session.data, initialRequest: text } });
+        await sendTelegramMessage(chatId, '📅 ¿Qué día tienes disponibilidad para la instalación? (Ej: mañana, el jueves, el 30 de mayo)\n\n(Nota: Será a acordar con un asesor)');
+        return;
+      }
+      
+      if (rejectsInstallation) {
+        clearSession(chatId);
+        await sendTelegramMessage(chatId, 'Sin problema. Si en otro momento quieres agendar, me contactas. ¡Estamos aquí para ayudarte! 📱');
+        return;
+      }
+
+      // If unclear, ask again
+      await sendTelegramMessage(chatId, '¿Quieres agendar ahora o prefieres hacerlo después?');
       return;
     }
 
@@ -971,13 +1013,6 @@ app.post('/webhook', async (req, res) => {
       if (isAgentRequest(text)) {
         setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
         await sendTelegramMessage(chatId, '¿Cuál es tu nombre?');
-        return;
-      }
-
-      // If user asked for installation, start multi-step process
-      if (isInstallationRequest(text)) {
-        setSession(chatId, { state: 'awaiting_installation_day', data: { location: session.data?.location, initialRequest: text, householdSize: session.data?.householdSize } });
-        await sendTelegramMessage(chatId, '📅 ¿Qué día tienes disponibilidad para la instalación? (Ej: mañana, el jueves, el 30 de mayo)\n\n(Nota: Será a acordar con un asesor)');
         return;
       }
 
