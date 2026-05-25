@@ -6,11 +6,12 @@ const app = express();
 app.use(express.json());
 
 const SYSTEM_PROMPT = [
-  'Eres el asistente virtual de León Telecom.',
-  'Responde siempre en español, con tono claro, breve y útil.',
-  'Ayuda solo con internet, cobertura, planes y pasos de contacto.',
-  'Nunca menciones servicios distintos al internet que no ofrecemos.',
-  'Si no tienes un dato confirmado, dilo de forma transparente y ofrece escalarlo.'
+  'Eres Leo, asesor de internet para León Telecom.',
+  'Eres cálido, honesto, y enfocado en ayudar a cada cliente.',
+  'Responde siempre en español, con tono amable y directo.',
+  'Tu objetivo: que el cliente vea el servicio como la solución perfecta para su familia.',
+  'Habla solo de internet; nunca menciones otros servicios.',
+  'Si no tienes un dato, sé transparente pero mantén la confianza en la solución.'
 ].join(' ');
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai-compatible';
@@ -201,8 +202,8 @@ function buildPlanLines(plans) {
 function buildLocationPrompt() {
   return {
     text: [
-      'Te puedo mostrar los planes según tu zona.',
-      'Elige una opción: Huitzo, Telixtlahuaca o Suchilquitongo.'
+      '¿En cuál zona vives?',
+      'Te muestro planes con fibra óptica o inalámbrico según lo que llegue a tu área.'
     ].join(' '),
     mediaUrls: [],
     replyMarkup: {
@@ -217,9 +218,9 @@ function buildPlanReplyForLocation(location) {
   if (location === LOCATIONS.huitzo) {
     return {
       text: [
-        'Estos son nuestros planes de fibra óptica para Huitzo:',
+        '🔥 Planes de fibra óptica para Huitzo (la mejor conexión):',
         buildPlanLines(FIBER_PLANS),
-        'Si quieres, te recomiendo el mejor según cuántas personas usan internet en tu casa.'
+        'Para darte la recomendación perfecta, ¿cuántas personas usan internet en tu casa?'
       ].join('\n'),
       mediaUrls: FIBER_PLAN_MEDIA_URL ? [FIBER_PLAN_MEDIA_URL] : []
     };
@@ -228,9 +229,9 @@ function buildPlanReplyForLocation(location) {
   if (location === LOCATIONS.telixtlahuaca || location === LOCATIONS.suchilquitongo) {
     return {
       text: [
-        `Estos son nuestros planes de internet inalámbrico para ${location}:`,
+        `📡 Planes de internet inalámbrico para ${location}:`,
         buildPlanLines(WIRELESS_PLANS),
-        'Si quieres, te recomiendo el mejor según cuántas personas usan internet en tu casa.'
+        'Dime cuántas personas usan internet en casa y te digo cuál se ajusta mejor.'
       ].join('\n'),
       mediaUrls: WIRELESS_PLAN_MEDIA_URL ? [WIRELESS_PLAN_MEDIA_URL] : []
     };
@@ -242,8 +243,8 @@ function buildPlanReplyForLocation(location) {
 function buildRecommendationPrompt() {
   return {
     text: [
-      'Perfecto. Dime cualquier duda sobre ese plan y te respondo breve.',
-      'Por ejemplo: si quieres más velocidad, si te conviene menos, o si necesitas que te lo compare con tu uso en casa.'
+      'Cualquier duda sobre el plan, me la cuentas.',
+      'O podemos agendar tu instalación ahora mismo. ¿Qué dices?'
     ].join(' '),
     mediaUrls: []
   };
@@ -252,8 +253,8 @@ function buildRecommendationPrompt() {
 function buildAgentReply() {
   return {
     text: [
-      'Claro, te paso con un agente.',
-      'En cuanto esté disponible, te contactamos por aquí.'
+      'Perfecto, voy a conectarte con un agente ahora.',
+      'Tu contacto: 📞 9511603125. Alguien te atiende en poco tiempo.'
     ].join(' '),
     mediaUrls: []
   };
@@ -262,8 +263,9 @@ function buildAgentReply() {
 function buildExistingCustomerReply() {
   return {
     text: [
-      'Perfecto — eres cliente. ¿Cuál es tu plan actual?',
-      'Dime el nombre del plan o copia el mensaje que te llegó y te ayudo con facturación, velocidad o fallas.'
+      '👤 Genial. Para ayudarte mejor, necesito:',
+      '1) Tu plan actual (Lite, Basic, Medium, Advanced, Ultra o el MB/precio)',
+      '2) El problema: velocidad, facturación, instalación, o soporte técnico?'
     ].join(' '),
     mediaUrls: []
   };
@@ -272,8 +274,9 @@ function buildExistingCustomerReply() {
 function buildReportPrompt() {
   return {
     text: [
-      'Entendido. Por favor descríbeme brevemente el problema que quieres reportar (por ejemplo: sin internet, muy lento, intermitente).',
-      'Si quieres, puedes incluir horarios o capturas.'
+      '🔧 Entendido. Cuéntame qué pasa:',
+      '❌ Sin internet, 🐢 muy lento, ⚡ intermitente, u otro?',
+      'Así puedo indicarte la solución rápido.'
     ].join(' '),
     mediaUrls: []
   };
@@ -299,8 +302,8 @@ function buildCoverageReply(text) {
 
   return {
     text: [
-      'Dime si vives en Huitzo, Telixtlahuaca o Suchilquitongo y te digo qué servicio te toca.',
-      'También puedes pedir hablar con un agente si quieres que te atienda una persona.'
+      '📍 Dime tu zona: Huitzo (fibra 🔥), Telixtlahuaca, o Suchilquitongo.',
+      'Y te muestro qué planes llegan a ti.'
     ].join(' '),
     mediaUrls: []
   };
@@ -309,8 +312,8 @@ function buildCoverageReply(text) {
 function buildTechnicalReply(text) {
   return {
     text: [
-      'Vamos a revisarlo. Primero reinicia tu router o equipo y espera 2 minutos.',
-      'Si sigue igual, dime si el problema es sin internet, lento o intermitente y te doy el siguiente paso.'
+      '⚡ Vamos paso a paso:',
+      '1) Reinicia tu router 2 minutos 2) Si sigue igual, me dices: sin internet, lento o intermitente 3) Listo, te damos solución.'
     ].join(' '),
     mediaUrls: []
   };
@@ -321,9 +324,10 @@ async function generateNaturalPlanRecommendationReply(context) {
     ? chooseRecommendedFiberPlan(context.householdSize)
     : chooseRecommendedWirelessPlan(context.householdSize);
 
+  const whyItFits = context.householdSize >= 8 ? 'porque necesitan estabilidad para varios dispositivos' : context.householdSize >= 4 ? 'para que todos usen internet sin demoras' : 'para una conexión fluida y segura';
   const fallbackText = context.location === LOCATIONS.huitzo
-    ? `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.name} (${baseRecommendation.speed}) por ${baseRecommendation.price}. Si quieres, te digo rápido por qué encaja.`
-    : `Para ${context.householdSize} personas en ${context.location}, te recomiendo ${baseRecommendation.speed} por ${baseRecommendation.price}. Si quieres, te digo rápido por qué encaja.`;
+    ? `Con ${context.householdSize} en casa, el ${baseRecommendation.name} (${baseRecommendation.speed}) es perfecto ${whyItFits}. Son ${baseRecommendation.price}. ¿Quieres que programe tu instalación?`
+    : `Para ${context.householdSize} personas en ${context.location}, ${baseRecommendation.speed} es lo que necesitas ${whyItFits}. Cuesta ${baseRecommendation.price}. ¿Empezamos?`;
 
   if (!AI_API_KEY) {
     return {
@@ -345,11 +349,11 @@ async function generateNaturalPlanRecommendationReply(context) {
           {
             role: 'system',
             content: [
-              'Eres el asistente de León Telecom.',
-              'Escribe una recomendación breve, natural y específica en máximo dos frases.',
-              'No inventes planes ni precios.',
-              'Usa solo la información proporcionada.',
-              'Da una recomendación concreta y, si hace falta, agrega una sola pregunta de seguimiento simple.'
+              'Eres Leo, un asesor de internet amable de León Telecom.',
+              'Tu tono: cálido, confiado, y orientado a la acción.',
+              'Máximo dos frases. Sé específico: por qué este plan, no otro.',
+              'Nunca inventes; usa solo datos reales.',
+              'Cierra siempre con una invitación a actuar: instalación, más info, o hablar con alguien.'
             ].join(' ')
           },
           {
@@ -357,15 +361,15 @@ async function generateNaturalPlanRecommendationReply(context) {
             content: [
               `Zona: ${context.location}`,
               `Personas en la casa: ${context.householdSize}`,
-              `Tipo de servicio: ${context.location === LOCATIONS.huitzo ? 'fibra óptica' : 'internet inalámbrico'}`,
+              `Tipo de servicio: ${context.location === LOCATIONS.huitzo ? 'fibra óptica (la mejor)' : 'internet inalámbrico'}`,
               `Plan sugerido: ${baseRecommendation.name || baseRecommendation.speed}`,
               `Velocidad: ${baseRecommendation.speed}`,
               `Precio: ${baseRecommendation.price}`,
-              'Responde como si fueras un asesor humano, natural, seguro y breve. No des un discurso; solo una recomendación corta con una razón simple.'
+              'Responde como vendedor amable: explica por qué este plan resuelve su necesidad específica, luego invita a actuar (instalar, más info, o hablar con asesor).'
             ].join('\n')
           }
         ],
-        temperature: 0.65
+        temperature: 0.7
       })
     });
 
@@ -393,7 +397,7 @@ async function generateFollowupRecommendationReply(context, userText) {
     ? chooseRecommendedFiberPlan(context.householdSize)
     : chooseRecommendedWirelessPlan(context.householdSize);
 
-  const fallbackText = `Si quieres, te explico por qué te conviene ${baseRecommendation.name || baseRecommendation.speed} para ${context.householdSize} personas en ${context.location}.`;
+  const fallbackText = `El ${baseRecommendation.name || baseRecommendation.speed} es lo ideal para ${context.householdSize}. ¿Tienes dudas o te gustaría agendar con un asesor?`;
 
   if (!AI_API_KEY) {
     return {
@@ -415,23 +419,23 @@ async function generateFollowupRecommendationReply(context, userText) {
           {
             role: 'system',
             content: [
-              'Eres Leo, asesor de León Telecom.',
-              'Responde de forma corta, natural y concreta, máximo dos frases.',
-              'Mantén coherencia con el plan sugerido y la cantidad de personas en casa.',
-              'No des una lista ni un formulario.',
-              'Si el usuario pregunta algo distinto, vuelve a orientar brevemente al plan o a la recomendación.'
+              'Eres Leo, asesor de León Telecom. Tu tono es amable, directo, y orientado a resolver.',
+              'Máximo dos frases cortas. Sé específico y útil, no genérico.',
+              'Siempre mantén el contexto: zona, personas, y el plan recomendado.',
+              'Si hay duda, responde con confianza; si no sabes, ofrece contactar a un asesor.',
+              'Termina con una acción clara: "¿Instalamos?", "¿Más info?", o "¿Te paso con alguien?"'
             ].join(' ')
           },
           {
             role: 'user',
             content: [
-              `Contexto: zona ${context.location}, ${context.householdSize} personas en casa, plan sugerido ${baseRecommendation.name || baseRecommendation.speed} (${baseRecommendation.speed}) por ${baseRecommendation.price}.`,
-              `Mensaje del cliente: ${userText}`,
-              'Responde como asesor humano, breve y coherente. Si el cliente dice que no sabe de dispositivos, dale una explicación simple y una recomendación concreta.'
+              `Contexto: zona ${context.location}, ${context.householdSize} personas en casa, plan recomendado ${baseRecommendation.name || baseRecommendation.speed} (${baseRecommendation.speed}/${baseRecommendation.price}).`,
+              `Cliente pregunta: ${userText}`,
+              'Responde como vendedor amable: valida la pregunta, da una respuesta clara y concreta, y termina con una acción (instalar, más info, o hablar con asesor). Si no tienes la info, ofrece escalarlo.'
             ].join('\n')
           }
         ],
-        temperature: 0.7
+        temperature: 0.75
       })
     });
 
@@ -476,15 +480,15 @@ function buildGreetingReply(text) {
 function buildFallbackReply(text) {
   return {
     text: [
-      'No entendí bien. Puedes elegir una de estas opciones:',
-      '1) Ver planes',
-      '2) Ya soy cliente (dime tu plan)',
-      '3) Hablar con un asesor',
-      '4) Reportar un problema'
-    ].join('\n'),
+      '💭 Oye, no atrapé bien eso.',
+      'Presiona 1️⃣, 2️⃣, 3️⃣ o 4️⃣ de arriba. 👍'
+    ].join(' '),
     mediaUrls: [],
     replyMarkup: {
-      keyboard: [[{ text: '1) Ver planes' }, { text: '2) Ya soy cliente (dime tu plan)' }], [{ text: '3) Hablar con un asesor' }, { text: '4) Reportar un problema' }]],
+      keyboard: [
+        [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
+        [{ text: '3️⃣ Hablar con asesor' }, { text: '4️⃣ Reportar falla' }]
+      ],
       one_time_keyboard: true,
       resize_keyboard: true
     }
@@ -494,14 +498,14 @@ function buildFallbackReply(text) {
 function buildMenuReply() {
   return {
     text: [
-      'Hola, soy Leo, el asistente de León Telecom.',
-      '¿En qué te puedo ayudar hoy? Elige una opción o escribe su número:'
+      'Hola 👋 Soy Leo, de León Telecom.',
+      'Internet rápido para tu zona. ¿Qué necesitas?'
     ].join('\n'),
     mediaUrls: [],
     replyMarkup: {
       keyboard: [
-        [{ text: '1) Ver planes disponibles' }, { text: '2) Ya soy cliente (tengo un plan)' }],
-        [{ text: '3) Quiero hablar con un asesor' }, { text: '4) Reportar un problema' }]
+        [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
+        [{ text: '3️⃣ Hablar con asesor' }, { text: '4️⃣ Reportar falla' }]
       ],
       one_time_keyboard: true,
       resize_keyboard: true
