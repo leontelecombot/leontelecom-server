@@ -1053,37 +1053,10 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // If awaiting installation address (confirmation of location)
+    // If awaiting installation address - capture user's response as the address
     if (session.state === 'awaiting_installation_address') {
-      const confirmYes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|verdad|sale)\b/);
-      const confirmNo = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
-      
-      if (confirmYes) {
-        const installationData = session.data || {};
-        // Now ask for the actual address
-        const location = installationData.location || 'tu zona';
-        setSession(chatId, { state: 'awaiting_installation_address_input', data: installationData });
-        await sendTelegramMessage(chatId, `¿Cuál es la dirección específica en ${location}?`);
-        return;
-      }
-      
-      if (confirmNo) {
-        // Return to location selection
-        clearSession(chatId);
-        setSession(chatId, { state: 'awaiting_location', data: {} });
-        await sendTelegramMessage(chatId, '¿En dónde vives?', null, buildLocationKeyboard());
-        return;
-      }
-      
-      // If unclear, ask again
-      const location = session.data?.location || 'tu zona';
-      await sendTelegramMessage(chatId, `¿La dirección de instalación es en ${location}? Responde sí o no.`);
-      return;
-    }
-
-    // If awaiting actual address input
-    if (session.state === 'awaiting_installation_address_input') {
       const installationData = session.data || {};
+      // User's response becomes the address
       setSession(chatId, { state: 'awaiting_installation_neighborhood', data: { ...installationData, address: text } });
       await sendTelegramMessage(chatId, '¿Cuál es tu colonia, barrio o sección?');
       return;
@@ -1112,47 +1085,66 @@ app.post('/webhook', async (req, res) => {
       const confirmNo = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
       
       if (confirmYes) {
-        const installationData = session.data || {};
-        clearSession(chatId);
-        
-        // Notify agent with full details including neighborhood
-        try {
-          await notifyAgentRequest(chatId, [
-            `SOLICITUD DE INSTALACIÓN`,
-            `Día propuesto: ${installationData.day}`,
-            `Nombre: ${installationData.name}`,
-            `Dirección: ${installationData.address}`,
-            `Barrio/Colonia: ${installationData.neighborhood}`,
-            `Ubicación: ${installationData.location}`,
-            `Observaciones: ${installationData.initialRequest || 'Sin detalles adicionales'}`
-          ].join('\n'), installationData.location);
-        } catch (notifyError) {
-          console.error('Agent notification error:', notifyError.message);
-        }
-        
-        await sendTelegramMessage(chatId, [
-          '✅ Perfecto. Registro tu solicitud con los datos:',
-          `📅 Día propuesto: ${installationData.day}`,
-          `👤 Nombre: ${installationData.name}`,
-          `📍 Dirección: ${installationData.address}`,
-          `🏘️ Barrio: ${installationData.neighborhood}`,
-          '',
-          `⏳ En un momento un asesor se va a poner en contacto con ${installationData.name} para confirmar todos los detalles. 📱`
-        ].join('\n'));
+        // Move to street question
+        setSession(chatId, { state: 'awaiting_installation_street', data: session.data });
+        await sendTelegramMessage(chatId, '¿Cuál es la calle?');
         return;
       }
       
       if (confirmNo) {
-        // Reset to main menu on rejection
-        clearSession(chatId);
-        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-        await sendTelegramMessage(chatId, 'Okej. ¿Qué necesitas hacer?');
-        await sendReplyObject(buildMenuReply());
+        // Go back to neighborhood selection
+        setSession(chatId, { state: 'awaiting_installation_neighborhood', data: session.data });
+        await sendTelegramMessage(chatId, 'Entendido. ¿Cuál es tu colonia, barrio o sección correcta?');
         return;
       }
 
       // If unclear, ask again
       await sendTelegramMessage(chatId, '¿Es correcto o no? Responde sí o no.');
+      return;
+    }
+
+    // If awaiting installation street
+    if (session.state === 'awaiting_installation_street') {
+      const installationData = session.data || {};
+      setSession(chatId, { state: 'awaiting_installation_references', data: { ...installationData, street: text } });
+      await sendTelegramMessage(chatId, '¿Cuáles son las referencias del domicilio? (ej: cerca de la iglesia, esquina con la tienda)');
+      return;
+    }
+
+    // If awaiting installation references
+    if (session.state === 'awaiting_installation_references') {
+      const installationData = session.data || {};
+      installationData.references = text;
+      clearSession(chatId);
+      
+      // Notify agent with full details including all information
+      try {
+        await notifyAgentRequest(chatId, [
+          `SOLICITUD DE INSTALACIÓN`,
+          `Día propuesto: ${installationData.day}`,
+          `Nombre: ${installationData.name}`,
+          `Dirección/Zona: ${installationData.address}`,
+          `Barrio/Colonia: ${installationData.neighborhood}`,
+          `Calle: ${installationData.street}`,
+          `Referencias: ${installationData.references}`,
+          `Ubicación: ${installationData.location}`,
+          `Observaciones: ${installationData.initialRequest || 'Sin detalles adicionales'}`
+        ].join('\n'), installationData.location);
+      } catch (notifyError) {
+        console.error('Agent notification error:', notifyError.message);
+      }
+      
+      await sendTelegramMessage(chatId, [
+        '✅ Perfecto. Registro tu solicitud con los datos:',
+        `📅 Día propuesto: ${installationData.day}`,
+        `👤 Nombre: ${installationData.name}`,
+        `📍 Dirección/Zona: ${installationData.address}`,
+        `🏘️ Barrio: ${installationData.neighborhood}`,
+        `🛣️ Calle: ${installationData.street}`,
+        `🏠 Referencias: ${installationData.references}`,
+        '',
+        `⏳ En un momento un asesor se va a poner en contacto con ${installationData.name} para confirmar todos los detalles. 📱`
+      ].join('\n'));
       return;
     }
 
