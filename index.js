@@ -1053,11 +1053,12 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // If awaiting installation address - capture user's response as the address
+    // If awaiting installation address - capture location as the address
     if (session.state === 'awaiting_installation_address') {
       const installationData = session.data || {};
-      // User's response becomes the address
-      setSession(chatId, { state: 'awaiting_installation_neighborhood', data: { ...installationData, address: text } });
+      // Use the confirmed location (e.g., "Huitzo") as the address, not the user's confirmation response
+      const address = installationData.location || 'tu zona';
+      setSession(chatId, { state: 'awaiting_installation_neighborhood', data: { ...installationData, address } });
       await sendTelegramMessage(chatId, '¿Cuál es tu colonia, barrio o sección?');
       return;
     }
