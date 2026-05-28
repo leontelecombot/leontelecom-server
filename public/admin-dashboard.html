@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel Admin - León Telecom</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      overflow: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 30px;
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+    }
+
+    .header p {
+      opacity: 0.9;
+      font-size: 0.95em;
+    }
+
+    .content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      padding: 30px;
+    }
+
+    .section {
+      background: #f8f9fa;
+      padding: 25px;
+      border-radius: 8px;
+      border-left: 5px solid #667eea;
+    }
+
+    .section h2 {
+      color: #333;
+      margin-bottom: 20px;
+      font-size: 1.3em;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #555;
+      font-weight: 600;
+      font-size: 0.95em;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    textarea,
+    input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #ddd;
+      border-radius: 5px;
+      font-size: 1em;
+      font-family: inherit;
+      transition: border-color 0.3s;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus,
+    textarea:focus,
+    input[type="file"]:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+
+    button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 12px 30px;
+      border: none;
+      border-radius: 5px;
+      font-size: 1em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      width: 100%;
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .status-box {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border: 2px solid #ddd;
+    }
+
+    .status-online {
+      color: #28a745;
+      font-weight: bold;
+    }
+
+    .status-offline {
+      color: #dc3545;
+      font-weight: bold;
+    }
+
+    .status-label {
+      color: #666;
+      font-size: 0.9em;
+      margin-bottom: 5px;
+    }
+
+    .message-preview {
+      background: white;
+      padding: 15px;
+      border-radius: 5px;
+      margin-top: 15px;
+      border-left: 4px solid #667eea;
+    }
+
+    .recipient-count {
+      background: #e7f3ff;
+      padding: 12px;
+      border-radius: 5px;
+      margin: 15px 0;
+      color: #004085;
+      font-size: 0.95em;
+    }
+
+    .two-column {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+    }
+
+    .file-preview {
+      width: 100%;
+      max-width: 200px;
+      margin-top: 10px;
+      border-radius: 5px;
+    }
+
+    .alert {
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+      display: block;
+    }
+
+    .alert-error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+      display: block;
+    }
+
+    @media (max-width: 768px) {
+      .content {
+        grid-template-columns: 1fr;
+      }
+
+      .two-column {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .logout-btn {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      padding: 8px 16px;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: 2px solid white;
+    }
+
+    .logout-btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <button class="logout-btn" onclick="logout()">Salir</button>
+      <h1>🚀 Panel Admin - León Telecom</h1>
+      <p>Gestiona mensajes, ofertas y estado de red</p>
+    </div>
+
+    <div class="content">
+      <!-- SECCIÓN 1: MENSAJES MASIVOS -->
+      <div class="section">
+        <h2>📢 Mensajes Masivos</h2>
+        
+        <div id="statusAlert" class="alert"></div>
+
+        <div class="status-box">
+          <div class="status-label">Estado de la Red</div>
+          <div id="networkStatus" class="status-online">🟢 En línea</div>
+          <button onclick="checkNetworkStatus()" style="margin-top: 10px; padding: 8px;">
+            Actualizar Estado
+          </button>
+        </div>
+
+        <div class="form-group">
+          <label>Mensaje para todos los usuarios:</label>
+          <textarea 
+            id="messageText" 
+            placeholder="Escribe el mensaje que deseas enviar a todos los usuarios..."
+            rows="6"
+          ></textarea>
+        </div>
+
+        <div class="recipient-count" id="recipientCount">
+          Cargando cantidad de usuarios...
+        </div>
+
+        <button onclick="sendBulkMessage()">
+          📤 Enviar Mensaje Masivo
+        </button>
+      </div>
+
+      <!-- SECCIÓN 2: OFERTAS -->
+      <div class="section">
+        <h2>🎁 Enviar Oferta</h2>
+
+        <div class="form-group">
+          <label>Imagen de la oferta:</label>
+          <input 
+            type="file" 
+            id="promoImage" 
+            accept="image/*"
+            onchange="previewImage(event)"
+          >
+          <img id="imagePreview" class="file-preview" style="display: none;">
+        </div>
+
+        <div class="form-group">
+          <label>Descripción/Texto de la oferta:</label>
+          <textarea 
+            id="promoText" 
+            placeholder="Describe la oferta aquí..."
+            rows="6"
+          ></textarea>
+        </div>
+
+        <div class="recipient-count">
+          ⚠️ La oferta se enviará a todos los usuarios
+        </div>
+
+        <button onclick="sendPromotion()">
+          🎯 Enviar Oferta
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Check if user is authenticated
+    window.addEventListener('load', () => {
+      const auth = sessionStorage.getItem('admin_auth');
+      if (!auth) {
+        window.location.href = '/admin/login';
+      }
+      loadUserCount();
+      checkNetworkStatus();
+    });
+
+    function previewImage(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const preview = document.getElementById('imagePreview');
+          preview.src = e.target.result;
+          preview.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    function loadUserCount() {
+      fetch('/admin/api/user-count')
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('recipientCount').innerHTML = 
+            `👥 Se enviará a <strong>${data.count}</strong> usuario${data.count !== 1 ? 's' : ''}`;
+        })
+        .catch(e => console.error('Error loading user count:', e));
+    }
+
+    function checkNetworkStatus() {
+      // In a real scenario, this would check Wisphub API
+      // For now, we'll simulate with a simple endpoint
+      fetch('/admin/api/network-status')
+        .then(r => r.json())
+        .then(data => {
+          const statusEl = document.getElementById('networkStatus');
+          if (data.online) {
+            statusEl.className = 'status-online';
+            statusEl.textContent = '🟢 En línea';
+          } else {
+            statusEl.className = 'status-offline';
+            statusEl.textContent = '🔴 Fuera de servicio - ' + (data.message || 'Sin conexión');
+          }
+        })
+        .catch(e => console.error('Error checking status:', e));
+    }
+
+    function showAlert(message, type = 'success') {
+      const alert = document.getElementById('statusAlert');
+      alert.textContent = message;
+      alert.className = `alert alert-${type}`;
+      alert.style.display = 'block';
+      setTimeout(() => {
+        alert.style.display = 'none';
+      }, 5000);
+    }
+
+    function sendBulkMessage() {
+      const message = document.getElementById('messageText').value.trim();
+      
+      if (!message) {
+        showAlert('Por favor escribe un mensaje', 'error');
+        return;
+      }
+
+      if (message.length > 1000) {
+        showAlert('El mensaje es muy largo (máximo 1000 caracteres)', 'error');
+        return;
+      }
+
+      fetch('/admin/api/send-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            showAlert(`✅ Mensaje enviado a ${data.sent} usuario${data.sent !== 1 ? 's' : ''}`, 'success');
+            document.getElementById('messageText').value = '';
+          } else {
+            showAlert('Error: ' + (data.error || 'No se pudo enviar'), 'error');
+          }
+        })
+        .catch(e => showAlert('Error de conexión: ' + e.message, 'error'));
+    }
+
+    function sendPromotion() {
+      const text = document.getElementById('promoText').value.trim();
+      const fileInput = document.getElementById('promoImage');
+
+      if (!text) {
+        showAlert('Por favor escribe una descripción de la oferta', 'error');
+        return;
+      }
+
+      if (!fileInput.files[0]) {
+        showAlert('Por favor selecciona una imagen para la oferta', 'error');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const imageBase64 = e.target.result.split(',')[1];
+
+        fetch('/admin/api/send-promotion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text,
+            imageBase64
+          })
+        })
+          .then(r => r.json())
+          .then(data => {
+            if (data.success) {
+              showAlert(`✅ Oferta enviada a ${data.sent} usuario${data.sent !== 1 ? 's' : ''}`, 'success');
+              document.getElementById('promoText').value = '';
+              fileInput.value = '';
+              document.getElementById('imagePreview').style.display = 'none';
+            } else {
+              showAlert('Error: ' + (data.error || 'No se pudo enviar'), 'error');
+            }
+          })
+          .catch(e => showAlert('Error de conexión: ' + e.message, 'error'));
+      };
+      reader.readAsDataURL(fileInput.files[0]);
+    }
+
+    function logout() {
+      sessionStorage.removeItem('admin_auth');
+      window.location.href = '/admin/login';
+    }
+  </script>
+</body>
+</html>

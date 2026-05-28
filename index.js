@@ -1,9 +1,13 @@
 require('dotenv').config();
 
 const express = require('express');
+const path = require('path');
+const { analyzePaymentReceipt } = require('./utils/imageAnalysis');
+const dataManager = require('./utils/dataManager');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.static('public'));
 
 const SYSTEM_PROMPT = [
   'Eres Leo, asesor de internet para León Telecom.',
@@ -28,6 +32,8 @@ const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL || '';
 const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
 const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
 const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'leon123'; // Change in production!
+const WISPHUB_API_URL = process.env.WISPHUB_API_URL || 'https://api.wisphub.net'; // Optional
 
 const LOCATIONS = {
   huitzo: 'Huitzo',
@@ -750,6 +756,56 @@ async function notifyAgentRequest(chatId, userText, location = '') {
   return false;
 }
 
+async function notifyAgentPaymentReceipt(chatId, userName, analysis) {
+  const payload = {
+    source: 'telegram',
+    type: 'payment_receipt',
+    chatId,
+    userName,
+    analysis,
+    timestamp: new Date().toISOString()
+  };
+
+  if (AGENT_NOTIFY_WEBHOOK_URL) {
+    const response = await fetch(AGENT_NOTIFY_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Agent webhook failed (${response.status}): ${errorText}`);
+    }
+
+    return true;
+  }
+
+  if (AGENT_NOTIFY_CHAT_ID) {
+    const analysisText = analysis.valido
+      ? Object.entries(analysis)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('\n')
+      : `Inválido: ${analysis.razon}`;
+
+    await sendTelegramMessage(
+      AGENT_NOTIFY_CHAT_ID,
+      [
+        '📸 Comprobante de Pago Recibido',
+        `Usuario: ${userName}`,
+        `Chat: ${chatId}`,
+        '',
+        'Análisis:',
+        analysisText
+      ].join('\n')
+    );
+
+    return true;
+  }
+
+  return false;
+}
+
 async function generateAIReply(userText) {
   if (!AI_API_KEY) {
     return null;
@@ -940,6 +996,86 @@ app.post('/webhook', async (req, res) => {
 
   res.sendStatus(200);
 
+  // Handle photo/image uploads
+  if (message?.photo && message.photo.length > 0) {
+    const chatId = message.chat?.id;
+    const userId = message.from?.id;
+    const userName = message.from?.first_name || 'Usuario';
+
+    if (!chatId) return;
+
+    try {
+      // Register user
+      dataManager.registerUser(chatId, {
+        name: userName,
+        username: message.from?.username,
+        platform: 'telegram'
+      });
+
+      // Get the largest photo
+      const photo = message.photo[message.photo.length - 1];
+      const fileId = photo.file_id;
+
+      // Get file info from Telegram
+      const fileResponse = await fetch(`${TELEGRAM_API_BASE}/getFile?file_id=${fileId}`);
+      const fileData = await fileResponse.json();
+
+      if (!fileData.ok) {
+        await sendTelegramMessage(chatId, '❌ No pude descargar la imagen. Intenta de nuevo.');
+        return;
+      }
+
+      const filePath = fileData.result.file_path;
+      const imageUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`;
+
+      // Download image
+      const imageResponse = await fetch(imageUrl);
+      const imageBuffer = await imageResponse.buffer();
+      const imageBase64 = imageBuffer.toString('base64');
+
+      // Analyze with Claude Vision
+      await sendTelegramMessage(chatId, '⏳ Analizando tu comprobante de pago...');
+
+      const analysis = await analyzePaymentReceipt(imageBase64);
+
+      // Create report
+      const report = dataManager.createReport(chatId, analysis, imageBase64);
+
+      // Notify agent
+      try {
+        await notifyAgentPaymentReceipt(chatId, userName, analysis);
+      } catch (notifyError) {
+        console.error('Agent notification error:', notifyError.message);
+      }
+
+      // Respond to user
+      if (analysis.valido) {
+        await sendTelegramMessage(
+          chatId,
+          '✅ Perfecto, tu comprobante de pago ha sido analizado.\n\n' +
+          'Un asesor se pondrá en contacto contigo para procesar tu solicitud.\n\n' +
+          '¿Hay algo más en lo que pueda ayudarte?'
+        );
+      } else {
+        await sendTelegramMessage(
+          chatId,
+          '⚠️ No parece ser un comprobante de pago válido.\n\n' +
+          `Razón: ${analysis.razon}\n\n` +
+          '¿Quieres intentar enviar otra imagen?'
+        );
+      }
+    } catch (error) {
+      console.error('Photo handling error:', error.message);
+      try {
+        await sendTelegramMessage(chatId, '❌ Error al procesar la imagen. Intenta de nuevo.');
+      } catch (sendError) {
+        console.error('Fallback send error:', sendError.message);
+      }
+    }
+    return;
+  }
+
+  // Existing text handling
   if (!message || typeof message.text !== 'string') {
     return;
   }
@@ -950,6 +1086,13 @@ app.post('/webhook', async (req, res) => {
   }
 
   try {
+    // Register user in data manager
+    dataManager.registerUser(chatId, {
+      name: message.from?.first_name || 'Usuario',
+      username: message.from?.username,
+      platform: 'telegram'
+    });
+
     // Session-aware handling
     const text = String(message.text || '').trim();
     const session = getSession(chatId);
@@ -1878,6 +2021,181 @@ app.post('/webhook', async (req, res) => {
     } catch (sendError) {
       console.error('Fallback Telegram send error:', sendError.message);
     }
+  }
+});
+
+// ==================== ADMIN PANEL ROUTES ====================
+
+// Admin main page - redirect to login
+app.get('/admin', (_req, res) => {
+  res.redirect('/admin/login');
+});
+
+// Admin login page
+app.get('/admin/login', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public/admin-login.html'));
+});
+
+// Admin dashboard page
+app.get('/admin/dashboard', (req, res) => {
+  const auth = req.headers.authorization || req.query.auth;
+  if (!auth || auth !== `Bearer ${process.env.ADMIN_TOKEN || 'temp-token'}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  res.sendFile(path.join(__dirname, 'public/admin-dashboard.html'));
+});
+
+// API: Admin login
+app.post('/admin/api/login', (req, res) => {
+  const { password } = req.body;
+
+  if (password === ADMIN_PASSWORD) {
+    const token = Buffer.from(`admin:${Date.now()}`).toString('base64');
+    res.json({ success: true, token });
+  } else {
+    res.status(401).json({ success: false, error: 'Contraseña incorrecta' });
+  }
+});
+
+// Middleware to verify admin token
+function verifyAdminToken(req, res, next) {
+  const token = req.body.token || req.query.token;
+  if (!token) {
+    return res.status(401).json({ error: 'Token requerido' });
+  }
+
+  try {
+    const decoded = Buffer.from(token, 'base64').toString('utf-8');
+    if (decoded.startsWith('admin:')) {
+      return next();
+    }
+  } catch (e) {
+    // Fall through
+  }
+
+  res.status(401).json({ error: 'Token inválido' });
+}
+
+// API: Get user count
+app.get('/admin/api/user-count', (req, res) => {
+  res.json({ count: dataManager.getUserCount() });
+});
+
+// API: Get network status (check Wisphub or return online)
+app.get('/admin/api/network-status', async (req, res) => {
+  try {
+    // For now, return online. In production, check Wisphub API
+    res.json({ online: true, message: 'Servicio operativo' });
+  } catch (error) {
+    res.json({ online: false, message: error.message });
+  }
+});
+
+// API: Send bulk message
+app.post('/admin/api/send-message', async (req, res) => {
+  const { message, token } = req.body;
+
+  // Basic auth check
+  if (!token || token !== `Bearer ${ADMIN_PASSWORD}-bulk`) {
+    const isAdmin = Buffer.from(token || '', 'base64').toString().startsWith('admin:');
+    if (!isAdmin) {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+  }
+
+  if (!message || !message.trim()) {
+    return res.status(400).json({ error: 'Mensaje vacío' });
+  }
+
+  try {
+    const users = dataManager.getAllUsers();
+    let sent = 0;
+
+    for (const user of users) {
+      try {
+        await sendTelegramMessage(user.chatId, `📢 ANUNCIO\n\n${message}`);
+        sent++;
+      } catch (error) {
+        console.error(`Failed to send message to ${user.chatId}:`, error.message);
+      }
+    }
+
+    res.json({ success: true, sent, total: users.length });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Send promotion
+app.post('/admin/api/send-promotion', async (req, res) => {
+  const { text, imageBase64, token } = req.body;
+
+  // Basic auth check (simplified for demo)
+  if (!token) {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: 'Descripción vacía' });
+  }
+
+  if (!imageBase64) {
+    return res.status(400).json({ error: 'Imagen requerida' });
+  }
+
+  try {
+    const users = dataManager.getAllUsers();
+    const promotion = dataManager.addPromotion({
+      text,
+      imageBase64: imageBase64.substring(0, 100000),
+      sentAt: new Date()
+    });
+
+    let sent = 0;
+
+    for (const user of users) {
+      try {
+        // Send image
+        const imageBuffer = Buffer.from(imageBase64, 'base64');
+        const telegramResponse = await fetch(`${TELEGRAM_API_BASE}/sendPhoto`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: user.chatId,
+            photo: `data:image/jpeg;base64,${imageBase64}`,
+            caption: text
+          })
+        });
+
+        if (telegramResponse.ok) {
+          sent++;
+        }
+      } catch (error) {
+        console.error(`Failed to send promotion to ${user.chatId}:`, error.message);
+      }
+    }
+
+    res.json({ success: true, sent, total: users.length, promotionId: promotion.id });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Get pending reports
+app.get('/admin/api/reports', (req, res) => {
+  const reports = dataManager.getPendingReports();
+  res.json({ reports, count: reports.length });
+});
+
+// API: Mark report as contacted
+app.post('/admin/api/reports/:reportId/contact', (req, res) => {
+  const { reportId } = req.params;
+  const report = dataManager.markReportAsContacted(reportId);
+
+  if (report) {
+    res.json({ success: true, report });
+  } else {
+    res.status(404).json({ success: false, error: 'Reporte no encontrado' });
   }
 });
 
