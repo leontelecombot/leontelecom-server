@@ -285,11 +285,12 @@ function detectLocation(text) {
     return LOCATIONS.huitzo;
   }
 
-  if (/\btelixtlahuaca\b/.test(value) || /\btelix\b/.test(value)) {
+  if (/\btelixtlahuaca\b|\btelix\b/.test(value)) {
     return LOCATIONS.telixtlahuaca;
   }
 
-  if (/\bsuchilquitongo\b/.test(value) || /\bsuchil\b/.test(value)) {
+  // Suchilquitongo y sus variantes comunes
+  if (/\bsuchilquitongo\b|\bsuchilqui\b|\bsuchil\b|\bsantiago suchil\b/.test(value)) {
     return LOCATIONS.suchilquitongo;
   }
 
@@ -645,10 +646,12 @@ async function callMainAI(chatId, userText) {
     'Eres Leo, asistente virtual de León Telecom (ISP en Oaxaca, México).',
     'Tono: profesional y amable, como un buen agente de atención al cliente. Sin slang ni expresiones informales. Máximo 2-3 oraciones. Sin markdown.',
     '',
-    'SERVICIOS DE INTERNET:',
+    'SERVICIOS DE INTERNET (las 3 zonas SÍ tienen cobertura):',
     `Huitzo (fibra óptica): ${fiberPlans}`,
-    `Telixtlahuaca / Suchilquitongo (inalámbrico): ${wirelessPlans}`,
-    'La instalación de internet se coordina con un asesor.',
+    `Telixtlahuaca (inalámbrico): ${wirelessPlans}`,
+    `Suchilquitongo —también llamado "Suchil"— (inalámbrico): ${wirelessPlans}`,
+    'IMPORTANTE: Nunca digas que no hay cobertura en estas zonas. Las 3 sí tienen servicio.',
+    'La instalación se coordina con un asesor.',
     '',
     'CÁMARAS DE SEGURIDAD:',
     'Wi-Fi Tapo TP-Link (1-3 cámaras, instalación simple):',
@@ -841,20 +844,26 @@ async function notifyAgentRequest(chatId, userText, location = '') {
   const profile = getProfile(chatId);
   const clientName = profile?.name && profile.name !== 'Usuario' ? profile.name : 'Desconocido';
 
+  // AI-generated concise summary
+  let summaryLine = userText;
+  if (AI_API_KEY && recentMsgs.length > 0) {
+    const shortHistory = recentMsgs.slice(-5).map(m => `${m.role === 'user' ? 'C' : 'L'}: ${m.text.substring(0, 120)}`).join('\n');
+    summaryLine = await callAI(
+      'Resume en máximo 2 líneas qué quiere o necesita el cliente. Formato:\nMOTIVO: [qué quiere]\nDETALLE: [info clave]\nSin texto extra.',
+      `${shortHistory}\nÚltimo mensaje: ${userText}`,
+      { temperature: 0.2, maxTokens: 80 }
+    ).catch(() => userText);
+  }
+
   const fullMessage = [
-    '🔔 SOLICITUD DE ASESOR — León Telecom',
-    `👤 Cliente: ${clientName}`,
-    `📱 WhatsApp: ${chatId}`,
-    location ? `📍 Zona: ${location}` : '',
+    '🔔 SOLICITUD — León Telecom',
+    `👤 ${clientName}  📱 ${chatId}`,
+    location ? `📍 ${location}` : '',
     '',
-    userText,
+    summaryLine,
     '',
-    '--- Últimos mensajes ---',
-    historyText,
-    '',
-    `▶️ Para tomar el caso escribe:`,
-    `ATENDER ${chatId}`
-  ].filter(line => line !== undefined).join('\n');
+    `▶️ ATENDER ${chatId}`
+  ].filter(Boolean).join('\n');
 
   const payload = {
     source: 'whatsapp',
@@ -1802,15 +1811,32 @@ async function handleChatMessage(chatId, text, sendMsg) {
         );
       } catch (e) { /* fall through */ }
 
-      // If we already know the name: advice + notify silently (ONE message)
+      if (advice) await sendMsg(chatId, advice);
+
       const reportKnownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
-      if (reportKnownName) {
-        await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${reportKnownName}`, `Problema: ${problemDescription}`].join('\n'), '').catch(() => {});
+      // Always ask for location + references for accurate dispatch
+      setSession(chatId, { state: 'awaiting_report_location', data: { problemDescription, knownName: reportKnownName } });
+      await sendMsg(chatId, '¿En qué colonia o barrio es el problema y cuáles son las referencias del domicilio? (ej: Colonia Centro, cerca de la iglesia)');
+      return;
+    }
+
+    if (session.state === 'awaiting_report_location') {
+      const d = session.data || {};
+      // Try to find neighborhood in text
+      const nbhd = searchAllNeighborhoods(text);
+      const locationLine = nbhd ? `${nbhd.name}, ${nbhd.zone}` : text;
+
+      if (d.knownName) {
+        await notifyAgentRequest(chatId, [
+          `REPORTE DE FALLA`,
+          `Nombre: ${d.knownName}`,
+          `Problema: ${d.problemDescription}`,
+          `Ubicación: ${locationLine}`
+        ].join('\n'), nbhd?.zone || '').catch(() => {});
         clearSession(chatId);
-        await sendMsg(chatId, advice || `Ya avisamos al equipo técnico, ${reportKnownName}. Te contactarán pronto. 🔧`);
+        await sendMsg(chatId, `Listo, ${d.knownName}. Registramos tu reporte en ${locationLine}. Un técnico te contactará pronto. 🔧`);
       } else {
-        if (advice) await sendMsg(chatId, advice);
-        setSession(chatId, { state: 'awaiting_report_name', data: { problemDescription } });
+        setSession(chatId, { state: 'awaiting_report_name', data: { ...d, locationLine } });
         await sendMsg(chatId, '¿A qué nombre está el servicio?');
       }
       return;
@@ -1819,10 +1845,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_report_name') {
       const d = session.data || {};
       updateProfile(chatId, { name: text });
-      const locationLine = d.neighborhood ? `Ubicación: ${d.neighborhood}${d.zone ? ', ' + d.zone : ''}` : '';
+      const nbhd = d.locationLine ? searchAllNeighborhoods(d.locationLine) : null;
+      const locationLine = d.locationLine || '';
       const notified = await notifyAgentRequest(chatId, [
-        `REPORTE DE FALLA`, `Nombre: ${text}`, `Problema: ${d.problemDescription}`, locationLine
-      ].filter(Boolean).join('\n'), d.zone || '').catch(() => false);
+        `REPORTE DE FALLA`,
+        `Nombre: ${text}`,
+        `Problema: ${d.problemDescription}`,
+        locationLine ? `Ubicación: ${locationLine}` : ''
+      ].filter(Boolean).join('\n'), nbhd?.zone || '').catch(() => false);
       clearSession(chatId);
       await sendMsg(chatId, notified
         ? `Listo, ${text}. Ya le avisamos a un técnico, te contactarán pronto. 🔧`
