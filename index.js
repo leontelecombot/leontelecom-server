@@ -228,6 +228,11 @@ function isAgentRequest(text) {
   return /\b(agente|asesor|ejecutivo|humano|persona|llamar|contactar|ventas|atencion|atención)\b/.test(value);
 }
 
+function isCameraRequest(text) {
+  const value = normalizeText(text);
+  return /\b(camara|camaras|videovigilancia|cctv|tapo|hikvision|nvr|dvr|vigilar|vigilancia|seguridad|grabadora)\b/.test(value);
+}
+
 function isExistingCustomer(text) {
   const value = normalizeText(text);
   return /\b(ya tengo un plan|ya tengo servicio|soy cliente|tengo un plan|mi plan|ya soy cliente|cliente)\b/.test(value);
@@ -619,10 +624,23 @@ async function callMainAI(chatId, userText) {
     'Eres Leo, asistente virtual de León Telecom (ISP en Oaxaca, México).',
     'Tono: profesional y amable, como un buen agente de atención al cliente. Sin slang ni expresiones informales. Máximo 2-3 oraciones. Sin markdown.',
     '',
-    'SERVICIOS:',
+    'SERVICIOS DE INTERNET:',
     `Huitzo (fibra óptica): ${fiberPlans}`,
     `Telixtlahuaca / Suchilquitongo (inalámbrico): ${wirelessPlans}`,
-    'La instalación se coordina con un asesor. No se da precio de instalación.',
+    'La instalación de internet se coordina con un asesor.',
+    '',
+    'CÁMARAS DE SEGURIDAD:',
+    'Wi-Fi Tapo TP-Link (1-3 cámaras, instalación simple):',
+    '- C210: Interior, 2K, 360°, audio bidireccional. Ideal: salas, recámaras, mascotas.',
+    '- C320WS: Exterior fija, 2K QHD, visión nocturna a color, alarma luz/sonido. Ideal: fachadas, entradas.',
+    '- C500: Exterior, 1080p, 360°+seguimiento automático, IP65. Ideal: patios grandes, estacionamientos.',
+    '- C520WS: Exterior premium, 2K QHD, 360°+seguimiento, nocturna a color. Máxima calidad exterior.',
+    'Todas graban en tarjeta MicroSD o nube Tapo Care.',
+    'Sistemas Hikvision (4+ cámaras o proyectos comerciales/industriales):',
+    '- Analógico DVR: económico, cables directos. IP/NVR (PoE): máxima calidad, analíticas avanzadas.',
+    '- Ventaja: video guardado en grabador oculto, monitoreo centralizado de 4-16+ cámaras.',
+    '- Para Hikvision se agenda visita técnica gratuita para cotización a medida.',
+    'Preguntas clave para recomendar: 1)¿interior o exterior? 2)¿cuántas cámaras? 3)¿hay buena señal Wi-Fi ahí?',
     '',
     clientName ? `Nombre del cliente: ${clientName}` : '',
     clientLocation ? `Zona del cliente: ${clientLocation}` : '',
@@ -635,10 +653,11 @@ async function callMainAI(chatId, userText) {
     '{"message":"respuesta natural aquí","action":null,"location":null,"neighborhood":null}',
     '',
     'Valores de "action":',
-    '"show_plans" → quiere ver planes, precios, contratar, o pregunta por internet',
-    '"show_support" → tiene falla técnica, sin internet, lento, cables dañados, problema con el servicio',
-    '"request_agent" → quiere hablar con persona/asesor/técnico/humano. Mensaje: breve confirmación, SIN preguntar zona ni más datos.',
-    'null → solo conversa o hace una pregunta; responde directo con la info disponible',
+    '"show_plans" → quiere ver planes/precios de internet, contratar servicio',
+    '"show_support" → tiene falla técnica, sin internet, lento, problema con el servicio',
+    '"show_cameras" → pregunta por cámaras, videovigilancia, CCTV, seguridad',
+    '"request_agent" → quiere hablar con asesor/humano. Mensaje: breve confirmación sin pedir más datos.',
+    'null → conversa o pregunta algo; responde directo con la info disponible',
     '',
     '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
     '"neighborhood" → colonia/barrio/sección mencionada, o null'
@@ -654,7 +673,8 @@ async function callMainAI(chatId, userText) {
         message: String(parsed.message || '').replace(/[*_`#]/g, '').trim(),
         action: parsed.action || null,
         location: parsed.location || null,
-        neighborhood: parsed.neighborhood || null
+        neighborhood: parsed.neighborhood || null,
+        cameraContext: parsed.cameraContext || null
       };
     }
     return { message: response.replace(/[*_`#]/g, '').trim(), action: null, location: null };
@@ -771,10 +791,11 @@ function buildMenuReply() {
       '¿En qué puedo ayudarte? Elige una opción:',
       '',
       '1️⃣ Ver planes de internet',
-      '2️⃣ Soporte técnico',
-      '3️⃣ Ya soy cliente',
-      '4️⃣ Hablar con un asesor',
-      '5️⃣ Migrar mi servicio'
+      '2️⃣ Cámaras de seguridad',
+      '3️⃣ Soporte técnico',
+      '4️⃣ Ya soy cliente',
+      '5️⃣ Hablar con un asesor',
+      '6️⃣ Migrar mi servicio'
     ].join('\n'),
     mediaUrls: [],
     replyMarkup: {
@@ -1215,11 +1236,31 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
 
 const MENU_LIST_ITEMS = [
   { id: '1', title: 'Ver planes de internet' },
+  { id: '6', title: 'Cámaras de seguridad' },
   { id: '4', title: 'Soporte técnico' },
   { id: '2', title: 'Ya soy cliente' },
   { id: '3', title: 'Hablar con un asesor' },
   { id: '5', title: 'Migrar mi servicio' }
 ];
+
+const CAMERA_KNOWLEDGE = `
+Catálogo de cámaras León Telecom:
+
+LÍNEA WI-FI TAPO (TP-Link) — para 1 a 3 cámaras:
+• C210 (Interior): 2K, gira 360°, audio bidireccional. Para salas, recámaras, mascotas, cuidado de niños.
+• C320WS (Exterior fija): 2K QHD, visión nocturna A COLOR, alarma con luz y sonido. Para fachadas, entradas.
+• C500 (Exterior motorizada): 1080p, 360° con seguimiento automático de personas, IP65. Para patios, estacionamientos.
+• C520WS (Exterior premium): 2K QHD, 360°, nocturna a color, seguimiento autos y personas. Máxima calidad.
+Almacenamiento: tarjeta MicroSD o nube Tapo Care.
+
+SISTEMAS PROFESIONALES HIKVISION (4+ cámaras o comercial/industrial):
+• Analógico (DVR): cableado coaxial/UTP, más económico, no satura el Wi-Fi.
+• IP/NVR (PoE): máxima resolución, analíticas avanzadas (detección de personas/vehículos).
+• Video grabado en disco duro oculto → seguro si dañan una cámara.
+• Para Hikvision: se agenda visita técnica GRATUITA para cotizar a medida.
+
+REGLA DE ORO: 1-3 cámaras → Tapo. 4+ cámaras o negocio → Hikvision + visita técnica.
+`;
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
@@ -1244,12 +1285,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     function parseMenuChoice(input) {
       const v = normalizeText(input);
-      if (/^1$|^1\b|\buno\b|ver planes|planes|paquetes|internet|contratar/.test(v)) return 1;
+      if (/^1$|^1\b|\buno\b|ver planes|planes|paquetes|contratar/.test(v)) return 1;
       if (/^2$|^2\b|\bdos\b|ya soy cliente|tengo un plan|soy cliente/.test(v)) return 2;
       if (/^3$|^3\b|\btres\b|hablar con|asesor|agente/.test(v)) return 3;
       if (/^4$|^4\b|\bcuatro\b|reportar|problema|reporte|soporte|tecnico|falla/.test(v)) return 4;
       if (/^5$|^5\b|\bcinco\b|migrar|migracion|migraci/.test(v)) return 5;
-      if (/^6$|^6\b|\bseis\b|cancelar|cancel|no quiero/.test(v)) return 6;
+      if (/^6$|^6\b|\bseis\b|camara|camaras|videovigilancia|seguridad|cctv/.test(v)) return 6;
       return null;
     }
 
@@ -1310,6 +1351,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendReplyObject(buildReportPrompt());
         return;
       }
+      if (choice === 6) {
+        setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
+        await sendMsg(chatId, 'Con gusto te asesoramos en cámaras de seguridad. 📷\n\n¿Para qué espacio lo necesitas y cuántas cámaras tienes en mente? (Puedes describir el lugar y tu situación)');
+        return;
+      }
       if (choice === 5) {
         setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
         await sendMsg(chatId, '🔄 Migración de servicio\n¿En cuál zona está el servicio ACTUAL?', [], {
@@ -1339,6 +1385,46 @@ async function handleChatMessage(chatId, text, sendMsg) {
         if (knownName2) { const n2 = await notifyAgentRequest(chatId, [`SOLICITUD ASESOR`, `Nombre: ${knownName2}`, `Motivo: ${text}`].join('\n'), '').catch(() => false); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2)); }
         else { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿A qué nombre te contactamos?'); }
       } else { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); }
+      return;
+    }
+
+    if (session.state === 'awaiting_camera_needs') {
+      // Check if it's a big project (4+ cameras or commercial)
+      const v = normalizeText(text);
+      const isBigProject = /\b(negoci|empresa|bodega|almacen|taller|local|cuatro|cinco|seis|siete|ocho|nueve|diez|\b[4-9]\b|\b1[0-9]\b|muchas)\b/.test(v);
+
+      const systemForCamera = [
+        'Eres Leo de León Telecom. Recomienda la cámara correcta en máximo 3 oraciones claras.',
+        CAMERA_KNOWLEDGE,
+        'Si la necesidad implica 4+ cámaras o proyecto comercial, indica que se agenda una visita técnica GRATUITA.',
+        'Termina preguntando si desean cotizar o agendar visita. Sin markdown, texto plano.'
+      ].join('\n');
+
+      const rec = await callAI(systemForCamera, `Cliente necesita: ${text}`, { temperature: 0.4, maxTokens: 250 }).catch(() => null);
+
+      clearSession(chatId);
+      if (rec) await sendMsg(chatId, rec);
+
+      if (isBigProject) {
+        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: `Cotización cámaras (proyecto): ${text}` } });
+        await sendMsg(chatId, '¿A qué nombre agendamos la visita técnica gratuita?');
+      } else {
+        await sendMsg(chatId, '¿Te gustaría cotizar o tienes más preguntas?', [], {
+          buttons: [{ id: 'cotizar_camara', title: 'Quiero cotizar' }, { id: 'mas_info_camara', title: 'Tengo más dudas' }]
+        });
+      }
+      return;
+    }
+
+    if (text === 'cotizar_camara') {
+      setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: 'Cotización de cámaras de seguridad' } });
+      await sendMsg(chatId, '¿A qué nombre realizamos la cotización?');
+      return;
+    }
+
+    if (text === 'mas_info_camara') {
+      setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
+      await sendMsg(chatId, '¿Qué más deseas saber sobre las cámaras? Puedes preguntar por un modelo específico o describir mejor tu caso.');
       return;
     }
 
@@ -1656,10 +1742,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const knownName = knownProfile?.name && knownProfile.name !== 'Usuario' ? knownProfile.name : null;
       const menuOptions = [
         '1️⃣ Ver planes de internet',
-        '2️⃣ Soporte técnico',
-        '3️⃣ Ya soy cliente',
-        '4️⃣ Hablar con un asesor',
-        '5️⃣ Migrar mi servicio'
+        '2️⃣ Cámaras de seguridad',
+        '3️⃣ Soporte técnico',
+        '4️⃣ Ya soy cliente',
+        '5️⃣ Hablar con un asesor',
+        '6️⃣ Migrar mi servicio'
       ].join('\n');
       if (knownName) {
         await sendMsg(chatId, [
@@ -1673,10 +1760,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
           'Hola, soy Leo, el asistente virtual de León Telecom. 👋',
           '',
           'Puedo ayudarte con:',
-          '• Información de planes y precios',
-          '• Reportar fallas técnicas',
+          '• Planes de internet (fibra óptica e inalámbrico)',
+          '• Cámaras de seguridad (Tapo Wi-Fi e Hikvision profesional)',
+          '• Soporte técnico y reportes de fallas',
           '• Consultas sobre tu servicio activo',
-          '• Conectarte con un asesor',
           '',
           'Elige una opción o escribe tu consulta:',
           '',
@@ -1712,6 +1799,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
         setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
         await sendReplyObject(buildReportPrompt());
       }
+
+    } else if (aiResult.action === 'show_cameras') {
+      if (aiResult.message) await sendMsg(chatId, aiResult.message);
+      setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
+      await sendMsg(chatId, 'Cuéntame: ¿para qué espacio lo necesitas y cuántas cámaras tienes en mente?');
 
     } else if (aiResult.action === 'request_agent') {
       if (knownName) {
