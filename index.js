@@ -85,6 +85,24 @@ function updateProfile(chatId, updates) {
   clientProfiles.set(id, { ...existing, ...updates, lastSeen: new Date() });
 }
 
+// Agent takeover — pauses bot for a specific client chat
+const pausedChats = new Map(); // Map<chatId, { pausedUntil: Date }>
+
+function isPaused(chatId) {
+  const p = pausedChats.get(String(chatId));
+  if (!p) return false;
+  if (new Date() > p.pausedUntil) { pausedChats.delete(String(chatId)); return false; }
+  return true;
+}
+
+function pauseChat(chatId, hours = 2) {
+  pausedChats.set(String(chatId), { pausedUntil: new Date(Date.now() + hours * 3600000) });
+}
+
+function unpauseChat(chatId) {
+  pausedChats.delete(String(chatId));
+}
+
 // Simple in-memory session store keyed by chatId. Keeps short conversational state.
 const sessions = new Map();
 
@@ -821,7 +839,7 @@ async function notifyAgentRequest(chatId, userText, location = '') {
   const clientName = profile?.name && profile.name !== 'Usuario' ? profile.name : 'Desconocido';
 
   const fullMessage = [
-    '🔔 *SOLICITUD DE ASESOR — León Telecom*',
+    '🔔 SOLICITUD DE ASESOR — León Telecom',
     `👤 Cliente: ${clientName}`,
     `📱 WhatsApp: ${chatId}`,
     location ? `📍 Zona: ${location}` : '',
@@ -829,7 +847,10 @@ async function notifyAgentRequest(chatId, userText, location = '') {
     userText,
     '',
     '--- Últimos mensajes ---',
-    historyText
+    historyText,
+    '',
+    `▶️ Para tomar el caso escribe:`,
+    `ATENDER ${chatId}`
   ].filter(line => line !== undefined).join('\n');
 
   const payload = {
@@ -1234,6 +1255,78 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
   }
 }
 
+async function handleAgentCommand(agentNumber, text) {
+  const v = text.trim().toUpperCase();
+
+  function normalizeClientNumber(raw) {
+    let n = raw.replace(/\D/g, '');
+    if (!n.startsWith('52')) n = '52' + n;
+    if (n.startsWith('521') && n.length === 13) n = '52' + n.slice(3);
+    return n;
+  }
+
+  // ATENDER [número] — toma el control del chat
+  const atenderMatch = v.match(/^ATENDER\s+(\d+)/);
+  if (atenderMatch) {
+    const clientId = normalizeClientNumber(atenderMatch[1]);
+    pauseChat(clientId, 2);
+    try {
+      await sendWhatsAppMessage(clientId,
+        'Un asesor de León Telecom ya está atendiendo tu caso y se pondrá en contacto contigo en breve. 📱'
+      );
+    } catch (e) { console.error('[Agent] Notify client error:', e.message); }
+    await sendWhatsAppMessage(agentNumber, [
+      `✅ Tomaste el caso de ${clientId}.`,
+      'El bot está pausado para ese cliente por 2 horas.',
+      '',
+      `Para reactivar el bot: LIBERAR ${clientId}`
+    ].join('\n'));
+    return;
+  }
+
+  // LIBERAR [número] — devuelve el control al bot
+  const liberarMatch = v.match(/^LIBERAR\s+(\d+)/);
+  if (liberarMatch) {
+    const clientId = normalizeClientNumber(liberarMatch[1]);
+    unpauseChat(clientId);
+    try {
+      await sendWhatsAppMessage(clientId,
+        'El asistente virtual está de nuevo disponible. ¿En qué más puedo ayudarte?'
+      );
+    } catch (e) {}
+    await sendWhatsAppMessage(agentNumber, `✅ Bot reactivado para ${clientId}.`);
+    return;
+  }
+
+  // PAUSADOS — ver chats pausados activos
+  if (v === 'PAUSADOS') {
+    const activos = [];
+    for (const [chatId, data] of pausedChats.entries()) {
+      if (new Date() < data.pausedUntil) {
+        const mins = Math.round((data.pausedUntil - new Date()) / 60000);
+        activos.push(`• ${chatId} (${mins} min restantes)`);
+      }
+    }
+    await sendWhatsAppMessage(agentNumber,
+      activos.length > 0
+        ? `Chats pausados:\n${activos.join('\n')}`
+        : 'No hay chats pausados actualmente.'
+    );
+    return;
+  }
+
+  // Ayuda
+  await sendWhatsAppMessage(agentNumber, [
+    '🤖 Comandos disponibles:',
+    '',
+    'ATENDER [número] → Tomar control del chat',
+    'LIBERAR [número] → Devolver al bot',
+    'PAUSADOS → Ver chats pausados',
+    '',
+    'Ejemplo: ATENDER 529516549145'
+  ].join('\n'));
+}
+
 const MENU_LIST_ITEMS = [
   { id: '1', title: 'Ver planes de internet' },
   { id: '2', title: 'Cámaras de seguridad' },
@@ -1264,6 +1357,12 @@ REGLA DE ORO: 1-3 cámaras → Tapo. 4+ cámaras o negocio → Hikvision + visit
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
+    // If agent has taken over this chat, bot stays silent
+    if (isPaused(chatId)) {
+      console.log(`[Bot] Chat ${chatId} pausado (asesor activo), ignorando mensaje`);
+      return;
+    }
+
     const profile = getProfile(chatId);
     dataManager.registerUser(chatId, {
       name: (profile && profile.name) || 'Usuario',
@@ -1957,7 +2056,15 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
   if (msg.type === 'text') {
     const text = msg.text?.body?.trim();
-    if (text) await handleChatMessage(from, text, sendWhatsAppMessage);
+    if (!text) return;
+
+    // If message is FROM the agent number → handle as agent command, not client
+    if (AGENT_WHATSAPP_NUMBER && from === AGENT_WHATSAPP_NUMBER) {
+      await handleAgentCommand(from, text);
+      return;
+    }
+
+    await handleChatMessage(from, text, sendWhatsAppMessage);
     return;
   }
 
