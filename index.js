@@ -280,6 +280,11 @@ function isCameraRequest(text) {
   return /\b(camara|camaras|videovigilancia|cctv|tapo|hikvision|nvr|dvr|vigilar|vigilancia|seguridad|grabadora)\b/.test(value);
 }
 
+function isMigrationRequest(text) {
+  const value = normalizeText(text);
+  return /\b(migrar|migracion|migraci|cambiar domicilio|cambio de domicilio|mover servicio|cambiar de casa|otro domicilio|nueva casa|nuevo domicilio)\b/.test(value);
+}
+
 function isExistingCustomer(text) {
   const value = normalizeText(text);
   return /\b(ya tengo un plan|ya tengo servicio|soy cliente|tengo un plan|mi plan|ya soy cliente|cliente)\b/.test(value);
@@ -711,9 +716,10 @@ async function callMainAI(chatId, userText) {
     '"show_plans" → quiere ver planes/precios de internet, contratar, preguntar por instalación o costos',
     '"show_support" → tiene falla técnica, sin internet, lento, problema con el servicio activo',
     '"show_cameras" → pregunta por cámaras, videovigilancia, CCTV, seguridad',
+    '"show_migration" → quiere MIGRAR o MOVER su servicio a otro domicilio o zona. Palabras clave: migrar, cambiar domicilio, mover servicio, nueva casa, otro domicilio. Mensaje: confirmar que se iniciará el proceso.',
     '"request_agent" → quiere hablar con una persona ya. Mensaje: breve confirmación sin pedir más datos.',
     'null → conversa, hace pregunta general o de info; responde directo',
-    'IMPORTANTE: preguntas como "¿en cuánto está la instalación?" o "¿cuánto cuesta instalar?" → show_plans, NO request_agent',
+    'IMPORTANTE: "quiero migrar/cambiar mi servicio/domicilio" → SIEMPRE show_migration, no show_plans',
     '',
     '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
     '"neighborhood" → colonia/barrio/sección mencionada, o null'
@@ -1511,8 +1517,15 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state && session.state !== 'awaiting_menu_choice') {
-      const inSupportFlow = session.state.includes('report') || session.state.includes('agent') || session.state.includes('contract') || session.state.includes('camera');
+      const inSupportFlow = session.state.includes('report') || session.state.includes('agent') || session.state.includes('contract') || session.state.includes('camera') || session.state.includes('migration');
       if (!inSupportFlow) {
+        if (isMigrationRequest(text)) {
+          setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
+          await sendMsg(chatId, '¡Con gusto te ayudamos con la migración! ¿En cuál zona está el servicio ACTUAL?', [], {
+            buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
+          });
+          return;
+        }
         if (isCameraRequest(text)) {
           setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
           await sendMsg(chatId, 'Con gusto te asesoro en cámaras. ¿Qué espacio quieres vigilar y cuántas cámaras necesitas?');
@@ -1573,6 +1586,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
         setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
         if (!knownName2) await sendReplyObject(buildReportPrompt());
         else { const n2 = await notifyAgentRequest(chatId, [`REPORTE`, `Nombre: ${knownName2}`, `Problema: ${text}`].join('\n'), '').catch(() => false); clearSession(chatId); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2, 'técnico')); }
+      } else if (aiResult2.action === 'show_migration') {
+        if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
+        setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
+        await sendMsg(chatId, '¿En cuál zona está el servicio ACTUAL?', [], {
+          buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
+        });
       } else if (aiResult2.action === 'show_cameras') {
         if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
         setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
@@ -2072,6 +2091,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
         setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
         await sendReplyObject(buildReportPrompt());
       }
+
+    } else if (aiResult.action === 'show_migration') {
+      if (aiResult.message) await sendMsg(chatId, aiResult.message);
+      setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
+      await sendMsg(chatId, '¿En cuál zona está el servicio ACTUAL?', [], {
+        buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
+      });
 
     } else if (aiResult.action === 'show_cameras') {
       if (aiResult.message) await sendMsg(chatId, aiResult.message);
