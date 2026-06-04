@@ -11,6 +11,7 @@ app.use(express.static('public'));
 
 const SYSTEM_PROMPT = [
   'Eres Leo, asistente virtual de León Telecom.',
+  'León Telecom SOLO ofrece servicio de internet. NO ofrece telefonía, televisión, cable ni otros servicios.',
   'Tono: profesional, amable y directo. Como un buen agente de atención al cliente.',
   'Nunca uses slang, groserías ni expresiones muy informales.',
   'Responde en español, máximo 2 oraciones, sin rodeos ni frases de relleno.',
@@ -262,7 +263,8 @@ function isCoverageRequest(text) {
 
 function isTechnicalIssue(text) {
   const value = normalizeText(text);
-  return /\b(falla|sin servicio|no funciona|intermitente|lento|reiniciar|conectar|conexion|caido|caida|soporte|wifi|internet|no tengo|sin internet|no jala|no agarra|se cae|se corta|no carga)\b/.test(value);
+  // Requires explicit problem signal — NOT just mention of "internet"
+  return /\b(falla|sin servicio|no funciona|intermitente|reiniciar|caido|caida|sin internet|no jala|no agarra|se cae|se corta|no carga|no hay internet|se fue el internet|no tengo internet|se corto el internet)\b/.test(value);
 }
 
 function isAgentRequest(text) {
@@ -687,7 +689,8 @@ async function callMainAI(chatId, userText) {
     `Huitzo — fibra óptica en: Primera/Segunda/Tercera Sección, La Guadalupe, La Cantera, Cañada del Chisme, Ojo de Agua, Esmeralda, Privada del Laurel, El Llano, Gasolinera, Loma los Pinos, Agua Blanca, Santa María Tenéxpam. Instalación: $800, primer mes gratis. Resto de Huitzo: antena inalámbrica. Planes fibra: ${fiberPlans}`,
     `Telixtlahuaca (inalámbrico/antena): instalación $1,200. Planes: ${wirelessPlans}`,
     `Suchilquitongo —también llamado "Suchil"— (inalámbrico/antena): instalación a cotizar con técnico. Planes: ${wirelessPlans}`,
-    'IMPORTANTE: Las 3 zonas SÍ tienen cobertura. Nunca digas que no hay servicio.',
+    'IMPORTANTE: León Telecom SOLO ofrece internet. NO ofrece telefonía, TV, cable ni otros servicios.',
+    'Las 3 zonas SÍ tienen cobertura. Nunca digas que no hay servicio.',
     '',
     'CÁMARAS DE SEGURIDAD:',
     'Wi-Fi Tapo TP-Link (1-3 cámaras, instalación simple):',
@@ -714,7 +717,7 @@ async function callMainAI(chatId, userText) {
     '',
     'Valores de "action":',
     '"show_plans" → quiere ver planes/precios de internet, contratar, preguntar por instalación o costos',
-    '"show_support" → tiene falla técnica, sin internet, lento, problema con el servicio activo',
+    '"show_support" → falla ACTIVA: sin internet, internet lento, se cae, no funciona. NO para preguntas generales sobre planes, velocidad o dispositivos.',
     '"show_cameras" → pregunta por cámaras, videovigilancia, CCTV, seguridad',
     '"show_migration" → quiere MIGRAR o MOVER su servicio a otro domicilio o zona. Palabras clave: migrar, cambiar domicilio, mover servicio, nueva casa, otro domicilio. Mensaje: confirmar que se iniciará el proceso.',
     '"request_agent" → quiere hablar con una persona ya. Mensaje: breve confirmación sin pedir más datos.',
@@ -1349,10 +1352,10 @@ async function handleAgentCommand(agentNumber, text) {
       `✅ Caso activo: ${clientName} (${clientId})`,
       '',
       'Todo lo que escribas aquí se reenvía al cliente.',
-      'Lo que responda el cliente te llegará a ti.',
-      '',
-      `Para cerrar el caso: LIBERAR ${clientId}`
-    ].join('\n'));
+      'Lo que responda el cliente te llegará a ti.'
+    ].join('\n'), [], {
+      buttons: [{ id: `LIBERAR ${clientId}`, title: 'Cerrar caso' }]
+    });
     return;
   }
 
