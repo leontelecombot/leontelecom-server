@@ -656,7 +656,7 @@ async function callMainAI(chatId, userText) {
     `Telixtlahuaca (inalámbrico): ${wirelessPlans}`,
     `Suchilquitongo —también llamado "Suchil"— (inalámbrico): ${wirelessPlans}`,
     'IMPORTANTE: Nunca digas que no hay cobertura en estas zonas. Las 3 sí tienen servicio.',
-    'La instalación se coordina con un asesor.',
+    'Instalación: se coordina con un asesor al contratar, sin costo adicional por instalación.',
     '',
     'CÁMARAS DE SEGURIDAD:',
     'Wi-Fi Tapo TP-Link (1-3 cámaras, instalación simple):',
@@ -682,11 +682,12 @@ async function callMainAI(chatId, userText) {
     '{"message":"respuesta natural aquí","action":null,"location":null,"neighborhood":null}',
     '',
     'Valores de "action":',
-    '"show_plans" → quiere ver planes/precios de internet, contratar servicio',
-    '"show_support" → tiene falla técnica, sin internet, lento, problema con el servicio',
+    '"show_plans" → quiere ver planes/precios de internet, contratar, preguntar por instalación o costos',
+    '"show_support" → tiene falla técnica, sin internet, lento, problema con el servicio activo',
     '"show_cameras" → pregunta por cámaras, videovigilancia, CCTV, seguridad',
-    '"request_agent" → quiere hablar con asesor/humano. Mensaje: breve confirmación sin pedir más datos.',
-    'null → conversa o pregunta algo; responde directo con la info disponible',
+    '"request_agent" → quiere hablar con una persona ya. Mensaje: breve confirmación sin pedir más datos.',
+    'null → conversa, hace pregunta general o de info; responde directo',
+    'IMPORTANTE: preguntas como "¿en cuánto está la instalación?" o "¿cuánto cuesta instalar?" → show_plans, NO request_agent',
     '',
     '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
     '"neighborhood" → colonia/barrio/sección mencionada, o null'
@@ -1399,14 +1400,33 @@ LÍNEA WI-FI TAPO (TP-Link) — para 1 a 3 cámaras:
 • C520WS (Exterior premium): 2K QHD, 360°, nocturna a color, seguimiento autos y personas. Máxima calidad.
 Almacenamiento: tarjeta MicroSD o nube Tapo Care.
 
-SISTEMAS PROFESIONALES HIKVISION (4+ cámaras o comercial/industrial):
+SISTEMAS PROFESIONALES HIKVISION / HILOOK (4+ cámaras o comercial/industrial):
 • Analógico (DVR): cableado coaxial/UTP, más económico, no satura el Wi-Fi.
 • IP/NVR (PoE): máxima resolución, analíticas avanzadas (detección de personas/vehículos).
+• HiLook: línea económica de Hikvision, excelente calidad-precio para negocios medianos.
 • Video grabado en disco duro oculto → seguro si dañan una cámara.
-• Para Hikvision: se agenda visita técnica GRATUITA para cotizar a medida.
+• Para Hikvision/HiLook: se agenda visita técnica GRATUITA para cotizar a medida.
 
-REGLA DE ORO: 1-3 cámaras → Tapo. 4+ cámaras o negocio → Hikvision + visita técnica.
+REGLA DE ORO: 1-3 cámaras → Tapo Wi-Fi. 4+ cámaras o negocio → Hikvision/HiLook + visita técnica.
 `;
+
+// Camera product images served from the server
+function getCameraImages(context) {
+  if (!SERVER_BASE_URL) return [];
+  const base = SERVER_BASE_URL + '/images/';
+  const ctx = (context || '').toLowerCase();
+  if (ctx.includes('hikvision') || ctx.includes('hilook') || ctx.includes('profesional') || ctx.includes('dvr') || ctx.includes('nvr')) {
+    return [`${base}camarahiklookhikvision.jpeg`];
+  }
+  if (ctx.includes('exterior') || ctx.includes('patio') || ctx.includes('fachada') || ctx.includes('c500') || ctx.includes('c520') || ctx.includes('c320')) {
+    return [`${base}camarawifi.jpeg`];
+  }
+  if (ctx.includes('tapo') || ctx.includes('wifi') || ctx.includes('interior') || ctx.includes('c210')) {
+    return [`${base}tapoo2kcamera.jpeg`];
+  }
+  // Default: show wifi cameras
+  return [`${base}camarawifi.jpeg`];
+}
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
@@ -1583,7 +1603,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
       const rec = await callAI(cameraSystemPrompt, text, { temperature: 0.35, maxTokens: 300 }).catch(() => null);
 
-      if (rec) await sendMsg(chatId, rec);
+      if (rec) {
+        const camImages = getCameraImages((rec || '') + ' ' + text);
+        await sendMsg(chatId, rec, camImages);
+      }
 
       if (isBigProject) {
         const cameraContext = `Proyecto cámaras Hikvision: ${text}`;
