@@ -1274,6 +1274,21 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
   }
 }
 
+function buildMigrationNotification(d, name) {
+  return [
+    `SOLICITUD DE MIGRACIÓN DE SERVICIO`,
+    `Nombre: ${name}`,
+    '',
+    `DOMICILIO ACTUAL (${d.currentLocation}):`,
+    d.currentNeighborhood ? `  Colonia/Barrio: ${d.currentNeighborhood}` : '',
+    `  Referencias: ${d.currentDetails || 'no especificadas'}`,
+    '',
+    `DOMICILIO NUEVO (${d.newLocation}):`,
+    d.newNeighborhood ? `  Colonia/Barrio: ${d.newNeighborhood}` : '',
+    `  Referencias: ${d.newDetails || 'no especificadas'}`
+  ].filter(Boolean).join('\n');
+}
+
 async function handleAgentCommand(agentNumber, text) {
   const v = text.trim().toUpperCase();
 
@@ -1586,62 +1601,70 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_migration_current_location') {
+      if (wantsToCancel(text)) { clearSession(chatId); await sendMsg(chatId, 'Sin problema. ¿En qué más puedo ayudarte?'); await sendReplyObject(buildMenuReply()); return; }
       const location = detectLocation(text);
       if (location) {
-        setSession(chatId, { state: 'awaiting_migration_new_location', data: { currentLocation: location } });
-        await sendMsg(chatId, '¿A cuál zona quieres MIGRAR el servicio?', [], {
-          buttons: [
-            { id: 'huitzo', title: 'Huitzo' },
-            { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
-            { id: 'suchilquitongo', title: 'Suchilquitongo' }
-          ]
-        });
+        setSession(chatId, { state: 'awaiting_migration_current_details', data: { currentLocation: location } });
+        await sendMsg(chatId, `¿En qué colonia, barrio o sección está la instalación ACTUAL en ${location}?\nIncluye referencias del domicilio (ej: Colonia Primera Sección, casa blanca frente a la cancha)`);
         return;
       }
-      await sendMsg(chatId, 'Elige tu zona actual:', [], {
-        buttons: [
-          { id: 'huitzo', title: 'Huitzo' },
-          { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
-          { id: 'suchilquitongo', title: 'Suchilquitongo' }
-        ]
+      await sendMsg(chatId, '¿En cuál zona está el servicio ACTUAL?', [], {
+        buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
+      });
+      return;
+    }
+
+    if (session.state === 'awaiting_migration_current_details') {
+      if (wantsToCancel(text)) { clearSession(chatId); await sendMsg(chatId, 'Sin problema. ¿En qué más puedo ayudarte?'); await sendReplyObject(buildMenuReply()); return; }
+      const d = session.data || {};
+      const nbhd = searchAllNeighborhoods(text);
+      setSession(chatId, { state: 'awaiting_migration_new_location', data: { ...d, currentDetails: text, currentNeighborhood: nbhd?.name || null } });
+      await sendMsg(chatId, '¿A cuál zona quieres MIGRAR el servicio?', [], {
+        buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
       });
       return;
     }
 
     if (session.state === 'awaiting_migration_new_location') {
+      if (wantsToCancel(text)) { clearSession(chatId); await sendMsg(chatId, 'Sin problema. ¿En qué más puedo ayudarte?'); await sendReplyObject(buildMenuReply()); return; }
       const location = detectLocation(text);
       if (location) {
-        setSession(chatId, { state: 'awaiting_migration_name', data: { ...session.data, newLocation: location } });
-        await sendMsg(chatId, '¿A qué nombre está el servicio actual?');
+        setSession(chatId, { state: 'awaiting_migration_new_details', data: { ...session.data, newLocation: location } });
+        await sendMsg(chatId, `¿En qué colonia, barrio o sección estará la instalación NUEVA en ${location}?\nIncluye referencias del domicilio`);
         return;
       }
-      await sendMsg(chatId, 'Elige la zona de destino:', [], {
-        buttons: [
-          { id: 'huitzo', title: 'Huitzo' },
-          { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
-          { id: 'suchilquitongo', title: 'Suchilquitongo' }
-        ]
+      await sendMsg(chatId, '¿A cuál zona quieres migrar?', [], {
+        buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
       });
       return;
     }
 
+    if (session.state === 'awaiting_migration_new_details') {
+      if (wantsToCancel(text)) { clearSession(chatId); await sendMsg(chatId, 'Sin problema. ¿En qué más puedo ayudarte?'); await sendReplyObject(buildMenuReply()); return; }
+      const d = session.data || {};
+      const nbhd = searchAllNeighborhoods(text);
+      const newData = { ...d, newDetails: text, newNeighborhood: nbhd?.name || null };
+      const migKnownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+      if (migKnownName) {
+        const notifyText = buildMigrationNotification(newData, migKnownName);
+        await notifyAgentRequest(chatId, notifyText, d.newLocation).catch(() => {});
+        clearSession(chatId);
+        await sendMsg(chatId, `✅ ¡Listo, ${migKnownName}! Solicitud de migración de ${d.currentLocation} → ${d.newLocation} registrada con todos los detalles. Un asesor te contactará pronto. 📞`);
+      } else {
+        setSession(chatId, { state: 'awaiting_migration_name', data: newData });
+        await sendMsg(chatId, '¿A qué nombre está el servicio?');
+      }
+      return;
+    }
+
     if (session.state === 'awaiting_migration_name') {
+      if (wantsToCancel(text)) { clearSession(chatId); await sendMsg(chatId, 'Sin problema. ¿En qué más puedo ayudarte?'); await sendReplyObject(buildMenuReply()); return; }
       const d = session.data || {};
       updateProfile(chatId, { name: text });
-      try {
-        await notifyAgentRequest(chatId, [
-          `SOLICITUD DE MIGRACIÓN DE SERVICIO`,
-          `Nombre: ${text}`,
-          `Zona actual: ${d.currentLocation}`,
-          `Zona nueva: ${d.newLocation}`
-        ].join('\n'), d.newLocation);
-      } catch (e) { console.error('Migration notify error:', e.message); }
+      const notifyText = buildMigrationNotification(d, text);
+      await notifyAgentRequest(chatId, notifyText, d.newLocation).catch(() => {});
       clearSession(chatId);
-      await sendMsg(chatId, [
-        `✅ ¡Listo, ${text}!`,
-        `Solicitud de migración de ${d.currentLocation} → ${d.newLocation} registrada.`,
-        `Un asesor de León Telecom te contactará pronto por WhatsApp. 📞`
-      ].join('\n'));
+      await sendMsg(chatId, `✅ ¡Listo, ${text}! Solicitud de migración de ${d.currentLocation} → ${d.newLocation} registrada. Un asesor te contactará pronto. 📞`);
       return;
     }
 
