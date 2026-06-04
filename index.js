@@ -1580,19 +1580,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (!aiResult2) { await sendReplyObject(buildFallbackReply(text)); return; }
       const knownName2 = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
       if (aiResult2.action === 'show_plans') {
-        const loc2 = aiResult2.location
-          ? (detectLocation(aiResult2.location) || aiResult2.location)
-          : (profile?.location ? detectLocation(profile.location) || profile.location : null);
-        const wantsContract2 = /\b(quiero contratar|contratar|lo quiero|me interesa|dale)\b/i.test(text);
-        if (wantsContract2 && loc2 && knownName2) {
-          await notifyAgentRequest(chatId, [`SOLICITUD DE INSTALACIÓN`, `Nombre: ${knownName2}`, `Zona: ${loc2}`].join('\n'), loc2).catch(() => {});
-          clearSession(chatId);
-          await sendMsg(chatId, `Listo, ${knownName2}. Ya le avisamos a un asesor para coordinar la instalación. 📞`);
-        } else {
-          if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
-          if (loc2) { updateProfile(chatId, { location: loc2 }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc2 } }); await sendReplyObject(buildPlanReplyForLocation(loc2)); }
-          else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
-        }
+        const loc2 = aiResult2.location ? (detectLocation(aiResult2.location) || aiResult2.location) : null;
+        if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
+        if (loc2) { updateProfile(chatId, { location: loc2 }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc2 } }); await sendReplyObject(buildPlanReplyForLocation(loc2)); }
+        else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
       } else if (aiResult2.action === 'show_support') {
         if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
         setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
@@ -2082,30 +2073,21 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
 
     if (aiResult.action === 'show_plans') {
-      // Use AI-detected location, or fall back to known profile location
+      // Only use location from the CURRENT message — never assume profile location for contracting
+      // (profile location could be a different place than where they want the new service)
       const loc = aiResult.location
         ? (detectLocation(aiResult.location) || aiResult.location)
-        : (profile?.location ? detectLocation(profile.location) || profile.location : null);
+        : null;
 
-      // If user is saying they want to contract and we know location → skip to name
-      const wantsContract = /\b(quiero contratar|quiero el servicio|contratar|me interesa|dale|lo quiero)\b/i.test(text);
+      const wantsContract = /\b(quiero contratar|quiero el servicio|me interesa|dale|lo quiero|ya quiero)\b/i.test(text);
       if (wantsContract && loc && knownName) {
-        // Know zone AND name → notify directly
-        await notifyAgentRequest(chatId, [
-          `SOLICITUD DE INSTALACIÓN`,
-          `Nombre: ${knownName}`,
-          `Zona: ${loc}`,
-          `Mensaje: ${text}`
-        ].join('\n'), loc).catch(() => {});
+        await notifyAgentRequest(chatId, [`SOLICITUD DE INSTALACIÓN`, `Nombre: ${knownName}`, `Zona: ${loc}`].join('\n'), loc).catch(() => {});
         clearSession(chatId);
-        await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un asesor para coordinar la instalación en ${loc}. Te contactarán pronto. 📞`);
+        await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un asesor para coordinar la instalación en ${loc}. 📞`);
       } else if (wantsContract && loc) {
-        // Know zone but not name → ask name
-        setSession(chatId, { state: 'awaiting_contract_name', data: { location: loc } });
         if (aiResult.message) await sendMsg(chatId, aiResult.message);
-        await sendMsg(chatId, '¿A qué nombre te contactamos para coordinar la instalación?', [], {
-          buttons: [{ id: 'solo_preguntaba', title: 'Solo preguntaba' }]
-        });
+        setSession(chatId, { state: 'awaiting_contract_name', data: { location: loc } });
+        await sendMsg(chatId, '¿A qué nombre te contactamos?', [], { buttons: [{ id: 'solo_preguntaba', title: 'Solo preguntaba' }] });
       } else {
         if (aiResult.message) await sendMsg(chatId, aiResult.message);
         if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
