@@ -1776,10 +1776,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
   if (!messages || messages.length === 0) return;
 
   const msg = messages[0];
-  const from = msg.from;
+  const rawFrom = msg.from;
+  // Normalize Mexican numbers: Meta sometimes sends 521XXXXXXXXXX instead of 52XXXXXXXXXX
+  const from = rawFrom.startsWith('521') && rawFrom.length === 13
+    ? '52' + rawFrom.slice(3)
+    : rawFrom;
   const contactName = value?.contacts?.[0]?.profile?.name || 'Usuario';
 
-  console.log(`[WhatsApp] Incoming: type=${msg.type} from=${from} name=${contactName}`);
+  console.log(`[WhatsApp] Incoming: type=${msg.type} from=${from} (raw=${rawFrom}) name=${contactName}`);
 
   if (msg.type === 'image') {
     try {
