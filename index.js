@@ -2081,7 +2081,12 @@ app.post('/webhook/whatsapp', async (req, res) => {
     }
     if (replyId) {
       console.log(`[WhatsApp] Interactive reply: ${itype} id="${replyId}" from=${from}`);
-      await handleChatMessage(from, replyId, sendWhatsAppMessage);
+      // If agent tapped a button (e.g. "Atender caso") → route to agent commands
+      if (AGENT_WHATSAPP_NUMBER && from === AGENT_WHATSAPP_NUMBER) {
+        await handleAgentCommand(from, replyId);
+      } else {
+        await handleChatMessage(from, replyId, sendWhatsAppMessage);
+      }
     }
   }
 });
