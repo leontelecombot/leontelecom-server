@@ -417,9 +417,9 @@ function buildPlanReplyForLocation(location) {
   if (location === LOCATIONS.huitzo) {
     return {
       text: [
-        '🔥 Planes de fibra óptica para Huitzo (la mejor conexión):',
+        '🔥 Planes de fibra óptica para Huitzo:',
         buildPlanLines(FIBER_PLANS),
-        'Para darte la recomendación perfecta, ¿cuántas personas usan internet en tu casa?'
+        '¿Te interesa alguno? Dime cuál y te conectamos con un asesor.'
       ].join('\n'),
       mediaUrls: FIBER_PLAN_MEDIA_URL ? [FIBER_PLAN_MEDIA_URL] : []
     };
@@ -430,7 +430,7 @@ function buildPlanReplyForLocation(location) {
       text: [
         `📡 Planes de internet inalámbrico para ${location}:`,
         buildPlanLines(WIRELESS_PLANS),
-        'Dime cuántas personas usan internet en casa y te digo cuál se ajusta mejor.'
+        '¿Te interesa alguno? Dime cuál y te conectamos con un asesor.'
       ].join('\n'),
       mediaUrls: WIRELESS_PLAN_MEDIA_URL ? [WIRELESS_PLAN_MEDIA_URL] : []
     };
@@ -675,14 +675,7 @@ function buildGreetingReply(text) {
   return {
     text: 'Hola, soy Leo, el asistente de León Telecom. ¿En qué te puedo ayudar hoy?',
     mediaUrls: [],
-    listItems: [
-      { id: '1', title: 'Ver planes' },
-      { id: '2', title: 'Ya soy cliente' },
-      { id: '3', title: 'Hablar con asesor' },
-      { id: '4', title: 'Reportar un problema' },
-      { id: '5', title: 'Migrar servicio' },
-      { id: '6', title: 'Cancelar cita' }
-    ],
+    listItems: MENU_LIST_ITEMS,
     replyMarkup: {
       keyboard: [
         [{ text: '1) Ver planes disponibles' }, { text: '2) Ya soy cliente (tengo un plan)' }],
@@ -696,16 +689,9 @@ function buildGreetingReply(text) {
 
 function buildFallbackReply(text) {
   return {
-    text: '¿En qué te puedo ayudar? Elige una opción:',
+    text: 'Aquí te muestro las opciones disponibles:',
     mediaUrls: [],
-    listItems: [
-      { id: '1', title: 'Ver planes' },
-      { id: '2', title: 'Ya soy cliente' },
-      { id: '3', title: 'Hablar con asesor' },
-      { id: '4', title: 'Reportar falla' },
-      { id: '5', title: 'Migrar servicio' },
-      { id: '6', title: 'Cancelar cita' }
-    ],
+    listItems: MENU_LIST_ITEMS,
     replyMarkup: {
       keyboard: [
         [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
@@ -720,16 +706,9 @@ function buildFallbackReply(text) {
 
 function buildMenuReply() {
   return {
-    text: '¿Qué necesitas? 👇',
+    text: '¿En qué te puedo ayudar? 👇',
     mediaUrls: [],
-    listItems: [
-      { id: '1', title: 'Ver planes' },
-      { id: '2', title: 'Ya soy cliente' },
-      { id: '3', title: 'Hablar con asesor' },
-      { id: '4', title: 'Reportar falla' },
-      { id: '5', title: 'Migrar servicio' },
-      { id: '6', title: 'Cancelar cita' }
-    ],
+    listItems: MENU_LIST_ITEMS,
     replyMarkup: {
       keyboard: [
         [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
@@ -1165,12 +1144,11 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
 }
 
 const MENU_LIST_ITEMS = [
-  { id: '1', title: 'Ver planes' },
+  { id: '1', title: 'Ver planes de internet' },
+  { id: '4', title: 'Soporte técnico' },
   { id: '2', title: 'Ya soy cliente' },
-  { id: '3', title: 'Hablar con asesor' },
-  { id: '4', title: 'Reportar falla' },
-  { id: '5', title: 'Migrar servicio' },
-  { id: '6', title: 'Cancelar cita' }
+  { id: '3', title: 'Hablar con un asesor' },
+  { id: '5', title: 'Migrar mi servicio' }
 ];
 
 async function handleChatMessage(chatId, text, sendMsg) {
@@ -1196,10 +1174,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     function parseMenuChoice(input) {
       const v = normalizeText(input);
-      if (/^1$|^1\b|\buno\b|ver planes|planes|paquetes/.test(v)) return 1;
+      if (/^1$|^1\b|\buno\b|ver planes|planes|paquetes|internet|contratar/.test(v)) return 1;
       if (/^2$|^2\b|\bdos\b|ya soy cliente|tengo un plan|soy cliente/.test(v)) return 2;
       if (/^3$|^3\b|\btres\b|hablar con|asesor|agente/.test(v)) return 3;
-      if (/^4$|^4\b|\bcuatro\b|reportar|problema|reporte/.test(v)) return 4;
+      if (/^4$|^4\b|\bcuatro\b|reportar|problema|reporte|soporte|tecnico|falla/.test(v)) return 4;
       if (/^5$|^5\b|\bcinco\b|migrar|migracion|migraci/.test(v)) return 5;
       if (/^6$|^6\b|\bseis\b|cancelar|cancel|no quiero/.test(v)) return 6;
       return null;
@@ -1262,299 +1240,76 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (choice === 4) { setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt()); return; }
       if (choice === 5) {
         setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
-        await sendMsg(chatId, '🔄 Migración de Servicio\n\n¿En cuál zona está el servicio ACTUAL que quieres migrar?\n\nEscribe: Huitzo, Telixtlahuaca o Suchilquitongo');
-        return;
-      }
-      if (choice === 6 || normalizeText(text).match(/\b(cancelar|cancel|no quiero|ya no)\b/)) {
-        setSession(chatId, { state: 'awaiting_folio_to_cancel', data: {} });
-        await sendMsg(chatId, '⚠️ Para cancelar tu cita, necesito tu folio.\n\n¿Cuál es tu folio? (ej: LT-12345-ABCDE)');
+        await sendMsg(chatId, '🔄 Migración de servicio\n¿En cuál zona está el servicio ACTUAL?', [], {
+          buttons: [
+            { id: 'huitzo', title: 'Huitzo' },
+            { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
+            { id: 'suchilquitongo', title: 'Suchilquitongo' }
+          ]
+        });
         return;
       }
       await sendReplyObject(buildFallbackReply(text));
       return;
     }
 
-    if (session.state === 'awaiting_installation_day') {
-      const d = session.data || {};
-      setSession(chatId, { state: 'awaiting_installation_name', data: { ...d, day: parseDayToDate(text) } });
-      await sendMsg(chatId, '¿A qué nombre va la instalación?');
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_name') {
-      const d = session.data || {};
-      updateProfile(chatId, { name: text });
-      setSession(chatId, { state: 'awaiting_installation_address', data: { ...d, name: text } });
-      await sendMsg(chatId, `¿La dirección de instalación es en ${d.location || 'tu zona'}?`);
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_address') {
-      const d = session.data || {};
-      setSession(chatId, { state: 'awaiting_installation_neighborhood', data: { ...d, address: d.location || 'tu zona' } });
-      await sendMsg(chatId, '¿Cuál es tu colonia, barrio o sección?');
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_neighborhood') {
-      try {
-        const d = session.data || {};
-        const location = d.location || 'Huitzo';
-        const match = findNeighborhood(text, location);
-        if (match) {
-          setSession(chatId, { state: 'awaiting_installation_location_confirm', data: { ...d, neighborhood: match.name } });
-          await sendMsg(chatId, `¿Es correcto que la instalación es en ${match.name} ${match.location}?`);
-          return;
-        }
-        await sendMsg(chatId, `No encontré tu colonia/barrio en ${location}. Intenta de nuevo o escribe el nombre más claramente.`);
-      } catch (err) {
-        console.error('Installation neighborhood error:', err.message);
-        await sendMsg(chatId, `No encontré tu colonia/barrio. Intenta de nuevo.`);
-      }
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_location_confirm') {
-      const yes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|verdad|sale)\b/);
-      const no = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
-      if (yes) { setSession(chatId, { state: 'awaiting_installation_street', data: session.data }); await sendMsg(chatId, '¿Cuál es la calle?'); return; }
-      if (no) { setSession(chatId, { state: 'awaiting_installation_neighborhood', data: session.data }); await sendMsg(chatId, 'Entendido. ¿Cuál es tu colonia, barrio o sección correcta?'); return; }
-      await sendMsg(chatId, '¿Es correcto o no? Responde sí o no.');
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_street') {
-      const d = session.data || {};
-      setSession(chatId, { state: 'awaiting_installation_references', data: { ...d, street: text } });
-      await sendMsg(chatId, '¿Cuáles son las referencias del domicilio? (ej: cerca de la iglesia, esquina con la tienda)');
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_references') {
-      const d = { ...(session.data || {}), references: text };
-      setSession(chatId, { state: 'awaiting_installation_final_confirmation', data: d });
-      await sendMsg(chatId, [
-        '📋 Resumen de tu solicitud:',
-        `📅 Día propuesto: ${d.day}`,
-        `👤 Nombre: ${d.name}`,
-        `📍 Dirección/Zona: ${d.address}`,
-        `🏘️ Barrio: ${d.neighborhood}`,
-        `🛣️ Calle: ${d.street}`,
-        `🏠 Referencias: ${d.references}`,
-        '',
-        '¿Estás de acuerdo? Responde Sí para agendar o No para cambiar algo.'
-      ].join('\n'));
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_final_confirmation') {
-      const yes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|adelante|dale)\b/);
-      const no = normalizeText(text).match(/\b(no|nope|nah|incorrecto|espera|cambiar)\b/);
-      if (yes) {
-        const d = session.data || {};
-        const folio = generateRandomFolio();
-        d.folio = folio;
-        d.bookedAt = new Date().toISOString();
-        storeFolio(folio, chatId, 'installation', d.location);
-        clearSession(chatId);
-        try {
-          await notifyAgentRequest(chatId, [
-            `SOLICITUD DE INSTALACIÓN`,
-            `Folio: ${folio}`,
-            `Día propuesto: ${d.day}`,
-            `Nombre: ${d.name}`,
-            `Dirección/Zona: ${d.address}`,
-            `Barrio/Colonia: ${d.neighborhood}`,
-            `Calle: ${d.street}`,
-            `Referencias: ${d.references}`,
-            `Ubicación: ${d.location}`,
-            `Observaciones: ${d.initialRequest || 'Sin detalles adicionales'}`
-          ].join('\n'), d.location);
-        } catch (notifyError) { console.error('Agent notification error:', notifyError.message); }
-        await sendMsg(chatId, [
-          '✅ ¡Instalación agendada exitosamente!',
-          `🎟️ Tu folio de cita: ${folio}`,
-          '',
-          `📅 Día: ${d.day}`,
-          `👤 Cliente: ${d.name}`,
-          `📍 Ubicación: ${d.address}`,
-          `🏘️ Barrio: ${d.neighborhood}`,
-          '',
-          `⏳ En un momento un asesor se va a poner en contacto con ${d.name} para confirmar todos los detalles.`,
-          '',
-          'Guarda tu folio para seguimiento: ' + folio
-        ].join('\n'));
-        return;
-      }
-      if (no) {
-        await sendMsg(chatId, '¿Qué quieres cambiar?\n1️⃣ Día\n2️⃣ Nombre\n3️⃣ Dirección\n4️⃣ Barrio\n5️⃣ Calle\n6️⃣ Referencias');
-        setSession(chatId, { state: 'awaiting_installation_correction', data: session.data });
-        return;
-      }
-      await sendMsg(chatId, '¿De acuerdo o no? Responde Sí o No.');
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_correction') {
-      const choice = parseMenuChoice(text);
-      const d = session.data || {};
-      const stateMap = { 1: ['awaiting_installation_day', '📅 ¿Qué día tienes disponibilidad? (Ej: mañana, el jueves, el 30 de mayo)'], 2: ['awaiting_installation_name', '¿A qué nombre va la instalación?'], 3: ['awaiting_installation_address', `¿La dirección de instalación es en ${d.location || 'tu zona'}?`], 4: ['awaiting_installation_neighborhood', '¿Cuál es tu colonia, barrio o sección?'], 5: ['awaiting_installation_street', '¿Cuál es la calle?'], 6: ['awaiting_installation_references', '¿Cuáles son las referencias del domicilio?'] };
-      if (stateMap[choice]) {
-        setSession(chatId, { state: stateMap[choice][0], data: d });
-        await sendMsg(chatId, stateMap[choice][1]);
-        return;
-      }
-      await sendMsg(chatId, 'Elige un número del 1 al 6.');
-      return;
-    }
-
     if (session.state === 'awaiting_migration_current_location') {
       const location = detectLocation(text);
       if (location) {
-        setSession(chatId, { state: 'awaiting_migration_current_neighborhood', data: { ...session.data, currentLocation: location } });
-        await sendMsg(chatId, '¿Cuál es tu colonia, barrio o sección ACTUAL?');
+        setSession(chatId, { state: 'awaiting_migration_new_location', data: { currentLocation: location } });
+        await sendMsg(chatId, '¿A cuál zona quieres MIGRAR el servicio?', [], {
+          buttons: [
+            { id: 'huitzo', title: 'Huitzo' },
+            { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
+            { id: 'suchilquitongo', title: 'Suchilquitongo' }
+          ]
+        });
         return;
       }
-      await sendMsg(chatId, 'Por favor, escribe: Huitzo, Telixtlahuaca o Suchilquitongo');
-      return;
-    }
-
-    if (session.state === 'awaiting_migration_current_neighborhood') {
-      try {
-        const d = session.data || {};
-        const match = findNeighborhood(text, d.currentLocation || 'Huitzo');
-        if (match) {
-          setSession(chatId, { state: 'awaiting_migration_current_street', data: { ...d, currentNeighborhood: match.name } });
-          await sendMsg(chatId, '¿Cuál es la CALLE de la instalación actual?');
-          return;
-        }
-        await sendMsg(chatId, `No encontré tu colonia/barrio. Intenta de nuevo.`);
-      } catch (err) {
-        console.error('Migration neighborhood error:', err.message);
-        await sendMsg(chatId, 'No encontré tu colonia/barrio. Intenta de nuevo.');
-      }
-      return;
-    }
-
-    if (session.state === 'awaiting_migration_current_street') {
-      const d = session.data || {};
-      setSession(chatId, { state: 'awaiting_migration_current_references', data: { ...d, currentStreet: text } });
-      await sendMsg(chatId, '¿Cuáles son las REFERENCIAS del domicilio actual? (ej: cerca de la iglesia)');
-      return;
-    }
-
-    if (session.state === 'awaiting_migration_current_references') {
-      const d = session.data || {};
-      setSession(chatId, { state: 'awaiting_migration_new_location', data: { ...d, currentReferences: text } });
-      await sendMsg(chatId, '¿A cuál zona quieres MIGRAR el servicio?\n\nEscribe: Huitzo, Telixtlahuaca o Suchilquitongo');
+      await sendMsg(chatId, 'Elige tu zona actual:', [], {
+        buttons: [
+          { id: 'huitzo', title: 'Huitzo' },
+          { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
+          { id: 'suchilquitongo', title: 'Suchilquitongo' }
+        ]
+      });
       return;
     }
 
     if (session.state === 'awaiting_migration_new_location') {
       const location = detectLocation(text);
       if (location) {
-        setSession(chatId, { state: 'awaiting_migration_new_neighborhood', data: { ...session.data, newLocation: location } });
-        await sendMsg(chatId, '¿Cuál es la colonia, barrio o sección NUEVA?');
+        setSession(chatId, { state: 'awaiting_migration_name', data: { ...session.data, newLocation: location } });
+        await sendMsg(chatId, '¿A qué nombre está el servicio actual?');
         return;
       }
-      await sendMsg(chatId, 'Por favor, escribe: Huitzo, Telixtlahuaca o Suchilquitongo');
+      await sendMsg(chatId, 'Elige la zona de destino:', [], {
+        buttons: [
+          { id: 'huitzo', title: 'Huitzo' },
+          { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
+          { id: 'suchilquitongo', title: 'Suchilquitongo' }
+        ]
+      });
       return;
     }
 
-    if (session.state === 'awaiting_migration_new_neighborhood') {
-      try {
-        const d = session.data || {};
-        const match = findNeighborhood(text, d.newLocation || 'Huitzo');
-        if (match) {
-          setSession(chatId, { state: 'awaiting_migration_new_street', data: { ...d, newNeighborhood: match.name } });
-          await sendMsg(chatId, '¿Cuál es la CALLE de la nueva instalación?');
-          return;
-        }
-        await sendMsg(chatId, `No encontré tu colonia/barrio. Intenta de nuevo.`);
-      } catch (err) {
-        console.error('Migration new neighborhood error:', err.message);
-        await sendMsg(chatId, 'No encontré tu colonia/barrio. Intenta de nuevo.');
-      }
-      return;
-    }
-
-    if (session.state === 'awaiting_migration_new_street') {
+    if (session.state === 'awaiting_migration_name') {
       const d = session.data || {};
-      setSession(chatId, { state: 'awaiting_migration_new_references', data: { ...d, newStreet: text } });
-      await sendMsg(chatId, '¿Cuáles son las REFERENCIAS de la nueva instalación?');
-      return;
-    }
-
-    if (session.state === 'awaiting_migration_new_references') {
-      const d = { ...(session.data || {}), newReferences: text };
-      setSession(chatId, { state: 'awaiting_migration_final_confirmation', data: d });
+      updateProfile(chatId, { name: text });
+      try {
+        await notifyAgentRequest(chatId, [
+          `SOLICITUD DE MIGRACIÓN DE SERVICIO`,
+          `Nombre: ${text}`,
+          `Zona actual: ${d.currentLocation}`,
+          `Zona nueva: ${d.newLocation}`
+        ].join('\n'), d.newLocation);
+      } catch (e) { console.error('Migration notify error:', e.message); }
+      clearSession(chatId);
       await sendMsg(chatId, [
-        '📋 Resumen de tu migración:',
-        '',
-        '📍 UBICACIÓN ACTUAL:',
-        `  • Zona: ${d.currentLocation}`,
-        `  • Barrio: ${d.currentNeighborhood}`,
-        `  • Calle: ${d.currentStreet}`,
-        `  • Referencias: ${d.currentReferences}`,
-        '',
-        '📍 UBICACIÓN NUEVA:',
-        `  • Zona: ${d.newLocation}`,
-        `  • Barrio: ${d.newNeighborhood}`,
-        `  • Calle: ${d.newStreet}`,
-        `  • Referencias: ${d.newReferences}`,
-        '',
-        '¿Estás de acuerdo? Responde Sí para confirmar o No para cambiar algo.'
+        `✅ ¡Listo, ${text}!`,
+        `Solicitud de migración de ${d.currentLocation} → ${d.newLocation} registrada.`,
+        `Un asesor de León Telecom te contactará pronto por WhatsApp. 📞`
       ].join('\n'));
-      return;
-    }
-
-    if (session.state === 'awaiting_migration_final_confirmation') {
-      const yes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|adelante|dale)\b/);
-      const no = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
-      if (yes) {
-        const d = session.data || {};
-        const folio = generateRandomFolio();
-        d.folio = folio;
-        d.bookedAt = new Date().toISOString();
-        storeFolio(folio, chatId, 'migration', d.newLocation);
-        clearSession(chatId);
-        try {
-          await notifyAgentRequest(chatId, [
-            `SOLICITUD DE MIGRACIÓN DE SERVICIO`,
-            `Folio: ${folio}`,
-            '',
-            `UBICACIÓN ACTUAL:`,
-            `  • Zona: ${d.currentLocation}`,
-            `  • Barrio: ${d.currentNeighborhood}`,
-            `  • Calle: ${d.currentStreet}`,
-            `  • Referencias: ${d.currentReferences}`,
-            '',
-            `UBICACIÓN NUEVA:`,
-            `  • Zona: ${d.newLocation}`,
-            `  • Barrio: ${d.newNeighborhood}`,
-            `  • Calle: ${d.newStreet}`,
-            `  • Referencias: ${d.newReferences}`
-          ].join('\n'), d.newLocation);
-        } catch (notifyError) { console.error('Migration notification error:', notifyError.message); }
-        await sendMsg(chatId, [
-          '✅ ¡Migración agendada exitosamente!',
-          `🎟️ Tu folio de cita: ${folio}`,
-          '',
-          `De: ${d.currentLocation} → A: ${d.newLocation}`,
-          '',
-          '⏳ En un momento un asesor se va a poner en contacto contigo para confirmar todos los detalles.',
-          '',
-          'Guarda tu folio para seguimiento: ' + folio
-        ].join('\n'));
-        return;
-      }
-      if (no) {
-        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-        await sendMsg(chatId, 'No hay problema. Vuelve cuando quieras. 👍');
-        await sendReplyObject(buildMenuReply());
-        return;
-      }
-      await sendMsg(chatId, '¿De acuerdo o no? Responde Sí o No.');
       return;
     }
 
@@ -1564,7 +1319,6 @@ async function handleChatMessage(chatId, text, sendMsg) {
         updateProfile(chatId, { location });
         setSession(chatId, { state: 'awaiting_plan_selection', data: { location } });
         await sendReplyObject(buildPlanReplyForLocation(location));
-        await sendMsg(chatId, '¿Cuál plan te gustaría?');
         return;
       }
       await sendMsg(chatId, 'No reconozco esa zona. Por favor escribe exactamente: Huitzo, Telixtlahuaca o Suchilquitongo.');
@@ -1574,52 +1328,41 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_plan_selection') {
       const location = session.data?.location;
       const plans = location === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
-      const selectedPlan = plans.find(p => normalizeText(text).includes(normalizeText(p.name)) || normalizeText(text).includes(normalizeText(p.speed)));
-      if (selectedPlan) {
-        setSession(chatId, { state: 'awaiting_orientation_choice', data: { ...session.data, selectedPlan: selectedPlan.name, selectedSpeed: selectedPlan.speed, selectedPrice: selectedPlan.price } });
-        await sendMsg(chatId, `Entendido, el plan ${selectedPlan.name} (${selectedPlan.speed} → ${selectedPlan.price}). ¿Quieres que te explique por qué este plan es una buena opción?`);
-        return;
-      }
-      await sendMsg(chatId, 'No reconozco el plan. Por favor elige uno de los planes mencionados.');
+      const selectedPlan = plans.find(p =>
+        normalizeText(text).includes(normalizeText(p.name)) ||
+        normalizeText(text).includes(normalizeText(p.speed))
+      );
+      const planData = selectedPlan
+        ? { ...session.data, selectedPlan: selectedPlan.name, selectedSpeed: selectedPlan.speed, selectedPrice: selectedPlan.price }
+        : session.data;
+      const planLabel = selectedPlan ? `${selectedPlan.name} — ${selectedPlan.speed} — ${selectedPlan.price}` : '';
+      setSession(chatId, { state: 'awaiting_contract_name', data: planData });
+      await sendMsg(chatId,
+        `¡Excelente! 🎉${planLabel ? '\nPlan: ' + planLabel : ''}\n\n¿A qué nombre te contactamos para coordinar la instalación?`,
+        [], { buttons: [{ id: 'solo_info', title: 'Solo información' }] }
+      );
       return;
     }
 
-    if (session.state === 'awaiting_orientation_choice') {
-      const yes = normalizeText(text).match(/\b(si|sí|yes|claro|dale|ok|okay|adelante|quiero)\b/);
-      const no = normalizeText(text).match(/\b(no|nope|nah|no quiero|no gracias)\b/);
-      if (yes) {
-        const d = session.data || {};
-        setSession(chatId, { state: 'awaiting_installation_confirmation', data: d });
-        await sendMsg(chatId, `El ${d.selectedPlan} es ideal para tu zona porque ofrece excelente velocidad y estabilidad. Te permitirá navegar, ver películas y trabajar sin problemas.`);
-        await sendMsg(chatId, '¿Quieres agendar la instalación de este plan?');
-        return;
-      }
-      if (no) {
-        const d = session.data || {};
-        setSession(chatId, { state: 'awaiting_installation_confirmation', data: d });
-        await sendMsg(chatId, `Perfecto. Tu elección es ${d.selectedPlan} (${d.selectedSpeed} → ${d.selectedPrice}). ¿Quieres agendar la instalación?`);
-        return;
-      }
-      await sendMsg(chatId, '¿Quieres la explicación sí o no?');
-      return;
-    }
-
-    if (session.state === 'awaiting_installation_confirmation') {
-      const yes = normalizeText(text).match(/\b(si|sí|yes|claro|dale|ok|okay|adelante|instalar|quiero|agend|agendar)\b/);
-      const no = normalizeText(text).match(/\b(no|nope|nah|no quiero|no gracias|luego)\b/);
-      if (yes) {
-        setSession(chatId, { state: 'awaiting_installation_day', data: { ...session.data, initialRequest: text } });
-        await sendMsg(chatId, '📅 ¿Qué día tienes disponibilidad para la instalación? (Ej: mañana, el jueves, el 30 de mayo)\n\n(Nota: Será a acordar con un asesor)');
-        return;
-      }
-      if (no) {
+    if (session.state === 'awaiting_contract_name') {
+      const d = session.data || {};
+      if (text === 'solo_info' || normalizeText(text).match(/\b(solo info|no gracias|solo informacion|nada mas|despues|luego)\b/)) {
         clearSession(chatId);
-        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-        await sendMsg(chatId, 'Okej. ¿Qué necesitas hacer?');
-        await sendReplyObject(buildMenuReply());
+        await sendMsg(chatId, '¡Sin problema! Si decides contratar, aquí estaré. 😊');
         return;
       }
-      await sendMsg(chatId, '¿Quieres agendar ahora o prefieres hacerlo después?');
+      updateProfile(chatId, { name: text });
+      const planLine = d.selectedPlan ? `Plan de interés: ${d.selectedPlan} (${d.selectedSpeed} — ${d.selectedPrice})` : '';
+      try {
+        await notifyAgentRequest(chatId, [
+          `SOLICITUD DE INSTALACIÓN — NUEVO CLIENTE`,
+          `Nombre: ${text}`,
+          `Zona: ${d.location || 'no especificada'}`,
+          planLine
+        ].filter(Boolean).join('\n'), d.location || '');
+      } catch (e) { console.error('Contract notify error:', e.message); }
+      clearSession(chatId);
+      await sendMsg(chatId, `✅ ¡Listo, ${text}! Un asesor de León Telecom te contactará pronto por este WhatsApp para coordinar los detalles de tu instalación. 📞`);
       return;
     }
 
