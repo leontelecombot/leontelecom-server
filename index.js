@@ -274,6 +274,9 @@ function isAgentRequest(text) {
 
 function wantsToCancel(text) {
   const v = normalizeText(text);
+  // Don't cancel if the message actually contains a real question or content
+  const hasQuestion = /\?|cuantos|cuanto|como |que |cual|donde|cuando|dispositiv|aparato|velocid|precio|plan|mbps|puede|incluye|funciona|instala|cubre|diferencia/.test(v);
+  if (hasQuestion) return false;
   return /\b(no quiero|no mejor|cancelar|cancel|volver|atras|menu|no eso no|no gracias|equivoque|me equivoque|no es eso|otra cosa|nada|salir|regresar)\b/.test(v);
 }
 
@@ -1619,8 +1622,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_camera_needs') {
-      // Exit conditions
-      const goodbye = normalizeText(text).match(/\b(no gracias|no|ya no|solo preguntaba|nada|gracias nada mas|es todo)\b/);
+      // Exit conditions — only if no real question in the message
+      const hasRealQ = /\?|cuantos|cuanto|como |que |cual|dispositiv|camara|modelo|precio|diferencia|funciona|puede/.test(normalizeText(text));
+      const goodbye = !hasRealQ && normalizeText(text).match(/\b(no gracias|no|ya no|solo preguntaba|nada|gracias nada mas|es todo)\b/);
       if (goodbye) {
         clearSession(chatId);
         await sendMsg(chatId, 'Con gusto. Cuando guste nos contacta para cotizar. 😊');
@@ -1755,7 +1759,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_plan_selection') {
-      const notInterested = normalizeText(text).match(/\b(no|solo preguntaba|solo info|solo queria|nada|luego|despues|no gracias)\b/);
+      const hasQuestion = /\?|cuantos|cuanto|como |que |cual|dispositiv|aparato|velocid|precio|mbps|puede|incluye|funciona|instala|diferencia/.test(normalizeText(text));
+      const notInterested = !hasQuestion && normalizeText(text).match(/\b(no|solo preguntaba|solo info|solo queria|nada|luego|despues|no gracias)\b/);
       if (notInterested) {
         clearSession(chatId);
         await sendMsg(chatId, 'Sin problema, aquí estamos cuando quieras. 😊');
