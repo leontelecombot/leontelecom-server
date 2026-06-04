@@ -39,7 +39,7 @@ const WISPHUB_API_URL = process.env.WISPHUB_API_URL || 'https://api.wisphub.net'
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'leontelecom-verify';
-const WHATSAPP_API_VERSION = 'v21.0';
+const WHATSAPP_API_VERSION = 'v22.0';
 
 const LOCATIONS = {
   huitzo: 'Huitzo',
