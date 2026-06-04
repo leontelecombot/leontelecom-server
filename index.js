@@ -1779,6 +1779,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
   const from = msg.from;
   const contactName = value?.contacts?.[0]?.profile?.name || 'Usuario';
 
+  console.log(`[WhatsApp] Incoming: type=${msg.type} from=${from} name=${contactName}`);
+
   if (msg.type === 'image') {
     try {
       const imageBase64 = await downloadWhatsAppMedia(msg.image?.id);
