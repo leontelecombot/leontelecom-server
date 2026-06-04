@@ -10,12 +10,11 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
 const SYSTEM_PROMPT = [
-  'Eres Leo, asistente de León Telecom.',
-  'Hablas como una persona real: casual, directo, sin sonar a robot ni a call center.',
-  'Tono amigable y mexicano, como si hablaras con un conocido.',
-  'Nunca empieces con "¡Hola!" ni con frases genéricas.',
-  'Responde en español. Máximo 2 oraciones por mensaje, sin rodeos.',
-  'Si no puedes resolver algo, di que un asesor los contactará pronto.'
+  'Eres Leo, asistente virtual de León Telecom.',
+  'Tono: profesional, amable y directo. Como un buen agente de atención al cliente.',
+  'Nunca uses slang, groserías ni expresiones muy informales.',
+  'Responde en español, máximo 2 oraciones, sin rodeos ni frases de relleno.',
+  'Si no puedes resolver algo, indica que un asesor se pondrá en contacto.'
 ].join(' ');
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai-compatible';
@@ -599,8 +598,8 @@ async function callMainAI(chatId, userText) {
   const wirelessPlans = WIRELESS_PLANS.map(p => `${p.speed}/${p.price}`).join(', ');
 
   const systemPrompt = [
-    'Eres Leo, asistente de León Telecom (ISP en Oaxaca, México).',
-    'Tono: casual, mexicano, como un conocido. Sin frases de call center. Máximo 2-3 oraciones. Sin markdown.',
+    'Eres Leo, asistente virtual de León Telecom (ISP en Oaxaca, México).',
+    'Tono: profesional y amable, como un buen agente de atención al cliente. Sin slang ni expresiones informales. Máximo 2-3 oraciones. Sin markdown.',
     '',
     'SERVICIOS:',
     `Huitzo (fibra óptica): ${fiberPlans}`,
@@ -749,7 +748,7 @@ function buildFallbackReply(text) {
 function buildMenuReply() {
   return {
     text: [
-      '¿En qué te puedo ayudar? Responde con el número:',
+      '¿En qué puedo ayudarte? Elige una opción:',
       '',
       '1️⃣ Ver planes de internet',
       '2️⃣ Soporte técnico',
@@ -1589,8 +1588,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
       const knownProfile = getProfile(chatId);
       const knownName = knownProfile?.name && knownProfile.name !== 'Usuario' ? knownProfile.name : null;
-      const menuText = [
-        '',
+      const menuOptions = [
         '1️⃣ Ver planes de internet',
         '2️⃣ Soporte técnico',
         '3️⃣ Ya soy cliente',
@@ -1598,9 +1596,26 @@ async function handleChatMessage(chatId, text, sendMsg) {
         '5️⃣ Migrar mi servicio'
       ].join('\n');
       if (knownName) {
-        await sendMsg(chatId, `¡Hola de nuevo, ${knownName}! ¿En qué te puedo ayudar?\n${menuText}`);
+        await sendMsg(chatId, [
+          `Bienvenido de vuelta, ${knownName}. 👋`,
+          '¿En qué puedo ayudarte hoy?',
+          '',
+          menuOptions
+        ].join('\n'));
       } else {
-        await sendMsg(chatId, `Hola, soy Leo de León Telecom 👋\n¿En qué te puedo ayudar?\n${menuText}`);
+        await sendMsg(chatId, [
+          'Hola, soy Leo, el asistente virtual de León Telecom. 👋',
+          '',
+          'Puedo ayudarte con:',
+          '• Información de planes y precios',
+          '• Reportar fallas técnicas',
+          '• Consultas sobre tu servicio activo',
+          '• Conectarte con un asesor',
+          '',
+          'Elige una opción o escribe tu consulta:',
+          '',
+          menuOptions
+        ].join('\n'));
       }
       return;
     }
