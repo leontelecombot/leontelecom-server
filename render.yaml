@@ -7,25 +7,38 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     envVars:
-      - key: TELEGRAM_BOT_TOKEN
+      # ---- WhatsApp Cloud API ----
+      - key: WHATSAPP_PHONE_NUMBER_ID
         sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        value: leontelecom-verify
+
+      # ---- AI (Claude/Anthropic) ----
+      - key: AI_PROVIDER
+        value: anthropic
+      - key: AI_MODEL
+        value: claude-haiku-4-5-20251001
       - key: AI_API_KEY
         sync: false
-      - key: AI_PROVIDER
-        value: openai-compatible
-      - key: AI_BASE_URL
-        value: https://api.groq.com/openai/v1
-      - key: AI_MODEL
-        value: llama-3.1-8b-instant
-      - key: DEMO_MODE
-        value: "true"
-      - key: FIBER_PLAN_MEDIA_URL
-        value: https://drive.google.com/uc?export=view&id=13ho0x5wUS_Uus5MhJrNq0blMOzk39Ffn
-      - key: WIRELESS_PLAN_MEDIA_URL
-        value: https://drive.google.com/uc?export=view&id=1Zc5Xg8W4S0izF088yA5k32WyI8i83sFO
-      - key: LEON_CONTACT_NUMBER
-        value: "9511603125"
+
+      # ---- Telegram (opcional, notificaciones internas) ----
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
       - key: AGENT_NOTIFY_CHAT_ID
         value: ""
       - key: AGENT_NOTIFY_WEBHOOK_URL
         value: ""
+
+      # ---- Media ----
+      - key: FIBER_PLAN_MEDIA_URL
+        value: https://drive.google.com/uc?export=view&id=13ho0x5wUS_Uus5MhJrNq0blMOzk39Ffn
+      - key: WIRELESS_PLAN_MEDIA_URL
+        value: https://drive.google.com/uc?export=view&id=1Zc5Xg8W4S0izF088yA5k32WyI8i83sFO
+
+      # ---- Admin ----
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: LEON_CONTACT_NUMBER
+        value: "9511603125"
