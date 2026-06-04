@@ -88,6 +88,9 @@ function updateProfile(chatId, updates) {
 // Agent takeover — pauses bot for a specific client chat
 const pausedChats = new Map(); // Map<chatId, { pausedUntil: Date }>
 
+// Active relay: which client the agent is currently chatting through the bot
+const agentActiveCases = new Map(); // Map<agentNumber, clientId>
+
 function isPaused(chatId) {
   const p = pausedChats.get(String(chatId));
   if (!p) return false;
@@ -1267,53 +1270,72 @@ async function handleAgentCommand(agentNumber, text) {
     return n;
   }
 
-  // ATENDER [número] — toma el control del chat
+  // ATENDER [número] — toma el control y activa el relay
   const atenderMatch = v.match(/^ATENDER\s+(\d+)/);
   if (atenderMatch) {
     const clientId = normalizeClientNumber(atenderMatch[1]);
-    pauseChat(clientId, 2);
+    pauseChat(clientId, 4);
+    agentActiveCases.set(agentNumber, clientId);
+    const clientProfile = getProfile(clientId);
+    const clientName = clientProfile?.name && clientProfile.name !== 'Usuario' ? clientProfile.name : clientId;
     try {
       await sendWhatsAppMessage(clientId,
-        'Un asesor de León Telecom ya está atendiendo tu caso y se pondrá en contacto contigo en breve. 📱'
+        'Un asesor de León Telecom ya está en línea y te atenderá directamente. 📱'
       );
     } catch (e) { console.error('[Agent] Notify client error:', e.message); }
     await sendWhatsAppMessage(agentNumber, [
-      `✅ Tomaste el caso de ${clientId}.`,
-      'El bot está pausado para ese cliente por 2 horas.',
+      `✅ Caso activo: ${clientName} (${clientId})`,
       '',
-      `Para reactivar el bot: LIBERAR ${clientId}`
+      'Todo lo que escribas aquí se reenvía al cliente.',
+      'Lo que responda el cliente te llegará a ti.',
+      '',
+      `Para cerrar el caso: LIBERAR ${clientId}`
     ].join('\n'));
     return;
   }
 
-  // LIBERAR [número] — devuelve el control al bot
+  // LIBERAR [número] — cierra el relay y devuelve al bot
   const liberarMatch = v.match(/^LIBERAR\s+(\d+)/);
   if (liberarMatch) {
     const clientId = normalizeClientNumber(liberarMatch[1]);
     unpauseChat(clientId);
+    agentActiveCases.delete(agentNumber);
     try {
       await sendWhatsAppMessage(clientId,
-        'El asistente virtual está de nuevo disponible. ¿En qué más puedo ayudarte?'
+        'El asesor ha finalizado la atención. El asistente virtual queda a tus órdenes. ¿En qué más puedo ayudarte?'
       );
     } catch (e) {}
-    await sendWhatsAppMessage(agentNumber, `✅ Bot reactivado para ${clientId}.`);
+    await sendWhatsAppMessage(agentNumber, `✅ Caso cerrado. Bot reactivado para ${clientId}.`);
     return;
   }
 
-  // PAUSADOS — ver chats pausados activos
+  // PAUSADOS — ver casos activos
   if (v === 'PAUSADOS') {
     const activos = [];
     for (const [chatId, data] of pausedChats.entries()) {
       if (new Date() < data.pausedUntil) {
         const mins = Math.round((data.pausedUntil - new Date()) / 60000);
-        activos.push(`• ${chatId} (${mins} min restantes)`);
+        const cp = getProfile(chatId);
+        const name = cp?.name && cp.name !== 'Usuario' ? cp.name : chatId;
+        activos.push(`• ${name} — ${chatId} (${mins} min)`);
       }
     }
     await sendWhatsAppMessage(agentNumber,
       activos.length > 0
-        ? `Chats pausados:\n${activos.join('\n')}`
-        : 'No hay chats pausados actualmente.'
+        ? `Casos activos:\n${activos.join('\n')}`
+        : 'No hay casos activos actualmente.'
     );
+    return;
+  }
+
+  // Mensaje normal mientras hay un caso activo → relay al cliente
+  const activeClient = agentActiveCases.get(agentNumber);
+  if (activeClient && !v.startsWith('ATENDER') && !v.startsWith('LIBERAR') && v !== 'PAUSADOS') {
+    try {
+      await sendWhatsAppMessage(activeClient, text.trim());
+    } catch (e) {
+      await sendWhatsAppMessage(agentNumber, `❌ No se pudo enviar al cliente: ${e.message}`);
+    }
     return;
   }
 
@@ -1321,11 +1343,11 @@ async function handleAgentCommand(agentNumber, text) {
   await sendWhatsAppMessage(agentNumber, [
     '🤖 Comandos disponibles:',
     '',
-    'ATENDER [número] → Tomar control del chat',
-    'LIBERAR [número] → Devolver al bot',
-    'PAUSADOS → Ver chats pausados',
+    'ATENDER [número] → Tomar un caso (activa relay)',
+    'LIBERAR [número] → Cerrar caso y devolver al bot',
+    'PAUSADOS → Ver casos activos',
     '',
-    'Ejemplo: ATENDER 529516549145'
+    'Mientras tienes un caso activo, todo lo que escribas se reenvía al cliente.'
   ].join('\n'));
 }
 
@@ -1359,9 +1381,17 @@ REGLA DE ORO: 1-3 cámaras → Tapo. 4+ cámaras o negocio → Hikvision + visit
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
-    // If agent has taken over this chat, bot stays silent
+    // If agent has taken over this chat, relay client message to agent
     if (isPaused(chatId)) {
-      console.log(`[Bot] Chat ${chatId} pausado (asesor activo), ignorando mensaje`);
+      if (AGENT_WHATSAPP_NUMBER) {
+        const cp = getProfile(chatId);
+        const clientName = cp?.name && cp.name !== 'Usuario' ? cp.name : chatId;
+        try {
+          await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER,
+            `💬 ${clientName}:\n${text}`
+          );
+        } catch (e) { console.error('[Relay] Error forwarding to agent:', e.message); }
+      }
       return;
     }
 
@@ -2060,11 +2090,12 @@ app.post('/webhook/whatsapp', async (req, res) => {
     const text = msg.text?.body?.trim();
     if (!text) return;
 
-    // If message is FROM the agent number → handle as agent command, not client
+    // If message is FROM the agent → route to agent handler (commands or relay)
     if (AGENT_WHATSAPP_NUMBER && from === AGENT_WHATSAPP_NUMBER) {
       await handleAgentCommand(from, text);
       return;
     }
+
 
     await handleChatMessage(from, text, sendWhatsAppMessage);
     return;
