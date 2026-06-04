@@ -591,6 +591,11 @@ async function callAI(systemContent, userContent, options = {}) {
   return payload.choices?.[0]?.message?.content || null;
 }
 
+function agentNotifiedMsg(notified, name, type = 'asesor') {
+  if (notified) return `Listo, ${name}. Ya le avisamos a un ${type}, te contactarán pronto. 📱`;
+  return `Anotado, ${name}. En breve un ${type} de León Telecom se pondrá en contacto contigo. 📱`;
+}
+
 // ==================== AI BRAIN ====================
 // Main intelligence: Claude with full conversation history decides what to do.
 // Returns { message, action, location }
@@ -1328,8 +1333,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
           setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt());
         } else if (aiResult.action === 'request_agent') {
           if (knownName) {
-            try { await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), ''); } catch (e) {}
-            await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
+            const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), '').catch(() => false);
+            await sendMsg(chatId, agentNotifiedMsg(notified, knownName));
           } else {
             setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿A qué nombre te contactamos?');
           }
@@ -1469,7 +1474,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         ].filter(Boolean).join('\n'), d.location || '');
       } catch (e) { console.error('Contract notify error:', e.message); }
       clearSession(chatId);
-      await sendMsg(chatId, `Listo ${text}, ya le avisamos a un asesor. Te van a contactar aquí por WhatsApp para coordinar la instalación. 📞`);
+      await sendMsg(chatId, `Listo, ${text}. En breve un asesor de León Telecom te contactará por aquí para coordinar tu instalación. 📞`);
       return;
     }
 
@@ -1608,10 +1613,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // If we already have context from initialRequest, notify immediately
       if (d.initialRequest) {
         clearSession(chatId);
-        try {
-          await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${text}`, `Motivo: ${d.initialRequest}`].join('\n'), '');
-        } catch (e) { console.error('Agent notification error:', e.message); }
-        await sendMsg(chatId, `Listo, ${text}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
+        const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${text}`, `Motivo: ${d.initialRequest}`].join('\n'), '').catch(() => false);
+        await sendMsg(chatId, agentNotifiedMsg(notified, text));
       } else {
         setSession(chatId, { state: 'awaiting_agent_need', data: { ...d, agentName: text } });
         await sendMsg(chatId, '¿En qué te podemos ayudar?');
@@ -1622,10 +1625,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_agent_need') {
       const d = session.data || {};
       clearSession(chatId);
-      try {
-        await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${d.agentName}`, `Necesidad: ${text}`].join('\n'), '');
-      } catch (e) { console.error('Agent notification error:', e.message); }
-      await sendMsg(chatId, `Listo, ${d.agentName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
+      const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${d.agentName}`, `Necesidad: ${text}`].join('\n'), '').catch(() => false);
+      await sendMsg(chatId, agentNotifiedMsg(notified, d.agentName));
       return;
     }
 
