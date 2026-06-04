@@ -1302,6 +1302,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const aiResult = await callMainAI(chatId, text);
       if (aiResult?.message) {
         await sendMsg(chatId, aiResult.message);
+        const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
         if (aiResult.action === 'show_plans') {
           const loc = aiResult.location ? detectLocation(aiResult.location) || aiResult.location : null;
           if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
@@ -1309,7 +1310,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
         } else if (aiResult.action === 'show_support') {
           setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt());
         } else if (aiResult.action === 'request_agent') {
-          setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?');
+          if (knownName) {
+            try { await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), ''); } catch (e) {}
+            await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
+          } else {
+            setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿A qué nombre te contactamos?');
+          }
         }
       } else {
         await sendReplyObject(buildFallbackReply(text));
@@ -1503,15 +1509,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_report') {
-      // Map button IDs to human-readable descriptions
-      const problemMap = { sin_internet: 'Sin internet', internet_lento: 'Internet muy lento', va_y_viene: 'El internet va y viene (intermitente)' };
+      const problemMap = { sin_internet: 'Sin internet', internet_lento: 'Internet muy lento', va_y_viene: 'Internet intermitente (va y viene)' };
       const problemDescription = problemMap[text] || text;
 
-      // Give AI-powered initial troubleshooting advice
       let advice = null;
       try {
         advice = await callAI(
-          'Eres Leo de León Telecom. El cliente tiene un problema con su internet. Da 1-2 pasos concretos y simples para intentar solucionarlo (ej: reiniciar router, revisar cables). Tono casual mexicano. Máximo 2 oraciones cortas. NO digas que ya viene un técnico aún.',
+          'Eres Leo de León Telecom. Da 1-2 pasos concretos para intentar solucionar el problema antes de que llegue el técnico. Tono profesional y amable. Máximo 2 oraciones. Solo texto, sin markdown.',
           `Problema: ${problemDescription}`,
           { temperature: 0.4, maxTokens: 120 }
         );
@@ -1519,8 +1523,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
       if (advice) await sendMsg(chatId, advice);
 
-      setSession(chatId, { state: 'awaiting_report_name', data: { problemDescription } });
-      await sendMsg(chatId, '¿A qué nombre está el servicio?');
+      // If we already know the name, notify immediately
+      const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+      if (knownName) {
+        try {
+          await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${knownName}`, `Problema: ${problemDescription}`].join('\n'), '');
+        } catch (e) { console.error('Report notify error:', e.message); }
+        clearSession(chatId);
+        await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un técnico, te contactarán pronto por aquí. 🔧`);
+      } else {
+        setSession(chatId, { state: 'awaiting_report_name', data: { problemDescription } });
+        await sendMsg(chatId, '¿A qué nombre está el servicio?');
+      }
       return;
     }
 
@@ -1528,36 +1542,37 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const d = session.data || {};
       updateProfile(chatId, { name: text });
       try {
-        await notifyAgentRequest(chatId, [
-          `REPORTE DE FALLA TÉCNICA`,
-          `Nombre: ${text}`,
-          `Problema: ${d.problemDescription}`
-        ].join('\n'), '');
+        await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${text}`, `Problema: ${d.problemDescription}`].join('\n'), '');
       } catch (e) { console.error('Report notify error:', e.message); }
       clearSession(chatId);
-      await sendMsg(chatId, `Listo ${text}, ya le avisamos a un técnico. Te van a contactar pronto por aquí. 🔧`);
+      await sendMsg(chatId, `Listo, ${text}. Ya le avisamos a un técnico, te contactarán pronto por aquí. 🔧`);
       return;
     }
 
     if (session.state === 'awaiting_agent_name') {
       const d = session.data || {};
       updateProfile(chatId, { name: text });
-      setSession(chatId, { state: 'awaiting_agent_need', data: { ...d, agentName: text } });
-      await sendMsg(chatId, '¿En qué te podemos ayudar?');
+      // If we already have context from initialRequest, notify immediately
+      if (d.initialRequest) {
+        clearSession(chatId);
+        try {
+          await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${text}`, `Motivo: ${d.initialRequest}`].join('\n'), '');
+        } catch (e) { console.error('Agent notification error:', e.message); }
+        await sendMsg(chatId, `Listo, ${text}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
+      } else {
+        setSession(chatId, { state: 'awaiting_agent_need', data: { ...d, agentName: text } });
+        await sendMsg(chatId, '¿En qué te podemos ayudar?');
+      }
       return;
     }
 
     if (session.state === 'awaiting_agent_need') {
       const d = session.data || {};
       clearSession(chatId);
-      const notifyText = [
-        `SOLICITUD DE ASESOR`,
-        `Nombre: ${d.agentName}`,
-        `Necesidad: ${text}`,
-        d.initialRequest && d.initialRequest !== text ? `Contexto: ${d.initialRequest}` : ''
-      ].filter(Boolean).join('\n');
-      try { await notifyAgentRequest(chatId, notifyText, ''); } catch (e) { console.error('Agent notification error:', e.message); }
-      await sendMsg(chatId, `Listo ${d.agentName}, ya le avisamos a un asesor. Te contactarán aquí en un momento. 📱`);
+      try {
+        await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${d.agentName}`, `Necesidad: ${text}`].join('\n'), '');
+      } catch (e) { console.error('Agent notification error:', e.message); }
+      await sendMsg(chatId, `Listo, ${d.agentName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
       return;
     }
 
@@ -1624,25 +1639,31 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const aiResult = await callMainAI(chatId, text);
     if (aiResult?.message) {
       await sendMsg(chatId, aiResult.message);
+      const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
       if (aiResult.action === 'show_plans') {
         const loc = aiResult.location ? detectLocation(aiResult.location) || aiResult.location : null;
-        if (loc) {
-          updateProfile(chatId, { location: loc });
-          setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } });
-          await sendReplyObject(buildPlanReplyForLocation(loc));
-        } else {
-          setSession(chatId, { state: 'awaiting_location', data: {} });
-          await sendReplyObject(buildLocationPrompt());
-        }
+        if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
+        else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
       } else if (aiResult.action === 'show_support') {
-        setSession(chatId, { state: 'awaiting_report', data: {} });
-        await sendReplyObject(buildReportPrompt());
+        if (knownName) {
+          // Know who they are → skip to problem type buttons
+          setSession(chatId, { state: 'awaiting_report', data: {} });
+          await sendReplyObject(buildReportPrompt());
+        } else {
+          setSession(chatId, { state: 'awaiting_report', data: {} });
+          await sendReplyObject(buildReportPrompt());
+        }
       } else if (aiResult.action === 'request_agent') {
-        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
-        await sendMsg(chatId, '¿Cuál es tu nombre?');
+        if (knownName) {
+          // Know who they are + have context → notify immediately
+          try { await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), ''); } catch (e) {}
+          await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
+        } else {
+          setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
+          await sendMsg(chatId, '¿A qué nombre te contactamos?');
+        }
       }
     } else {
-      // AI unavailable fallback
       setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
       await sendReplyObject(buildMenuReply());
     }
