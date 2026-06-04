@@ -343,7 +343,8 @@ function searchAllNeighborhoods(text) {
 
 function isGreetingMessage(text) {
   const value = normalizeText(text).trim();
-  return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)(\b|\s|,|!|\.)/i.test(value);
+  // Only match PURE greetings — "hola" alone, not "hola tengo un problema"
+  return /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal)\s*[,!.👋🙏]*\s*$/.test(value);
 }
 
 function isPlanListRequest(text) {
@@ -635,12 +636,12 @@ async function callMainAI(chatId, userText) {
     '',
     'Valores de "action":',
     '"show_plans" → quiere ver planes, precios, contratar, o pregunta por internet',
-    '"show_support" → tiene falla, sin internet, lento, problema técnico',
-    '"request_agent" → quiere hablar con persona, asesor, o llamar',
-    'null → solo conversa, responde su pregunta con la info disponible',
+    '"show_support" → tiene falla técnica, sin internet, lento, cables dañados, problema con el servicio',
+    '"request_agent" → quiere hablar con persona/asesor/técnico/humano. Mensaje: breve confirmación, SIN preguntar zona ni más datos.',
+    'null → solo conversa o hace una pregunta; responde directo con la info disponible',
     '',
     '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
-    '"neighborhood" → colonia/barrio/sección mencionada (ej: "la tercera", "colonia centro", "barrio bajo"), o null'
+    '"neighborhood" → colonia/barrio/sección mencionada, o null'
   ].filter(Boolean).join('\n');
 
   try {
@@ -1320,28 +1321,24 @@ async function handleChatMessage(chatId, text, sendMsg) {
         });
         return;
       }
-      // Nothing matched — let AI handle it
-      const aiResult = await callMainAI(chatId, text);
-      if (aiResult?.message) {
-        await sendMsg(chatId, aiResult.message);
-        const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
-        if (aiResult.action === 'show_plans') {
-          const loc = aiResult.location ? detectLocation(aiResult.location) || aiResult.location : null;
-          if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
-          else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
-        } else if (aiResult.action === 'show_support') {
-          setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt());
-        } else if (aiResult.action === 'request_agent') {
-          if (knownName) {
-            const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), '').catch(() => false);
-            await sendMsg(chatId, agentNotifiedMsg(notified, knownName));
-          } else {
-            setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿A qué nombre te contactamos?');
-          }
-        }
-      } else {
-        await sendReplyObject(buildFallbackReply(text));
-      }
+      // Nothing matched — let AI handle it (same logic as default handler)
+      const aiResult2 = await callMainAI(chatId, text);
+      if (!aiResult2) { await sendReplyObject(buildFallbackReply(text)); return; }
+      const knownName2 = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+      if (aiResult2.action === 'show_plans') {
+        if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
+        const loc = aiResult2.location ? detectLocation(aiResult2.location) || aiResult2.location : null;
+        if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
+        else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
+      } else if (aiResult2.action === 'show_support') {
+        if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
+        setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
+        if (!knownName2) await sendReplyObject(buildReportPrompt());
+        else { const n2 = await notifyAgentRequest(chatId, [`REPORTE`, `Nombre: ${knownName2}`, `Problema: ${text}`].join('\n'), '').catch(() => false); clearSession(chatId); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2, 'técnico')); }
+      } else if (aiResult2.action === 'request_agent') {
+        if (knownName2) { const n2 = await notifyAgentRequest(chatId, [`SOLICITUD ASESOR`, `Nombre: ${knownName2}`, `Motivo: ${text}`].join('\n'), '').catch(() => false); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2)); }
+        else { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿A qué nombre te contactamos?'); }
+      } else { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); }
       return;
     }
 
@@ -1689,41 +1686,47 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
-    // No session, no greeting — use Claude as the brain
+    // No session — Claude as the brain
     const aiResult = await callMainAI(chatId, text);
-    if (aiResult?.message) {
-      await sendMsg(chatId, aiResult.message);
-      const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
-      if (aiResult.action === 'show_plans') {
-        const loc = aiResult.location ? detectLocation(aiResult.location) || aiResult.location : null;
-        if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
-        else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
-      } else if (aiResult.action === 'show_support') {
-        // Check if neighborhood was mentioned — confirm before proceeding
-        const detectedNbhd = aiResult.neighborhood
-          ? (searchAllNeighborhoods(aiResult.neighborhood) || searchAllNeighborhoods(text))
-          : searchAllNeighborhoods(text);
-        if (detectedNbhd) {
-          setSession(chatId, { state: 'awaiting_neighborhood_confirm', data: { problemDescription: text, detectedNeighborhood: detectedNbhd.name, detectedZone: detectedNbhd.zone } });
-          await sendMsg(chatId, `¿La ubicación es ${detectedNbhd.name}, ${detectedNbhd.zone}?`, [], { buttons: [{ id: 'si_ubicacion', title: 'Sí, es ahí' }, { id: 'no_ubicacion', title: 'No, es otra' }] });
-        } else {
-          setSession(chatId, { state: 'awaiting_report', data: {} });
-          await sendReplyObject(buildReportPrompt());
-        }
-      } else if (aiResult.action === 'request_agent') {
-        if (knownName) {
-          const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), '').catch(() => false);
-          await sendMsg(chatId, notified
-            ? `Listo, ${knownName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`
-            : `Anotado, ${knownName}. En un momento un asesor se pondrá en contacto contigo. 📱`);
-        } else {
-          setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
-          await sendMsg(chatId, '¿A qué nombre te contactamos?');
-        }
+    if (!aiResult) { setSession(chatId, { state: 'awaiting_menu_choice', data: {} }); await sendReplyObject(buildMenuReply()); return; }
+
+    const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+
+    if (aiResult.action === 'show_plans') {
+      if (aiResult.message) await sendMsg(chatId, aiResult.message);
+      const loc = aiResult.location ? detectLocation(aiResult.location) || aiResult.location : null;
+      if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
+      else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
+
+    } else if (aiResult.action === 'show_support') {
+      const detectedNbhd = (aiResult.neighborhood ? searchAllNeighborhoods(aiResult.neighborhood) : null) || searchAllNeighborhoods(text);
+      if (aiResult.message) await sendMsg(chatId, aiResult.message);
+      if (detectedNbhd) {
+        setSession(chatId, { state: 'awaiting_neighborhood_confirm', data: { problemDescription: text, detectedNeighborhood: detectedNbhd.name, detectedZone: detectedNbhd.zone } });
+        await sendMsg(chatId, `¿La ubicación es ${detectedNbhd.name}, ${detectedNbhd.zone}?`, [], { buttons: [{ id: 'si_ubicacion', title: 'Sí, es ahí' }, { id: 'no_ubicacion', title: 'No, es otra' }] });
+      } else if (knownName) {
+        const notified = await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${knownName}`, `Problema: ${text}`].join('\n'), '').catch(() => false);
+        clearSession(chatId);
+        await sendMsg(chatId, agentNotifiedMsg(notified, knownName, 'técnico'));
+      } else {
+        setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
+        await sendReplyObject(buildReportPrompt());
       }
+
+    } else if (aiResult.action === 'request_agent') {
+      if (knownName) {
+        // ONE message only — skip AI response to avoid double message
+        const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), '').catch(() => false);
+        await sendMsg(chatId, agentNotifiedMsg(notified, knownName));
+      } else {
+        if (aiResult.message) await sendMsg(chatId, aiResult.message);
+        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
+        await sendMsg(chatId, '¿A qué nombre te contactamos?');
+      }
+
     } else {
-      setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-      await sendReplyObject(buildMenuReply());
+      // null — just the AI response
+      if (aiResult.message) await sendMsg(chatId, aiResult.message);
     }
   } catch (error) {
     console.error('Message handling error:', error.message);
