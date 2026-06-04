@@ -320,13 +320,25 @@ function parseDayToDate(dayText) {
 
 function findNeighborhood(text, location) {
   if (!location || !NEIGHBORHOODS[location.toLowerCase()]) return null;
-  
   const value = normalizeText(text).toLowerCase().trim();
   const neighborhoods = NEIGHBORHOODS[location.toLowerCase()];
-  
-  // Find best match
   const match = neighborhoods.find(n => normalizeText(n).includes(value) || value.includes(normalizeText(n).split(' ')[0]));
   return match ? { name: match, location } : null;
+}
+
+// Search neighborhoods across ALL zones — returns best match {name, zone} or null
+function searchAllNeighborhoods(text) {
+  const value = normalizeText(text);
+  for (const [zoneKey, neighborhoods] of Object.entries(NEIGHBORHOODS)) {
+    for (const n of neighborhoods) {
+      const normalN = normalizeText(n);
+      const nWords = normalN.split(' ').filter(w => w.length > 3);
+      if (nWords.some(w => value.includes(w)) || normalN.includes(value)) {
+        return { name: n, zone: LOCATIONS[zoneKey] || zoneKey };
+      }
+    }
+  }
+  return null;
 }
 
 function isGreetingMessage(text) {
@@ -614,7 +626,7 @@ async function callMainAI(chatId, userText) {
     '',
     'INSTRUCCIONES DE RESPUESTA:',
     'Analiza el mensaje y responde con JSON puro (sin texto extra):',
-    '{"message":"respuesta natural aquí","action":null,"location":null}',
+    '{"message":"respuesta natural aquí","action":null,"location":null,"neighborhood":null}',
     '',
     'Valores de "action":',
     '"show_plans" → quiere ver planes, precios, contratar, o pregunta por internet',
@@ -622,7 +634,8 @@ async function callMainAI(chatId, userText) {
     '"request_agent" → quiere hablar con persona, asesor, o llamar',
     'null → solo conversa, responde su pregunta con la info disponible',
     '',
-    '"location" → si mencionó zona (Huitzo/Telixtlahuaca/Suchilquitongo), ponla aquí; si no, null'
+    '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
+    '"neighborhood" → colonia/barrio/sección mencionada (ej: "la tercera", "colonia centro", "barrio bajo"), o null'
   ].filter(Boolean).join('\n');
 
   try {
@@ -634,7 +647,8 @@ async function callMainAI(chatId, userText) {
       return {
         message: String(parsed.message || '').replace(/[*_`#]/g, '').trim(),
         action: parsed.action || null,
-        location: parsed.location || null
+        location: parsed.location || null,
+        neighborhood: parsed.neighborhood || null
       };
     }
     return { message: response.replace(/[*_`#]/g, '').trim(), action: null, location: null };
@@ -835,6 +849,9 @@ async function notifyAgentRequest(chatId, userText, location = '') {
     }
   }
 
+  if (!notified) {
+    console.warn('[notify] No notification channel configured. Set AGENT_WHATSAPP_NUMBER, AGENT_NOTIFY_CHAT_ID, or AGENT_NOTIFY_WEBHOOK_URL in environment variables.');
+  }
   return notified;
 }
 
@@ -1508,6 +1525,39 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
+    if (session.state === 'awaiting_neighborhood_confirm') {
+      const d = session.data || {};
+      const yes = text === 'si_ubicacion' || normalizeText(text).match(/\b(si|sí|correcto|exacto|ese|esa|ahí)\b/);
+      const no = text === 'no_ubicacion' || normalizeText(text).match(/\b(no|incorrecto|otra|otro)\b/);
+      if (yes) {
+        updateProfile(chatId, { location: d.detectedZone });
+        const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+        if (knownName) {
+          const notified = await notifyAgentRequest(chatId, [
+            `REPORTE DE FALLA`,
+            `Nombre: ${knownName}`,
+            `Problema: ${d.problemDescription}`,
+            `Ubicación: ${d.detectedNeighborhood}, ${d.detectedZone}`
+          ].join('\n'), d.detectedZone).catch(() => false);
+          clearSession(chatId);
+          await sendMsg(chatId, notified
+            ? `Listo, ${knownName}. Ya le avisamos a un técnico con la ubicación (${d.detectedNeighborhood}). Te contactarán pronto. 🔧`
+            : `Entendido. En un momento un técnico revisará el problema en ${d.detectedNeighborhood}. 🔧`);
+        } else {
+          setSession(chatId, { state: 'awaiting_report_name', data: { problemDescription: d.problemDescription, neighborhood: d.detectedNeighborhood, zone: d.detectedZone } });
+          await sendMsg(chatId, '¿A qué nombre está el servicio?');
+        }
+      } else if (no) {
+        setSession(chatId, { state: 'awaiting_report', data: {} });
+        await sendMsg(chatId, 'Entendido. ¿Qué tipo de problema tienes con el internet?', [], {
+          buttons: [{ id: 'sin_internet', title: 'Sin internet' }, { id: 'internet_lento', title: 'Muy lento' }, { id: 'va_y_viene', title: 'Va y viene' }]
+        });
+      } else {
+        await sendMsg(chatId, '¿Es esa la ubicación correcta?', [], { buttons: [{ id: 'si_ubicacion', title: 'Sí, es ahí' }, { id: 'no_ubicacion', title: 'No, es otra' }] });
+      }
+      return;
+    }
+
     if (session.state === 'awaiting_report') {
       const problemMap = { sin_internet: 'Sin internet', internet_lento: 'Internet muy lento', va_y_viene: 'Internet intermitente (va y viene)' };
       const problemDescription = problemMap[text] || text;
@@ -1541,11 +1591,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_report_name') {
       const d = session.data || {};
       updateProfile(chatId, { name: text });
-      try {
-        await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${text}`, `Problema: ${d.problemDescription}`].join('\n'), '');
-      } catch (e) { console.error('Report notify error:', e.message); }
+      const locationLine = d.neighborhood ? `Ubicación: ${d.neighborhood}${d.zone ? ', ' + d.zone : ''}` : '';
+      const notified = await notifyAgentRequest(chatId, [
+        `REPORTE DE FALLA`, `Nombre: ${text}`, `Problema: ${d.problemDescription}`, locationLine
+      ].filter(Boolean).join('\n'), d.zone || '').catch(() => false);
       clearSession(chatId);
-      await sendMsg(chatId, `Listo, ${text}. Ya le avisamos a un técnico, te contactarán pronto por aquí. 🔧`);
+      await sendMsg(chatId, notified
+        ? `Listo, ${text}. Ya le avisamos a un técnico, te contactarán pronto. 🔧`
+        : `Anotado, ${text}. En un momento un técnico se pondrá en contacto contigo. 🔧`);
       return;
     }
 
@@ -1645,19 +1698,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
         if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
         else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
       } else if (aiResult.action === 'show_support') {
-        if (knownName) {
-          // Know who they are → skip to problem type buttons
-          setSession(chatId, { state: 'awaiting_report', data: {} });
-          await sendReplyObject(buildReportPrompt());
+        // Check if neighborhood was mentioned — confirm before proceeding
+        const detectedNbhd = aiResult.neighborhood
+          ? (searchAllNeighborhoods(aiResult.neighborhood) || searchAllNeighborhoods(text))
+          : searchAllNeighborhoods(text);
+        if (detectedNbhd) {
+          setSession(chatId, { state: 'awaiting_neighborhood_confirm', data: { problemDescription: text, detectedNeighborhood: detectedNbhd.name, detectedZone: detectedNbhd.zone } });
+          await sendMsg(chatId, `¿La ubicación es ${detectedNbhd.name}, ${detectedNbhd.zone}?`, [], { buttons: [{ id: 'si_ubicacion', title: 'Sí, es ahí' }, { id: 'no_ubicacion', title: 'No, es otra' }] });
         } else {
           setSession(chatId, { state: 'awaiting_report', data: {} });
           await sendReplyObject(buildReportPrompt());
         }
       } else if (aiResult.action === 'request_agent') {
         if (knownName) {
-          // Know who they are + have context → notify immediately
-          try { await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), ''); } catch (e) {}
-          await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`);
+          const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), '').catch(() => false);
+          await sendMsg(chatId, notified
+            ? `Listo, ${knownName}. Ya le avisamos a un asesor, te contactarán pronto. 📱`
+            : `Anotado, ${knownName}. En un momento un asesor se pondrá en contacto contigo. 📱`);
         } else {
           setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
           await sendMsg(chatId, '¿A qué nombre te contactamos?');
