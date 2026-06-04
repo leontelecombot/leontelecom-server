@@ -1236,11 +1236,11 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
 
 const MENU_LIST_ITEMS = [
   { id: '1', title: 'Ver planes de internet' },
-  { id: '6', title: 'Cámaras de seguridad' },
-  { id: '4', title: 'Soporte técnico' },
-  { id: '2', title: 'Ya soy cliente' },
-  { id: '3', title: 'Hablar con un asesor' },
-  { id: '5', title: 'Migrar mi servicio' }
+  { id: '2', title: 'Cámaras de seguridad' },
+  { id: '3', title: 'Soporte técnico' },
+  { id: '4', title: 'Ya soy cliente' },
+  { id: '5', title: 'Hablar con un asesor' },
+  { id: '6', title: 'Migrar mi servicio' }
 ];
 
 const CAMERA_KNOWLEDGE = `
@@ -1286,37 +1286,22 @@ async function handleChatMessage(chatId, text, sendMsg) {
     function parseMenuChoice(input) {
       const v = normalizeText(input);
       if (/^1$|^1\b|\buno\b|ver planes|planes|paquetes|contratar/.test(v)) return 1;
-      if (/^2$|^2\b|\bdos\b|ya soy cliente|tengo un plan|soy cliente/.test(v)) return 2;
-      if (/^3$|^3\b|\btres\b|hablar con|asesor|agente/.test(v)) return 3;
-      if (/^4$|^4\b|\bcuatro\b|reportar|problema|reporte|soporte|tecnico|falla/.test(v)) return 4;
-      if (/^5$|^5\b|\bcinco\b|migrar|migracion|migraci/.test(v)) return 5;
-      if (/^6$|^6\b|\bseis\b|camara|camaras|videovigilancia|seguridad|cctv/.test(v)) return 6;
+      if (/^2$|^2\b|\bdos\b|camara|camaras|videovigilancia|cctv/.test(v)) return 2;
+      if (/^3$|^3\b|\btres\b|reportar|problema|reporte|soporte|tecnico|falla/.test(v)) return 3;
+      if (/^4$|^4\b|\bcuatro\b|ya soy cliente|tengo un plan|soy cliente/.test(v)) return 4;
+      if (/^5$|^5\b|\bcinco\b|hablar con|asesor|agente/.test(v)) return 5;
+      if (/^6$|^6\b|\bseis\b|migrar|migracion|migraci/.test(v)) return 6;
       return null;
     }
 
     // ===== INTENT INTERRUPTION LAYER =====
     const detectedChoice = parseMenuChoice(text);
     if (session.state && session.state !== 'awaiting_menu_choice' && detectedChoice !== null) {
-      if (detectedChoice === 1) {
-        setSession(chatId, { state: 'awaiting_location', data: {} });
-        await sendReplyObject(buildLocationPrompt());
-        return;
-      }
-      if (detectedChoice === 2) {
-        setSession(chatId, { state: 'awaiting_plan_name', data: {} });
-        await sendReplyObject(buildExistingCustomerReply());
-        return;
-      }
-      if (detectedChoice === 3) {
-        setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
-        await sendMsg(chatId, '¿Cuál es tu nombre?');
-        return;
-      }
-      if (detectedChoice === 4) {
-        setSession(chatId, { state: 'awaiting_report', data: {} });
-        await sendReplyObject(buildReportPrompt());
-        return;
-      }
+      if (detectedChoice === 1) { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); return; }
+      if (detectedChoice === 2) { setSession(chatId, { state: 'awaiting_camera_needs', data: {} }); await sendMsg(chatId, '¿Para qué espacio necesita las cámaras y cuántas aproximadamente?'); return; }
+      if (detectedChoice === 3) { setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt()); return; }
+      if (detectedChoice === 4) { setSession(chatId, { state: 'awaiting_plan_name', data: {} }); await sendReplyObject(buildExistingCustomerReply()); return; }
+      if (detectedChoice === 5) { setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
     }
 
     if (session.state && session.state !== 'awaiting_menu_choice') {
@@ -1349,26 +1334,22 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_menu_choice') {
       const choice = parseMenuChoice(text);
       if (choice === 1) { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); return; }
-      if (choice === 2) { setSession(chatId, { state: 'awaiting_plan_name', data: {} }); await sendReplyObject(buildExistingCustomerReply()); return; }
-      if (choice === 3) { setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
-      if (choice === 4 || text === 'sin_internet' || text === 'internet_lento' || text === 'va_y_viene') {
+      if (choice === 2) {
+        setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
+        await sendMsg(chatId, 'Con gusto te asesoramos en cámaras de seguridad. 📷\n¿Para qué espacio lo necesitas y cuántas cámaras tienes en mente?');
+        return;
+      }
+      if (choice === 3 || text === 'sin_internet' || text === 'internet_lento' || text === 'va_y_viene') {
         setSession(chatId, { state: 'awaiting_report', data: {} });
         await sendReplyObject(buildReportPrompt());
         return;
       }
+      if (choice === 4) { setSession(chatId, { state: 'awaiting_plan_name', data: {} }); await sendReplyObject(buildExistingCustomerReply()); return; }
+      if (choice === 5) { setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
       if (choice === 6) {
-        setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
-        await sendMsg(chatId, 'Con gusto te asesoramos en cámaras de seguridad. 📷\n\n¿Para qué espacio lo necesitas y cuántas cámaras tienes en mente? (Puedes describir el lugar y tu situación)');
-        return;
-      }
-      if (choice === 5) {
         setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
         await sendMsg(chatId, '🔄 Migración de servicio\n¿En cuál zona está el servicio ACTUAL?', [], {
-          buttons: [
-            { id: 'huitzo', title: 'Huitzo' },
-            { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
-            { id: 'suchilquitongo', title: 'Suchilquitongo' }
-          ]
+          buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
         });
         return;
       }
@@ -1690,17 +1671,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
         );
       } catch (e) { /* fall through */ }
 
-      if (advice) await sendMsg(chatId, advice);
-
-      // If we already know the name, notify immediately
-      const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
-      if (knownName) {
-        try {
-          await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${knownName}`, `Problema: ${problemDescription}`].join('\n'), '');
-        } catch (e) { console.error('Report notify error:', e.message); }
+      // If we already know the name: advice + notify silently (ONE message)
+      const reportKnownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+      if (reportKnownName) {
+        await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${reportKnownName}`, `Problema: ${problemDescription}`].join('\n'), '').catch(() => {});
         clearSession(chatId);
-        await sendMsg(chatId, `Listo, ${knownName}. Ya le avisamos a un técnico, te contactarán pronto por aquí. 🔧`);
+        await sendMsg(chatId, advice || `Ya avisamos al equipo técnico, ${reportKnownName}. Te contactarán pronto. 🔧`);
       } else {
+        if (advice) await sendMsg(chatId, advice);
         setSession(chatId, { state: 'awaiting_report_name', data: { problemDescription } });
         await sendMsg(chatId, '¿A qué nombre está el servicio?');
       }
@@ -1818,15 +1796,17 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     } else if (aiResult.action === 'show_support') {
       const detectedNbhd = (aiResult.neighborhood ? searchAllNeighborhoods(aiResult.neighborhood) : null) || searchAllNeighborhoods(text);
-      if (aiResult.message) await sendMsg(chatId, aiResult.message);
       if (detectedNbhd) {
+        if (aiResult.message) await sendMsg(chatId, aiResult.message);
         setSession(chatId, { state: 'awaiting_neighborhood_confirm', data: { problemDescription: text, detectedNeighborhood: detectedNbhd.name, detectedZone: detectedNbhd.zone } });
         await sendMsg(chatId, `¿La ubicación es ${detectedNbhd.name}, ${detectedNbhd.zone}?`, [], { buttons: [{ id: 'si_ubicacion', title: 'Sí, es ahí' }, { id: 'no_ubicacion', title: 'No, es otra' }] });
       } else if (knownName) {
-        const notified = await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${knownName}`, `Problema: ${text}`].join('\n'), '').catch(() => false);
+        // ONE message: AI advice already mentions to contact tech if persists. Notify silently.
+        await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${knownName}`, `Problema: ${text}`].join('\n'), '').catch(() => {});
         clearSession(chatId);
-        await sendMsg(chatId, agentNotifiedMsg(notified, knownName, 'técnico'));
+        await sendMsg(chatId, aiResult.message || `Ya avisamos al equipo técnico, ${knownName}. Te contactarán pronto.`);
       } else {
+        if (aiResult.message) await sendMsg(chatId, aiResult.message);
         setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
         await sendReplyObject(buildReportPrompt());
       }
@@ -1834,7 +1814,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     } else if (aiResult.action === 'show_cameras') {
       if (aiResult.message) await sendMsg(chatId, aiResult.message);
       setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
-      await sendMsg(chatId, 'Cuéntame: ¿para qué espacio lo necesitas y cuántas cámaras tienes en mente?');
+      await sendMsg(chatId, '¿Para qué espacio lo necesita y cuántas cámaras tiene en mente?');
 
     } else if (aiResult.action === 'request_agent') {
       if (knownName) {
