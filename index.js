@@ -10,12 +10,12 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
 const SYSTEM_PROMPT = [
-  'Eres Leo, asesor de internet para León Telecom.',
-  'Eres cálido, honesto, y enfocado en ayudar a cada cliente.',
-  'Responde siempre en español, con tono amable y directo.',
-  'Tu objetivo: que el cliente vea el servicio como la solución perfecta para su familia.',
-  'Habla solo de internet; nunca menciones otros servicios.',
-  'Si no tienes un dato, sé transparente pero mantén la confianza en la solución.'
+  'Eres Leo, asistente de León Telecom.',
+  'Hablas como una persona real: casual, directo, sin sonar a robot ni a call center.',
+  'Tono amigable y mexicano, como si hablaras con un conocido.',
+  'Nunca empieces con "¡Hola!" ni con frases genéricas.',
+  'Responde en español. Máximo 2 oraciones por mensaje, sin rodeos.',
+  'Si no puedes resolver algo, di que un asesor los contactará pronto.'
 ].join(' ');
 
 const AI_PROVIDER = process.env.AI_PROVIDER || 'openai-compatible';
@@ -1319,17 +1319,17 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const planLabel = selectedPlan ? `${selectedPlan.name} — ${selectedPlan.speed} — ${selectedPlan.price}` : '';
       setSession(chatId, { state: 'awaiting_contract_name', data: planData });
       await sendMsg(chatId,
-        `¡Excelente! 🎉${planLabel ? '\nPlan: ' + planLabel : ''}\n\n¿A qué nombre te contactamos para coordinar la instalación?`,
-        [], { buttons: [{ id: 'solo_info', title: 'Solo información' }] }
+        `¡Qué buena elección! 🎉${planLabel ? '\nPlan: ' + planLabel : ''}\n\n¿A qué nombre te contactamos para coordinar la instalación?`,
+        [], { buttons: [{ id: 'solo_preguntaba', title: 'Solo preguntaba' }] }
       );
       return;
     }
 
     if (session.state === 'awaiting_contract_name') {
       const d = session.data || {};
-      if (text === 'solo_info' || normalizeText(text).match(/\b(solo info|no gracias|solo informacion|nada mas|despues|luego)\b/)) {
+      if (text === 'solo_preguntaba' || normalizeText(text).match(/\b(solo preguntaba|solo info|no gracias|solo informacion|nada mas|despues|luego|solo queria saber|solo curiosidad)\b/)) {
         clearSession(chatId);
-        await sendMsg(chatId, '¡Sin problema! Si decides contratar, aquí estaré. 😊');
+        await sendMsg(chatId, 'Ah, sin problema 😊 Cuando quieras contratar aquí estamos, cualquier duda me dices.');
         return;
       }
       updateProfile(chatId, { name: text });
@@ -1343,7 +1343,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         ].filter(Boolean).join('\n'), d.location || '');
       } catch (e) { console.error('Contract notify error:', e.message); }
       clearSession(chatId);
-      await sendMsg(chatId, `✅ ¡Listo, ${text}! Un asesor de León Telecom te contactará pronto por este WhatsApp para coordinar los detalles de tu instalación. 📞`);
+      await sendMsg(chatId, `Listo ${text}, ya le avisamos a un asesor. Te van a contactar aquí por WhatsApp para coordinar la instalación. 📞`);
       return;
     }
 
@@ -1487,7 +1487,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         `Contexto: ${d.initialRequest || 'Sin contexto adicional'}`
       ].filter(Boolean).join('\n');
       try { await notifyAgentRequest(chatId, notifyText, d.location); } catch (e) { console.error('Agent notification error:', e.message); }
-      await sendMsg(chatId, `✅ Perfecto ${d.agentName}.\nEn unos momentos un asesor te atenderá en el chat. 📱`);
+      await sendMsg(chatId, `Listo ${d.agentName}, ya le avisamos a un asesor. Te contactarán por aquí en un momento. 📱`);
       return;
     }
 
@@ -1534,23 +1534,34 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
-    const hasDirectIntent = isPlanRequest(text) || isCoverageRequest(text) || isTechnicalIssue(text) || isAgentRequest(text) || isExistingCustomer(text) || isReportRequest(text);
-
-    if (!hasDirectIntent) {
-      setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-      await sendReplyObject(buildMenuReply());
+    // Route direct intents without a session
+    if (isAgentRequest(text)) {
+      setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
+      await sendMsg(chatId, '¿Cuál es tu nombre para que el asesor se comunique contigo?');
       return;
     }
 
-    const reply = await generateReply(text);
-    if (reply.replyMarkup && !session.state) {
-      setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+    if (isReportRequest(text) || isTechnicalIssue(text)) {
+      setSession(chatId, { state: 'awaiting_report', data: {} });
+      await sendReplyObject(buildReportPrompt());
+      return;
     }
-    await sendMsg(chatId, reply.text, reply.mediaUrls || []);
 
-    if (isAgentRequest(text)) {
-      try { await notifyAgentRequest(chatId, text, detectLocation(text)); } catch (e) { console.error('Agent notification error:', e.message); }
+    if (isExistingCustomer(text)) {
+      setSession(chatId, { state: 'awaiting_plan_name', data: {} });
+      await sendReplyObject(buildExistingCustomerReply());
+      return;
     }
+
+    if (isPlanRequest(text) || isCoverageRequest(text)) {
+      setSession(chatId, { state: 'awaiting_location', data: {} });
+      await sendReplyObject(buildLocationPrompt());
+      return;
+    }
+
+    // Nothing matched — show menu
+    setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+    await sendReplyObject(buildMenuReply());
   } catch (error) {
     console.error('Message handling error:', error.message);
     try {
