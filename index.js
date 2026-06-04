@@ -672,48 +672,29 @@ async function generateFollowupRecommendationReply(context, userText) {
 }
 
 function buildGreetingReply(text) {
-  return {
-    text: 'Hola, soy Leo, el asistente de León Telecom. ¿En qué te puedo ayudar hoy?',
-    mediaUrls: [],
-    listItems: MENU_LIST_ITEMS,
-    replyMarkup: {
-      keyboard: [
-        [{ text: '1) Ver planes disponibles' }, { text: '2) Ya soy cliente (tengo un plan)' }],
-        [{ text: '3) Quiero hablar con un asesor' }, { text: '4) Reportar un problema' }]
-      ],
-      one_time_keyboard: true,
-      resize_keyboard: true
-    }
-  };
+  return buildMenuReply();
 }
 
 function buildFallbackReply(text) {
-  return {
-    text: 'Aquí te muestro las opciones disponibles:',
-    mediaUrls: [],
-    listItems: MENU_LIST_ITEMS,
-    replyMarkup: {
-      keyboard: [
-        [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
-        [{ text: '3️⃣ Hablar con asesor' }, { text: '4️⃣ Reportar falla' }],
-        [{ text: '5️⃣ Migrar servicio' }, { text: '❌ Cancelar cita' }]
-      ],
-      one_time_keyboard: true,
-      resize_keyboard: true
-    }
-  };
+  return buildMenuReply();
 }
 
 function buildMenuReply() {
   return {
-    text: '¿En qué te puedo ayudar? 👇',
+    text: [
+      '¿En qué te puedo ayudar? Responde con el número:',
+      '',
+      '1️⃣ Ver planes de internet',
+      '2️⃣ Soporte técnico',
+      '3️⃣ Ya soy cliente',
+      '4️⃣ Hablar con un asesor',
+      '5️⃣ Migrar mi servicio'
+    ].join('\n'),
     mediaUrls: [],
-    listItems: MENU_LIST_ITEMS,
     replyMarkup: {
       keyboard: [
-        [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
-        [{ text: '3️⃣ Hablar con asesor' }, { text: '4️⃣ Reportar falla' }],
-        [{ text: '5️⃣ Migrar servicio' }, { text: '❌ Cancelar cita' }]
+        [{ text: '1' }, { text: '2' }, { text: '3' }],
+        [{ text: '4' }, { text: '5' }]
       ],
       one_time_keyboard: true,
       resize_keyboard: true
@@ -1537,13 +1518,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
       setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
       const knownProfile = getProfile(chatId);
       const knownName = knownProfile?.name && knownProfile.name !== 'Usuario' ? knownProfile.name : null;
+      const menuText = [
+        '',
+        '1️⃣ Ver planes de internet',
+        '2️⃣ Soporte técnico',
+        '3️⃣ Ya soy cliente',
+        '4️⃣ Hablar con un asesor',
+        '5️⃣ Migrar mi servicio'
+      ].join('\n');
       if (knownName) {
-        await sendMsg(chatId, `¡Hola de nuevo, ${knownName}! ¿En qué te puedo ayudar? 👇`, [],
-          { listItems: MENU_LIST_ITEMS });
+        await sendMsg(chatId, `¡Hola de nuevo, ${knownName}! ¿En qué te puedo ayudar?\n${menuText}`);
       } else {
-        await sendMsg(chatId,
-          'Hola, soy Leo, asistente de León Telecom 👋\n¿En qué te puedo ayudar?', [],
-          { listItems: MENU_LIST_ITEMS });
+        await sendMsg(chatId, `Hola, soy Leo de León Telecom 👋\n¿En qué te puedo ayudar?\n${menuText}`);
       }
       return;
     }
