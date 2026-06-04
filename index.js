@@ -890,7 +890,9 @@ async function notifyAgentRequest(chatId, userText, location = '') {
 
   if (AGENT_WHATSAPP_NUMBER) {
     try {
-      await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, fullMessage);
+      await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, fullMessage, [], {
+        buttons: [{ id: `ATENDER ${chatId}`, title: 'Atender caso' }]
+      });
       notified = true;
     } catch (e) {
       console.error('Agent WhatsApp notify error:', e.message);
