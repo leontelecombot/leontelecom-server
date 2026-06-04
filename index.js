@@ -201,7 +201,7 @@ function generateRandomFolio() {
 
 function isPlanRequest(text) {
   const value = normalizeText(text);
-  return /\b(plan|paquete|planes|precio|precios|tarifa|tarifas|costo|costos|promocion|internet)\b/.test(value);
+  return /\b(plan|paquete|planes|precio|precios|tarifa|tarifas|costo|costos|promocion|contratar|fibra|inalambrico)\b/.test(value);
 }
 
 function isOtherPlansQuestion(text) {
@@ -221,7 +221,7 @@ function isCoverageRequest(text) {
 
 function isTechnicalIssue(text) {
   const value = normalizeText(text);
-  return /\b(falla|sin servicio|no funciona|intermitente|lento|reiniciar|conectar|conexion|caido|caída|soporte)\b/.test(value);
+  return /\b(falla|sin servicio|no funciona|intermitente|lento|reiniciar|conectar|conexion|caido|caida|soporte|wifi|internet|no tengo|sin internet|no jala|no agarra|se cae|se corta|no carga)\b/.test(value);
 }
 
 function isAgentRequest(text) {
@@ -461,23 +461,25 @@ function buildAgentReply() {
 
 function buildExistingCustomerReply() {
   return {
-    text: [
-      '👤 Genial. Para ayudarte mejor, necesito:',
-      '1) Tu plan actual (Lite, Basic, Medium, Advanced, Ultra o el MB/precio)',
-      '2) El problema: velocidad, facturación, instalación, o soporte técnico?'
-    ].join(' '),
-    mediaUrls: []
+    text: '¿En qué te puedo ayudar?',
+    mediaUrls: [],
+    buttons: [
+      { id: 'problema_tecnico', title: 'Tengo un problema' },
+      { id: 'mi_factura', title: 'Mi factura/pago' },
+      { id: 'cambiar_plan', title: 'Cambiar de plan' }
+    ]
   };
 }
 
 function buildReportPrompt() {
   return {
-    text: [
-      '🔧 Entendido. Cuéntame qué pasa:',
-      '❌ Sin internet, 🐢 muy lento, ⚡ intermitente, u otro?',
-      'Así puedo indicarte la solución rápido.'
-    ].join(' '),
-    mediaUrls: []
+    text: '¿Qué está pasando con tu internet?',
+    mediaUrls: [],
+    buttons: [
+      { id: 'sin_internet', title: 'Sin internet' },
+      { id: 'internet_lento', title: 'Muy lento' },
+      { id: 'va_y_viene', title: 'Va y viene' }
+    ]
   };
 }
 
@@ -1190,25 +1192,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state && session.state !== 'awaiting_menu_choice') {
-      if (isPlanRequest(text) && !session.state.includes('installation') && !session.state.includes('plan')) {
-        setSession(chatId, { state: 'awaiting_location', data: {} });
-        await sendReplyObject(buildLocationPrompt());
-        return;
-      }
-      if (isAgentRequest(text) && session.state !== 'awaiting_agent_name' && session.state !== 'awaiting_agent_neighborhood') {
-        setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
-        await sendMsg(chatId, '¿Cuál es tu nombre?');
-        return;
-      }
-      if (isReportRequest(text) && session.state !== 'awaiting_report' && !session.state.includes('report')) {
-        setSession(chatId, { state: 'awaiting_report', data: {} });
-        await sendReplyObject(buildReportPrompt());
-        return;
-      }
-      if (isExistingCustomer(text) && session.state !== 'awaiting_plan_name' && !session.state.includes('installation')) {
-        setSession(chatId, { state: 'awaiting_plan_name', data: {} });
-        await sendReplyObject(buildExistingCustomerReply());
-        return;
+      const inSupportFlow = session.state.includes('report') || session.state.includes('agent') || session.state.includes('contract');
+      if (!inSupportFlow) {
+        if (isPlanRequest(text) && !session.state.includes('plan')) {
+          setSession(chatId, { state: 'awaiting_location', data: {} });
+          await sendReplyObject(buildLocationPrompt());
+          return;
+        }
+        if (isAgentRequest(text) && !session.state.includes('agent')) {
+          setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
+          await sendMsg(chatId, '¿Cuál es tu nombre?');
+          return;
+        }
+        if ((isReportRequest(text) || isTechnicalIssue(text)) && !session.state.includes('report')) {
+          setSession(chatId, { state: 'awaiting_report', data: {} });
+          await sendReplyObject(buildReportPrompt());
+          return;
+        }
       }
     }
     // ===== END INTENT INTERRUPTION LAYER =====
@@ -1217,8 +1217,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const choice = parseMenuChoice(text);
       if (choice === 1) { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); return; }
       if (choice === 2) { setSession(chatId, { state: 'awaiting_plan_name', data: {} }); await sendReplyObject(buildExistingCustomerReply()); return; }
-      if (choice === 3) { setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
-      if (choice === 4) { setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt()); return; }
+      if (choice === 3) { setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
+      if (choice === 4 || text === 'sin_internet' || text === 'internet_lento' || text === 'va_y_viene') {
+        setSession(chatId, { state: 'awaiting_report', data: {} });
+        await sendReplyObject(buildReportPrompt());
+        return;
+      }
       if (choice === 5) {
         setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
         await sendMsg(chatId, '🔄 Migración de servicio\n¿En cuál zona está el servicio ACTUAL?', [], {
@@ -1307,6 +1311,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_plan_selection') {
+      const notInterested = normalizeText(text).match(/\b(no|solo preguntaba|solo info|solo queria|nada|luego|despues|no gracias)\b/);
+      if (notInterested) {
+        clearSession(chatId);
+        await sendMsg(chatId, 'Sin problema, aquí estamos cuando quieras. 😊');
+        return;
+      }
       const location = session.data?.location;
       const plans = location === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
       const selectedPlan = plans.find(p =>
@@ -1370,21 +1380,53 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_plan_name') {
+      // Handle buttons from buildExistingCustomerReply
+      if (text === 'problema_tecnico' || isTechnicalIssue(text)) {
+        setSession(chatId, { state: 'awaiting_report', data: {} });
+        await sendReplyObject(buildReportPrompt());
+        return;
+      }
+      if (text === 'mi_factura' || normalizeText(text).includes('factura') || normalizeText(text).includes('pago')) {
+        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: 'consulta de facturación' } });
+        await sendMsg(chatId, '¿A qué nombre está el servicio?');
+        return;
+      }
+      if (text === 'cambiar_plan' || normalizeText(text).includes('cambiar') || normalizeText(text).includes('cambio')) {
+        setSession(chatId, { state: 'awaiting_location', data: {} });
+        await sendReplyObject(buildLocationPrompt());
+        return;
+      }
+      // Free text → ask what the issue is
       setSession(chatId, { state: 'awaiting_plan_issue', data: { plan: text } });
-      await sendMsg(chatId, `Gracias. Indica en qué necesitas ayuda con el plan "${text}": facturación, velocidad, falla, o cambio de plan.`);
+      await sendMsg(chatId, `¿En qué te puedo ayudar con ese plan?`);
       return;
     }
 
     if (session.state === 'awaiting_plan_issue') {
-      const plan = session.data?.plan || 'tu plan';
-      clearSession(chatId);
-      await sendMsg(chatId, `Recibido sobre ${plan}. He registrado tu consulta: "${text}". Un agente podrá revisarla y te contactará si es necesario.`);
-      try { await notifyAgentRequest(chatId, `Cliente: ${plan} - ${text}`, detectLocation(text)); } catch (e) { console.error('Agent notification error:', e.message); }
+      const plan = session.data?.plan || '';
+      setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: `${plan}: ${text}` } });
+      await sendMsg(chatId, '¿A qué nombre está el servicio?');
       return;
     }
 
     if (session.state === 'awaiting_report') {
-      setSession(chatId, { state: 'awaiting_report_name', data: { problemDescription: text } });
+      // Map button IDs to human-readable descriptions
+      const problemMap = { sin_internet: 'Sin internet', internet_lento: 'Internet muy lento', va_y_viene: 'El internet va y viene (intermitente)' };
+      const problemDescription = problemMap[text] || text;
+
+      // Give AI-powered initial troubleshooting advice
+      let advice = null;
+      try {
+        advice = await callAI(
+          'Eres Leo de León Telecom. El cliente tiene un problema con su internet. Da 1-2 pasos concretos y simples para intentar solucionarlo (ej: reiniciar router, revisar cables). Tono casual mexicano. Máximo 2 oraciones cortas. NO digas que ya viene un técnico aún.',
+          `Problema: ${problemDescription}`,
+          { temperature: 0.4, maxTokens: 120 }
+        );
+      } catch (e) { /* fall through */ }
+
+      if (advice) await sendMsg(chatId, advice);
+
+      setSession(chatId, { state: 'awaiting_report_name', data: { problemDescription } });
       await sendMsg(chatId, '¿A qué nombre está el servicio?');
       return;
     }
@@ -1392,70 +1434,15 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_report_name') {
       const d = session.data || {};
       updateProfile(chatId, { name: text });
-      setSession(chatId, { state: 'awaiting_report_address', data: { ...d, name: text } });
-      await sendMsg(chatId, '¿Dónde está ubicada la casa de la instalación?');
-      return;
-    }
-
-    if (session.state === 'awaiting_report_address') {
-      const d = session.data || {};
-      const location = detectLocation(d.problemDescription) || 'Ubicación no especificada';
-      setSession(chatId, { state: 'awaiting_report_neighborhood', data: { ...d, address: text, location } });
-      await sendMsg(chatId, '¿Cuál es tu colonia, barrio o sección?');
-      return;
-    }
-
-    if (session.state === 'awaiting_report_neighborhood') {
       try {
-        const d = session.data || {};
-        const match = d.location !== 'Ubicación no especificada' ? findNeighborhood(text, d.location) : null;
-        const neighborhood = match ? match.name : text;
-        setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...d, neighborhood } });
-        await sendMsg(chatId, match ? `¿Es correcto que el problema es en ${match.name} ${match.location}?` : `¿Es correcto? Tu reporte es de ${text}.`);
-      } catch (err) {
-        console.error('Report neighborhood error:', err.message);
-        setSession(chatId, { state: 'awaiting_report_location_confirm', data: { ...session.data, neighborhood: text } });
-        await sendMsg(chatId, `¿Es correcto? Tu reporte es de ${text}.`);
-      }
-      return;
-    }
-
-    if (session.state === 'awaiting_report_location_confirm') {
-      const yes = normalizeText(text).match(/\b(si|sí|yes|claro|ok|okay|correcto|verdad|sale)\b/);
-      const no = normalizeText(text).match(/\b(no|nope|nah|incorrecto)\b/);
-      if (yes) {
-        const d = session.data || {};
-        clearSession(chatId);
-        try {
-          await notifyAgentRequest(chatId, [
-            `REPORTE DE PROBLEMA`,
-            `Problema: ${d.problemDescription}`,
-            `Nombre: ${d.name}`,
-            `Dirección: ${d.address}`,
-            `Barrio/Colonia: ${d.neighborhood}`,
-            `Ubicación: ${d.location}`
-          ].join('\n'), d.location);
-        } catch (e) { console.error('Agent notification error:', e.message); }
-        await sendMsg(chatId, [
-          '✅ Perfecto. He registrado tu reporte:',
-          `🔧 Problema: ${d.problemDescription}`,
-          `👤 Nombre: ${d.name}`,
-          `📍 Dirección: ${d.address}`,
-          `🏘️ Barrio: ${d.neighborhood}`,
-          '',
-          `⏳ En un momento un asesor se va a poner en contacto con ${d.name} para asistirte. 📱`
-        ].join('\n'));
-        return;
-      }
-      if (no) {
-        clearSession(chatId);
-        setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-        await sendMsg(chatId, 'Okej. ¿Qué necesitas hacer?');
-        await sendReplyObject(buildMenuReply());
-        return;
-      }
-      setSession(chatId, { state: 'awaiting_report_neighborhood', data: session.data });
-      await sendMsg(chatId, 'Entendido. ¿Cuál es tu colonia, barrio o sección correcta?');
+        await notifyAgentRequest(chatId, [
+          `REPORTE DE FALLA TÉCNICA`,
+          `Nombre: ${text}`,
+          `Problema: ${d.problemDescription}`
+        ].join('\n'), '');
+      } catch (e) { console.error('Report notify error:', e.message); }
+      clearSession(chatId);
+      await sendMsg(chatId, `Listo ${text}, ya le avisamos a un técnico. Te van a contactar pronto por aquí. 🔧`);
       return;
     }
 
@@ -1463,31 +1450,21 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const d = session.data || {};
       updateProfile(chatId, { name: text });
       setSession(chatId, { state: 'awaiting_agent_need', data: { ...d, agentName: text } });
-      await sendMsg(chatId, '¿Qué necesitas o qué preguntas tienes?');
+      await sendMsg(chatId, '¿En qué te podemos ayudar?');
       return;
     }
 
     if (session.state === 'awaiting_agent_need') {
       const d = session.data || {};
-      setSession(chatId, { state: 'awaiting_agent_neighborhood', data: { ...d, need: text } });
-      await sendMsg(chatId, '¿Cuál es tu colonia, barrio o sección?');
-      return;
-    }
-
-    if (session.state === 'awaiting_agent_neighborhood') {
-      const d = session.data || {};
-      const match = d.location && d.location !== 'Ubicación no especificada' ? findNeighborhood(text, d.location) : null;
       clearSession(chatId);
       const notifyText = [
-        `SOLICITUD DIRECTA DE ASESOR`,
+        `SOLICITUD DE ASESOR`,
         `Nombre: ${d.agentName}`,
-        `Necesidad: ${d.need}`,
-        match ? `Barrio/Colonia: ${match.name}` : `Ubicación mencionada: ${text}`,
-        match ? `Ubicación: ${match.location}` : '',
-        `Contexto: ${d.initialRequest || 'Sin contexto adicional'}`
+        `Necesidad: ${text}`,
+        d.initialRequest && d.initialRequest !== text ? `Contexto: ${d.initialRequest}` : ''
       ].filter(Boolean).join('\n');
-      try { await notifyAgentRequest(chatId, notifyText, d.location); } catch (e) { console.error('Agent notification error:', e.message); }
-      await sendMsg(chatId, `Listo ${d.agentName}, ya le avisamos a un asesor. Te contactarán por aquí en un momento. 📱`);
+      try { await notifyAgentRequest(chatId, notifyText, ''); } catch (e) { console.error('Agent notification error:', e.message); }
+      await sendMsg(chatId, `Listo ${d.agentName}, ya le avisamos a un asesor. Te contactarán aquí en un momento. 📱`);
       return;
     }
 
