@@ -249,6 +249,11 @@ function isAgentRequest(text) {
   return /\b(agente|asesor|ejecutivo|humano|persona|llamar|contactar|ventas|atencion|atención)\b/.test(value);
 }
 
+function wantsToCancel(text) {
+  const v = normalizeText(text);
+  return /\b(no quiero|no mejor|cancelar|cancel|volver|atras|menu|no eso no|no gracias|equivoque|me equivoque|no es eso|otra cosa|nada|salir|regresar)\b/.test(v);
+}
+
 function isCameraRequest(text) {
   const value = normalizeText(text);
   return /\b(camara|camaras|videovigilancia|cctv|tapo|hikvision|nvr|dvr|vigilar|vigilancia|seguridad|grabadora)\b/.test(value);
@@ -1799,6 +1804,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_report') {
+      if (wantsToCancel(text)) {
+        clearSession(chatId);
+        await sendMsg(chatId, 'Sin problema. ¿En qué más te puedo ayudar?');
+        await sendReplyObject(buildMenuReply());
+        return;
+      }
       const problemMap = { sin_internet: 'Sin internet', internet_lento: 'Internet muy lento', va_y_viene: 'Internet intermitente (va y viene)' };
       const problemDescription = problemMap[text] || text;
 
@@ -1821,6 +1832,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_report_location') {
+      if (wantsToCancel(text)) {
+        clearSession(chatId);
+        await sendMsg(chatId, 'Sin problema. ¿En qué más te puedo ayudar?');
+        await sendReplyObject(buildMenuReply());
+        return;
+      }
       const d = session.data || {};
       // Try to find neighborhood in text
       const nbhd = searchAllNeighborhoods(text);
@@ -1843,6 +1860,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_report_name') {
+      if (wantsToCancel(text)) {
+        clearSession(chatId);
+        await sendMsg(chatId, 'Sin problema. ¿En qué más te puedo ayudar?');
+        await sendReplyObject(buildMenuReply());
+        return;
+      }
       const d = session.data || {};
       updateProfile(chatId, { name: text });
       const nbhd = d.locationLine ? searchAllNeighborhoods(d.locationLine) : null;
@@ -1861,6 +1884,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_agent_name') {
+      if (wantsToCancel(text)) {
+        clearSession(chatId);
+        await sendMsg(chatId, 'Sin problema. ¿En qué más te puedo ayudar?');
+        await sendReplyObject(buildMenuReply());
+        return;
+      }
       const d = session.data || {};
       updateProfile(chatId, { name: text });
       // If we already have context from initialRequest, notify immediately
