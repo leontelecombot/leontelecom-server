@@ -720,8 +720,9 @@ async function callMainAI(chatId, userText) {
     '"show_support" → falla ACTIVA: sin internet, internet lento, se cae, no funciona. NO para preguntas generales sobre planes, velocidad o dispositivos.',
     '"show_cameras" → pregunta por cámaras, videovigilancia, CCTV, seguridad',
     '"show_migration" → quiere MIGRAR o MOVER su servicio a otro domicilio o zona. Palabras clave: migrar, cambiar domicilio, mover servicio, nueva casa, otro domicilio. Mensaje: confirmar que se iniciará el proceso.',
-    '"request_agent" → quiere hablar con una persona ya. Mensaje: breve confirmación sin pedir más datos.',
-    'null → conversa, hace pregunta general o de info; responde directo',
+    '"request_agent" → SOLO cuando el cliente pide EXPLÍCITAMENTE hablar con un humano/asesor/persona. Ejemplos: "quiero hablar con alguien", "me comunicas con un asesor", "necesito hablar con una persona".',
+    'null → preguntas de información, dudas sobre planes, velocidades, dispositivos, precios, comparaciones. Responde directo.',
+    'NUNCA uses request_agent para: preguntas sobre cuántos dispositivos, velocidad, precio, diferencias entre planes, "oigan", "disculpen", etc.',
     'IMPORTANTE: "quiero migrar/cambiar mi servicio/domicilio" → SIEMPRE show_migration, no show_plans',
     '',
     '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
@@ -1600,7 +1601,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
         setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
         await sendMsg(chatId, '¿Qué espacio quiere vigilar y cuántas cámaras necesita aproximadamente?');
       } else if (aiResult2.action === 'request_agent') {
-        if (knownName2) { const n2 = await notifyAgentRequest(chatId, [`SOLICITUD ASESOR`, `Nombre: ${knownName2}`, `Motivo: ${text}`].join('\n'), '').catch(() => false); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2)); }
+        const isInfoQ = /\?|cuant|como|que |cual|donde|precio|plan|mbps|dispositiv|aparato|velocid|cuesta|instala|cubre|diferencia/i.test(text);
+        if (isInfoQ) { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); }
+        else if (knownName2) { const n2 = await notifyAgentRequest(chatId, [`SOLICITUD ASESOR`, `Nombre: ${knownName2}`, `Motivo: ${text}`].join('\n'), '').catch(() => false); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2)); }
         else { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿A qué nombre te contactamos?'); }
       } else { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); }
       return;
@@ -2124,8 +2127,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
       await sendMsg(chatId, '¿Para qué espacio lo necesita y cuántas cámaras tiene en mente?');
 
     } else if (aiResult.action === 'request_agent') {
-      if (knownName) {
-        // ONE message only — skip AI response to avoid double message
+      // Safety check: if it looks like an informational question, treat as null
+      const isInfoQuestion = /\?|cuant|cuant|como|que |cual|donde|cuando|por que|precio|plan|mbps|megas|dispositiv|aparato|velocid|cuesta|instala|cubre|cobertura|diferencia/i.test(text);
+      if (isInfoQuestion) {
+        // AI misclassified — just answer the question
+        if (aiResult.message) await sendMsg(chatId, aiResult.message);
+      } else if (knownName) {
         const notified = await notifyAgentRequest(chatId, [`SOLICITUD DE ASESOR`, `Nombre: ${knownName}`, `Motivo: ${text}`].join('\n'), '').catch(() => false);
         await sendMsg(chatId, agentNotifiedMsg(notified, knownName));
       } else {
