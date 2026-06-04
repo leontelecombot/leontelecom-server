@@ -1774,11 +1774,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
         const planZone2 = session.data?.location;
         const zPlans = planZone2 === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
         const plansInfo2 = zPlans.map(p => `${p.name} ${p.speed} ${p.price}`).join(', ');
-        const qReply = await callAI(
-          `Eres Leo de León Telecom. Zona: ${planZone2}. Planes: ${plansInfo2}. León Telecom solo ofrece internet. Responde la pregunta del cliente de forma clara. Máximo 2 oraciones. Solo texto, sin markdown.`,
-          text, { temperature: 0.4, maxTokens: 150 }
+        const qReply = await callAI([
+          `Eres Leo de León Telecom. Responde la pregunta del cliente sobre planes.`,
+          `Zona del cliente: ${planZone2}.`,
+          `Planes DISPONIBLES en ${planZone2}: ${plansInfo2}.`,
+          `Contexto de zonas: Huitzo tiene fibra óptica (Lite/Basic/Medium/Advanced/Ultra). Telixtlahuaca y Suchilquitongo tienen internet inalámbrico (15/20/30 Mbps).`,
+          `Si preguntan por un plan que NO existe en esta zona (ej: Ultra en Telixtlahuaca), explica que ese plan es de Huitzo con fibra óptica y menciona los planes disponibles en su zona.`,
+          `Termina siempre con "¿Gustas que te pase con un asesor para más información?"`,
+          `Máximo 3 oraciones. Solo texto, sin markdown.`
+        ].join(' '),
+          text, { temperature: 0.4, maxTokens: 200 }
         ).catch(() => null);
-        await sendMsg(chatId, qReply || 'El plan Basic de 80 Mbps permite varios dispositivos conectados al mismo tiempo sin problema. ¿Te gustaría contratarlo?');
+        await sendMsg(chatId, qReply || `En ${planZone2} los planes disponibles son: ${plansInfo2}. ¿Gustas que te pase con un asesor para más información?`);
         return; // Stay in awaiting_plan_selection
       }
 
