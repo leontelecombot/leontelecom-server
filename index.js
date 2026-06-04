@@ -1320,8 +1320,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state && session.state !== 'awaiting_menu_choice') {
-      const inSupportFlow = session.state.includes('report') || session.state.includes('agent') || session.state.includes('contract');
+      const inSupportFlow = session.state.includes('report') || session.state.includes('agent') || session.state.includes('contract') || session.state.includes('camera');
       if (!inSupportFlow) {
+        if (isCameraRequest(text)) {
+          setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
+          await sendMsg(chatId, 'Con gusto te asesoro en cámaras. ¿Qué espacio quieres vigilar y cuántas cámaras necesitas?');
+          return;
+        }
         if (isPlanRequest(text) && !session.state.includes('plan')) {
           setSession(chatId, { state: 'awaiting_location', data: {} });
           await sendReplyObject(buildLocationPrompt());
@@ -1329,7 +1334,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         }
         if (isAgentRequest(text) && !session.state.includes('agent')) {
           setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
-          await sendMsg(chatId, '¿Cuál es tu nombre?');
+          await sendMsg(chatId, '¿Cuál es su nombre?');
           return;
         }
         if ((isReportRequest(text) || isTechnicalIssue(text)) && !session.state.includes('report')) {
@@ -1381,6 +1386,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
         setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
         if (!knownName2) await sendReplyObject(buildReportPrompt());
         else { const n2 = await notifyAgentRequest(chatId, [`REPORTE`, `Nombre: ${knownName2}`, `Problema: ${text}`].join('\n'), '').catch(() => false); clearSession(chatId); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2, 'técnico')); }
+      } else if (aiResult2.action === 'show_cameras') {
+        if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
+        setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
+        await sendMsg(chatId, '¿Qué espacio quiere vigilar y cuántas cámaras necesita aproximadamente?');
       } else if (aiResult2.action === 'request_agent') {
         if (knownName2) { const n2 = await notifyAgentRequest(chatId, [`SOLICITUD ASESOR`, `Nombre: ${knownName2}`, `Motivo: ${text}`].join('\n'), '').catch(() => false); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2)); }
         else { if (aiResult2.message) await sendMsg(chatId, aiResult2.message); setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿A qué nombre te contactamos?'); }
@@ -1388,43 +1397,65 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
-    if (session.state === 'awaiting_camera_needs') {
-      // Check if it's a big project (4+ cameras or commercial)
-      const v = normalizeText(text);
-      const isBigProject = /\b(negoci|empresa|bodega|almacen|taller|local|cuatro|cinco|seis|siete|ocho|nueve|diez|\b[4-9]\b|\b1[0-9]\b|muchas)\b/.test(v);
-
-      const systemForCamera = [
-        'Eres Leo de León Telecom. Recomienda la cámara correcta en máximo 3 oraciones claras.',
-        CAMERA_KNOWLEDGE,
-        'Si la necesidad implica 4+ cámaras o proyecto comercial, indica que se agenda una visita técnica GRATUITA.',
-        'Termina preguntando si desean cotizar o agendar visita. Sin markdown, texto plano.'
-      ].join('\n');
-
-      const rec = await callAI(systemForCamera, `Cliente necesita: ${text}`, { temperature: 0.4, maxTokens: 250 }).catch(() => null);
-
-      clearSession(chatId);
-      if (rec) await sendMsg(chatId, rec);
-
-      if (isBigProject) {
-        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: `Cotización cámaras (proyecto): ${text}` } });
-        await sendMsg(chatId, '¿A qué nombre agendamos la visita técnica gratuita?');
-      } else {
-        await sendMsg(chatId, '¿Te gustaría cotizar o tienes más preguntas?', [], {
-          buttons: [{ id: 'cotizar_camara', title: 'Quiero cotizar' }, { id: 'mas_info_camara', title: 'Tengo más dudas' }]
-        });
-      }
-      return;
-    }
-
+    // Camera button shortcuts (work from any state)
     if (text === 'cotizar_camara') {
-      setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: 'Cotización de cámaras de seguridad' } });
+      const cameraContext = session.data?.cameraContext || 'cámaras de seguridad';
+      clearSession(chatId);
+      setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: `Cotización: ${cameraContext}` } });
       await sendMsg(chatId, '¿A qué nombre realizamos la cotización?');
       return;
     }
 
-    if (text === 'mas_info_camara') {
-      setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
-      await sendMsg(chatId, '¿Qué más deseas saber sobre las cámaras? Puedes preguntar por un modelo específico o describir mejor tu caso.');
+    if (session.state === 'awaiting_camera_needs') {
+      // Exit conditions
+      const goodbye = normalizeText(text).match(/\b(no gracias|no|ya no|solo preguntaba|nada|gracias nada mas|es todo)\b/);
+      if (goodbye) {
+        clearSession(chatId);
+        await sendMsg(chatId, 'Con gusto. Cuando guste nos contacta para cotizar. 😊');
+        return;
+      }
+
+      const isBigProject = /\b(negoci|empresa|bodega|almacen|taller|local|cuatro|cinco|seis|siete|ocho|nueve|diez|\b[4-9]\b|\b1[0-9]\b|muchas|varios puntos)\b/.test(normalizeText(text));
+
+      // Build conversation history for context
+      const camHistory = getHistory(chatId).messages.slice(-6)
+        .map(m => `${m.role === 'user' ? 'Cliente' : 'Leo'}: ${m.text}`)
+        .join('\n');
+
+      const cameraSystemPrompt = [
+        'Eres Leo, asesor de cámaras de seguridad de León Telecom.',
+        'Responde con la información EXACTA del catálogo. NO inventes precios, modelos ni especificaciones.',
+        'Si no tienes el dato (ej: precio exacto), di que un asesor puede dar el detalle.',
+        '',
+        CAMERA_KNOWLEDGE,
+        '',
+        'Historial de la conversación:',
+        camHistory || '(primera pregunta)',
+        '',
+        'Instrucciones:',
+        '- Máximo 4 oraciones. Sin markdown. Texto plano.',
+        '- Si el cliente ya sabe qué quiere o pregunta precio → termina con "¿Desea que un asesor le cotice?"',
+        '- Si aún tiene dudas → responde y deja la puerta abierta para más preguntas.',
+        '- Para 4+ cámaras o proyectos comerciales → recomienda visita técnica GRATUITA de Hikvision.',
+        '- NUNCA inventes especificaciones no listadas en el catálogo.'
+      ].join('\n');
+
+      const rec = await callAI(cameraSystemPrompt, text, { temperature: 0.35, maxTokens: 300 }).catch(() => null);
+
+      if (rec) await sendMsg(chatId, rec);
+
+      if (isBigProject) {
+        const cameraContext = `Proyecto cámaras Hikvision: ${text}`;
+        clearSession(chatId);
+        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: cameraContext } });
+        await sendMsg(chatId, '¿A qué nombre agendamos la visita técnica gratuita?');
+      } else {
+        // Keep context and offer next step
+        setSession(chatId, { state: 'awaiting_camera_needs', data: { cameraContext: text } });
+        await sendMsg(chatId, '¿Le puedo ayudar con algo más o desea cotizar?', [], {
+          buttons: [{ id: 'cotizar_camara', title: 'Quiero cotizar' }, { id: 'no gracias', title: 'Es todo, gracias' }]
+        });
+      }
       return;
     }
 
