@@ -580,6 +580,71 @@ async function callAI(systemContent, userContent, options = {}) {
   return payload.choices?.[0]?.message?.content || null;
 }
 
+// ==================== AI BRAIN ====================
+// Main intelligence: Claude with full conversation history decides what to do.
+// Returns { message, action, location }
+async function callMainAI(chatId, userText) {
+  if (!AI_API_KEY) return null;
+
+  const profile = getProfile(chatId);
+  const history = getHistory(chatId);
+  const recentMsgs = history.messages.slice(-10)
+    .map(m => `${m.role === 'user' ? 'Cliente' : 'Leo'}: ${m.text}`)
+    .join('\n');
+
+  const clientName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+  const clientLocation = profile?.location || null;
+
+  const fiberPlans = FIBER_PLANS.map(p => `${p.name} ${p.speed}/${p.price}`).join(', ');
+  const wirelessPlans = WIRELESS_PLANS.map(p => `${p.speed}/${p.price}`).join(', ');
+
+  const systemPrompt = [
+    'Eres Leo, asistente de León Telecom (ISP en Oaxaca, México).',
+    'Tono: casual, mexicano, como un conocido. Sin frases de call center. Máximo 2-3 oraciones. Sin markdown.',
+    '',
+    'SERVICIOS:',
+    `Huitzo (fibra óptica): ${fiberPlans}`,
+    `Telixtlahuaca / Suchilquitongo (inalámbrico): ${wirelessPlans}`,
+    'La instalación se coordina con un asesor. No se da precio de instalación.',
+    '',
+    clientName ? `Nombre del cliente: ${clientName}` : '',
+    clientLocation ? `Zona del cliente: ${clientLocation}` : '',
+    '',
+    'HISTORIAL RECIENTE:',
+    recentMsgs || '(primera interacción)',
+    '',
+    'INSTRUCCIONES DE RESPUESTA:',
+    'Analiza el mensaje y responde con JSON puro (sin texto extra):',
+    '{"message":"respuesta natural aquí","action":null,"location":null}',
+    '',
+    'Valores de "action":',
+    '"show_plans" → quiere ver planes, precios, contratar, o pregunta por internet',
+    '"show_support" → tiene falla, sin internet, lento, problema técnico',
+    '"request_agent" → quiere hablar con persona, asesor, o llamar',
+    'null → solo conversa, responde su pregunta con la info disponible',
+    '',
+    '"location" → si mencionó zona (Huitzo/Telixtlahuaca/Suchilquitongo), ponla aquí; si no, null'
+  ].filter(Boolean).join('\n');
+
+  try {
+    const response = await callAI(systemPrompt, userText, { temperature: 0.6, maxTokens: 300 });
+    if (!response) return null;
+    const match = response.match(/\{[\s\S]*?\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      return {
+        message: String(parsed.message || '').replace(/[*_`#]/g, '').trim(),
+        action: parsed.action || null,
+        location: parsed.location || null
+      };
+    }
+    return { message: response.replace(/[*_`#]/g, '').trim(), action: null, location: null };
+  } catch (e) {
+    console.error('[mainAI]', e.message);
+    return null;
+  }
+}
+
 async function generateNaturalPlanRecommendationReply(context) {
   const baseRecommendation = context.location === LOCATIONS.huitzo
     ? chooseRecommendedFiberPlan(context.householdSize)
@@ -1234,7 +1299,22 @@ async function handleChatMessage(chatId, text, sendMsg) {
         });
         return;
       }
-      await sendReplyObject(buildFallbackReply(text));
+      // Nothing matched — let AI handle it
+      const aiResult = await callMainAI(chatId, text);
+      if (aiResult?.message) {
+        await sendMsg(chatId, aiResult.message);
+        if (aiResult.action === 'show_plans') {
+          const loc = aiResult.location ? detectLocation(aiResult.location) || aiResult.location : null;
+          if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
+          else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
+        } else if (aiResult.action === 'show_support') {
+          setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt());
+        } else if (aiResult.action === 'request_agent') {
+          setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?');
+        }
+      } else {
+        await sendReplyObject(buildFallbackReply(text));
+      }
       return;
     }
 
@@ -1323,15 +1403,29 @@ async function handleChatMessage(chatId, text, sendMsg) {
         normalizeText(text).includes(normalizeText(p.name)) ||
         normalizeText(text).includes(normalizeText(p.speed))
       );
-      const planData = selectedPlan
-        ? { ...session.data, selectedPlan: selectedPlan.name, selectedSpeed: selectedPlan.speed, selectedPrice: selectedPlan.price }
-        : session.data;
-      const planLabel = selectedPlan ? `${selectedPlan.name} — ${selectedPlan.speed} — ${selectedPlan.price}` : '';
-      setSession(chatId, { state: 'awaiting_contract_name', data: planData });
-      await sendMsg(chatId,
-        `¡Qué buena elección! 🎉${planLabel ? '\nPlan: ' + planLabel : ''}\n\n¿A qué nombre te contactamos para coordinar la instalación?`,
-        [], { buttons: [{ id: 'solo_preguntaba', title: 'Solo preguntaba' }] }
-      );
+      // If plan found or user expressed interest → move to contact
+      if (selectedPlan || normalizeText(text).match(/\b(si|sí|quiero|me interesa|ese|dale|ok|ese mismo|el primero|el ultimo|el mas|me gusta)\b/)) {
+        const planData = selectedPlan
+          ? { ...session.data, selectedPlan: selectedPlan.name, selectedSpeed: selectedPlan.speed, selectedPrice: selectedPlan.price }
+          : session.data;
+        const planLabel = selectedPlan ? `${selectedPlan.name} — ${selectedPlan.speed} — ${selectedPlan.price}` : '';
+        setSession(chatId, { state: 'awaiting_contract_name', data: planData });
+        await sendMsg(chatId,
+          `¡Qué buena elección! 🎉${planLabel ? '\nPlan: ' + planLabel : ''}\n\n¿A qué nombre te contactamos para coordinar la instalación?`,
+          [], { buttons: [{ id: 'solo_preguntaba', title: 'Solo preguntaba' }] }
+        );
+        return;
+      }
+      // User has a question about plans → AI answers with context
+      const planZone = session.data?.location;
+      const zonePlans = planZone === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
+      const plansInfo = zonePlans.map(p => `${p.name} ${p.speed} ${p.price}`).join(', ');
+      const aiReply = await callAI(
+        `Eres Leo de León Telecom. Zona: ${planZone}. Planes disponibles: ${plansInfo}. Responde la pregunta del cliente sobre estos planes. Tono casual, máximo 2 oraciones. Solo texto, sin markdown.`,
+        text, { temperature: 0.5, maxTokens: 150 }
+      ).catch(() => null);
+      if (aiReply) { await sendMsg(chatId, aiReply); }
+      else { await sendMsg(chatId, `Aquí están los planes disponibles para ${planZone}. ¿Cuál te llama la atención?`); }
       return;
     }
 
@@ -1511,34 +1605,32 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
-    // Route direct intents without a session
-    if (isAgentRequest(text)) {
-      setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
-      await sendMsg(chatId, '¿Cuál es tu nombre para que el asesor se comunique contigo?');
-      return;
+    // No session, no greeting — use Claude as the brain
+    const aiResult = await callMainAI(chatId, text);
+    if (aiResult?.message) {
+      await sendMsg(chatId, aiResult.message);
+      if (aiResult.action === 'show_plans') {
+        const loc = aiResult.location ? detectLocation(aiResult.location) || aiResult.location : null;
+        if (loc) {
+          updateProfile(chatId, { location: loc });
+          setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } });
+          await sendReplyObject(buildPlanReplyForLocation(loc));
+        } else {
+          setSession(chatId, { state: 'awaiting_location', data: {} });
+          await sendReplyObject(buildLocationPrompt());
+        }
+      } else if (aiResult.action === 'show_support') {
+        setSession(chatId, { state: 'awaiting_report', data: {} });
+        await sendReplyObject(buildReportPrompt());
+      } else if (aiResult.action === 'request_agent') {
+        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
+        await sendMsg(chatId, '¿Cuál es tu nombre?');
+      }
+    } else {
+      // AI unavailable fallback
+      setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+      await sendReplyObject(buildMenuReply());
     }
-
-    if (isReportRequest(text) || isTechnicalIssue(text)) {
-      setSession(chatId, { state: 'awaiting_report', data: {} });
-      await sendReplyObject(buildReportPrompt());
-      return;
-    }
-
-    if (isExistingCustomer(text)) {
-      setSession(chatId, { state: 'awaiting_plan_name', data: {} });
-      await sendReplyObject(buildExistingCustomerReply());
-      return;
-    }
-
-    if (isPlanRequest(text) || isCoverageRequest(text)) {
-      setSession(chatId, { state: 'awaiting_location', data: {} });
-      await sendReplyObject(buildLocationPrompt());
-      return;
-    }
-
-    // Nothing matched — show menu
-    setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-    await sendReplyObject(buildMenuReply());
   } catch (error) {
     console.error('Message handling error:', error.message);
     try {
