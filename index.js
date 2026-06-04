@@ -50,9 +50,30 @@ const LOCATIONS = {
   suchilquitongo: 'Suchilquitongo'
 };
 
+// Zonas con FIBRA ÓPTICA en Huitzo — instalación $800, primer mes gratis
+// El resto de Huitzo se atiende con antena inalámbrica
+const HUITZO_FIBER_ZONES = [
+  'Primera Sección', 'Segunda Sección', 'Tercera Sección',
+  'La Guadalupe', 'La Cantera', 'Santa María Tenéxpam', 'Agua Blanca',
+  'Colonia Esmeralda', 'Cañada del Chisme', 'Privada del Laurel',
+  'Ojo de Agua', 'El Llano', 'Por la Gasolinera', 'Loma los Pinos'
+];
+
+const INSTALLATION_COSTS = {
+  huitzoFibra: { costo: '$800', promo: 'primer mes gratis' },
+  huitzoAntena: { costo: 'a cotizar con técnico', promo: '' },
+  telixtlahuaca: { costo: '$1,200', promo: '' },
+  suchilquitongo: { costo: 'a cotizar con técnico', promo: '' }
+};
+
 const NEIGHBORHOODS = {
   huitzo: [
+    // Zonas con fibra óptica
+    'Primera Sección', 'Segunda Sección', 'Tercera Sección',
     'Colonia Primera Sección', 'Centro de la Segunda Sección', 'Centro de la Tercera Sección',
+    'La Guadalupe', 'La Cantera', 'Colonia Esmeralda', 'Col Esmeralda',
+    'Privada del Laurel', 'El Llano', 'Por la Gasolinera', 'Loma los Pinos',
+    // Otras zonas (antena)
     'Colonia San Pablo', 'San Pablo Huitzo', 'Cabecera Municipal',
     'Santa María Tenéxpam', 'Agua Blanca', 'Cañada del Chisme',
     'Ojo de Agua', 'Yutetoto', 'Cañada Guayabal', 'Joyas de Río Blanco'
@@ -463,6 +484,8 @@ function buildPlanReplyForLocation(location) {
       text: [
         '🔥 Planes de fibra óptica para Huitzo:',
         buildPlanLines(FIBER_PLANS),
+        '',
+        '💰 Instalación: $800 | Primer mes gratis',
         '¿Te interesa alguno? Dime cuál y te conectamos con un asesor.'
       ].join('\n'),
       mediaUrls: FIBER_PLAN_MEDIA_URL ? [FIBER_PLAN_MEDIA_URL] : []
@@ -474,6 +497,10 @@ function buildPlanReplyForLocation(location) {
       text: [
         `📡 Planes de internet inalámbrico para ${location}:`,
         buildPlanLines(WIRELESS_PLANS),
+        '',
+        location === LOCATIONS.telixtlahuaca
+          ? '💰 Instalación: $1,200'
+          : '💰 Instalación: a cotizar con técnico',
         '¿Te interesa alguno? Dime cuál y te conectamos con un asesor.'
       ].join('\n'),
       mediaUrls: WIRELESS_PLAN_MEDIA_URL ? [WIRELESS_PLAN_MEDIA_URL] : []
@@ -652,11 +679,10 @@ async function callMainAI(chatId, userText) {
     'Tono: profesional y amable, como un buen agente de atención al cliente. Sin slang ni expresiones informales. Máximo 2-3 oraciones. Sin markdown.',
     '',
     'SERVICIOS DE INTERNET (las 3 zonas SÍ tienen cobertura):',
-    `Huitzo (fibra óptica): ${fiberPlans}`,
-    `Telixtlahuaca (inalámbrico): ${wirelessPlans}`,
-    `Suchilquitongo —también llamado "Suchil"— (inalámbrico): ${wirelessPlans}`,
-    'IMPORTANTE: Nunca digas que no hay cobertura en estas zonas. Las 3 sí tienen servicio.',
-    'Instalación: se coordina con un asesor al contratar, sin costo adicional por instalación.',
+    `Huitzo — fibra óptica en: Primera/Segunda/Tercera Sección, La Guadalupe, La Cantera, Cañada del Chisme, Ojo de Agua, Esmeralda, Privada del Laurel, El Llano, Gasolinera, Loma los Pinos, Agua Blanca, Santa María Tenéxpam. Instalación: $800, primer mes gratis. Resto de Huitzo: antena inalámbrica. Planes fibra: ${fiberPlans}`,
+    `Telixtlahuaca (inalámbrico/antena): instalación $1,200. Planes: ${wirelessPlans}`,
+    `Suchilquitongo —también llamado "Suchil"— (inalámbrico/antena): instalación a cotizar con técnico. Planes: ${wirelessPlans}`,
+    'IMPORTANTE: Las 3 zonas SÍ tienen cobertura. Nunca digas que no hay servicio.',
     '',
     'CÁMARAS DE SEGURIDAD:',
     'Wi-Fi Tapo TP-Link (1-3 cámaras, instalación simple):',
