@@ -27,11 +27,15 @@ const TELEGRAM_API_BASE = TELEGRAM_BOT_TOKEN
   ? `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`
   : '';
 
-const FIBER_PLAN_MEDIA_URL = process.env.FIBER_PLAN_MEDIA_URL || '';
-const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL || '';
+const SERVER_BASE_URL = (process.env.SERVER_BASE_URL || '').replace(/\/$/, '');
+const FIBER_PLAN_MEDIA_URL = process.env.FIBER_PLAN_MEDIA_URL ||
+  (SERVER_BASE_URL ? `${SERVER_BASE_URL}/images/planesfibraoptica.jpeg` : '');
+const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL ||
+  (SERVER_BASE_URL ? `${SERVER_BASE_URL}/images/planesinalambrico.jpeg` : '');
 const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
 const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
 const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
+const AGENT_WHATSAPP_NUMBER = process.env.AGENT_WHATSAPP_NUMBER || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'leon123'; // Change in production!
 const WISPHUB_API_URL = process.env.WISPHUB_API_URL || 'https://api.wisphub.net'; // Optional
 
@@ -68,6 +72,19 @@ const NEIGHBORHOODS = {
     'El Guajal', 'La Pila', 'El Pedregal'
   ]
 };
+
+// Client profiles — remembers name, location across messages (in-memory, resets on redeploy)
+const clientProfiles = new Map();
+
+function getProfile(chatId) {
+  return clientProfiles.get(String(chatId)) || null;
+}
+
+function updateProfile(chatId, updates) {
+  const id = String(chatId);
+  const existing = clientProfiles.get(id) || { firstSeen: new Date() };
+  clientProfiles.set(id, { ...existing, ...updates, lastSeen: new Date() });
+}
 
 // Simple in-memory session store keyed by chatId. Keeps short conversational state.
 const sessions = new Map();
@@ -381,11 +398,13 @@ function buildPlanLines(plans) {
 
 function buildLocationPrompt() {
   return {
-    text: [
-      '¿En cuál zona vives?',
-      'Te muestro planes con fibra óptica o inalámbrico según lo que llegue a tu área.'
-    ].join(' '),
+    text: '¿En cuál zona vives? Te muestro planes con fibra óptica o inalámbrico según lo que llegue a tu área.',
     mediaUrls: [],
+    buttons: [
+      { id: 'huitzo', title: 'Huitzo' },
+      { id: 'telixtlahuaca', title: 'Telixtlahuaca' },
+      { id: 'suchilquitongo', title: 'Suchilquitongo' }
+    ],
     replyMarkup: {
       keyboard: [[{ text: 'Huitzo' }, { text: 'Telixtlahuaca' }, { text: 'Suchilquitongo' }]],
       one_time_keyboard: true,
@@ -653,13 +672,17 @@ async function generateFollowupRecommendationReply(context, userText) {
 }
 
 function buildGreetingReply(text) {
-  // Present a short menu so the user picks an explicit action.
   return {
-    text: [
-      'Hola, soy Leo, el asistente de León Telecom.',
-      '¿En qué te puedo ayudar hoy? Elige una opción o escribe su número:'
-    ].join('\n'),
+    text: 'Hola, soy Leo, el asistente de León Telecom. ¿En qué te puedo ayudar hoy?',
     mediaUrls: [],
+    listItems: [
+      { id: '1', title: 'Ver planes' },
+      { id: '2', title: 'Ya soy cliente' },
+      { id: '3', title: 'Hablar con asesor' },
+      { id: '4', title: 'Reportar un problema' },
+      { id: '5', title: 'Migrar servicio' },
+      { id: '6', title: 'Cancelar cita' }
+    ],
     replyMarkup: {
       keyboard: [
         [{ text: '1) Ver planes disponibles' }, { text: '2) Ya soy cliente (tengo un plan)' }],
@@ -673,11 +696,16 @@ function buildGreetingReply(text) {
 
 function buildFallbackReply(text) {
   return {
-    text: [
-      '💭 Oye, no atrapé bien eso.',
-      'Presiona 1️⃣, 2️⃣, 3️⃣, 4️⃣ o 5️⃣ de arriba. 👍'
-    ].join(' '),
+    text: '¿En qué te puedo ayudar? Elige una opción:',
     mediaUrls: [],
+    listItems: [
+      { id: '1', title: 'Ver planes' },
+      { id: '2', title: 'Ya soy cliente' },
+      { id: '3', title: 'Hablar con asesor' },
+      { id: '4', title: 'Reportar falla' },
+      { id: '5', title: 'Migrar servicio' },
+      { id: '6', title: 'Cancelar cita' }
+    ],
     replyMarkup: {
       keyboard: [
         [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
@@ -692,11 +720,16 @@ function buildFallbackReply(text) {
 
 function buildMenuReply() {
   return {
-    text: [
-      'Hola 👋 Soy Leo, de León Telecom.',
-      'Internet rápido para tu zona. ¿Qué necesitas?'
-    ].join('\n'),
+    text: '¿Qué necesitas? 👇',
     mediaUrls: [],
+    listItems: [
+      { id: '1', title: 'Ver planes' },
+      { id: '2', title: 'Ya soy cliente' },
+      { id: '3', title: 'Hablar con asesor' },
+      { id: '4', title: 'Reportar falla' },
+      { id: '5', title: 'Migrar servicio' },
+      { id: '6', title: 'Cancelar cita' }
+    ],
     replyMarkup: {
       keyboard: [
         [{ text: '1️⃣ Ver planes' }, { text: '2️⃣ Ya soy cliente' }],
@@ -710,49 +743,91 @@ function buildMenuReply() {
 }
 
 async function notifyAgentRequest(chatId, userText, location = '') {
+  // Build a short conversation history for context
+  const history = getHistory(chatId);
+  const recentMsgs = history.messages.slice(-8);
+  const historyText = recentMsgs.length > 0
+    ? recentMsgs.map(m => `${m.role === 'user' ? '👤' : '🤖'} ${m.text}`).join('\n')
+    : '(sin historial)';
+
+  const profile = getProfile(chatId);
+  const clientName = profile?.name && profile.name !== 'Usuario' ? profile.name : 'Desconocido';
+
+  const fullMessage = [
+    '🔔 *SOLICITUD DE ASESOR — León Telecom*',
+    `👤 Cliente: ${clientName}`,
+    `📱 WhatsApp: ${chatId}`,
+    location ? `📍 Zona: ${location}` : '',
+    '',
+    userText,
+    '',
+    '--- Últimos mensajes ---',
+    historyText
+  ].filter(line => line !== undefined).join('\n');
+
   const payload = {
-    source: 'telegram',
+    source: 'whatsapp',
     chatId,
+    clientName,
     location,
     userText,
+    history: recentMsgs,
     timestamp: new Date().toISOString()
   };
 
+  let notified = false;
+
   if (AGENT_NOTIFY_WEBHOOK_URL) {
-    const response = await fetch(AGENT_NOTIFY_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Agent webhook failed (${response.status}): ${errorText}`);
+    try {
+      const response = await fetch(AGENT_NOTIFY_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) console.error(`Agent webhook failed (${response.status})`);
+      else notified = true;
+    } catch (e) {
+      console.error('Agent webhook error:', e.message);
     }
-
-    return true;
   }
 
-  if (AGENT_NOTIFY_CHAT_ID) {
-    await sendTelegramMessage(
-      AGENT_NOTIFY_CHAT_ID,
-      [
-        'Solicitud de agente recibida.',
-        `Chat: ${chatId}`,
-        location ? `Zona: ${location}` : 'Zona: no indicada',
-        `Mensaje: ${userText}`
-      ].join('\n')
-    );
-
-    return true;
+  if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) {
+    try {
+      await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, fullMessage);
+      notified = true;
+    } catch (e) {
+      console.error('Agent Telegram notify error:', e.message);
+    }
   }
 
-  return false;
+  if (AGENT_WHATSAPP_NUMBER) {
+    try {
+      await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, fullMessage);
+      notified = true;
+    } catch (e) {
+      console.error('Agent WhatsApp notify error:', e.message);
+    }
+  }
+
+  return notified;
 }
 
 async function notifyAgentPaymentReceipt(chatId, userName, analysis) {
+  const analysisText = analysis.valido
+    ? Object.entries(analysis).filter(([k]) => k !== 'valido').map(([k, v]) => `• ${k}: ${v}`).join('\n')
+    : `Inválido: ${analysis.razon}`;
+
+  const fullMessage = [
+    '📸 *COMPROBANTE DE PAGO — León Telecom*',
+    `👤 Cliente: ${userName}`,
+    `📱 WhatsApp: ${chatId}`,
+    '',
+    analysis.valido ? '✅ Comprobante válido' : '❌ Comprobante inválido',
+    analysisText
+  ].join('\n');
+
   const payload = {
-    source: 'telegram',
+    source: 'whatsapp',
     type: 'payment_receipt',
     chatId,
     userName,
@@ -760,44 +835,40 @@ async function notifyAgentPaymentReceipt(chatId, userName, analysis) {
     timestamp: new Date().toISOString()
   };
 
+  let notified = false;
+
   if (AGENT_NOTIFY_WEBHOOK_URL) {
-    const response = await fetch(AGENT_NOTIFY_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Agent webhook failed (${response.status}): ${errorText}`);
+    try {
+      const response = await fetch(AGENT_NOTIFY_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) notified = true;
+    } catch (e) {
+      console.error('Agent webhook error:', e.message);
     }
-
-    return true;
   }
 
-  if (AGENT_NOTIFY_CHAT_ID) {
-    const analysisText = analysis.valido
-      ? Object.entries(analysis)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join('\n')
-      : `Inválido: ${analysis.razon}`;
-
-    await sendTelegramMessage(
-      AGENT_NOTIFY_CHAT_ID,
-      [
-        '📸 Comprobante de Pago Recibido',
-        `Usuario: ${userName}`,
-        `Chat: ${chatId}`,
-        '',
-        'Análisis:',
-        analysisText
-      ].join('\n')
-    );
-
-    return true;
+  if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) {
+    try {
+      await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, fullMessage);
+      notified = true;
+    } catch (e) {
+      console.error('Agent Telegram receipt notify error:', e.message);
+    }
   }
 
-  return false;
+  if (AGENT_WHATSAPP_NUMBER) {
+    try {
+      await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, fullMessage);
+      notified = true;
+    } catch (e) {
+      console.error('Agent WhatsApp receipt notify error:', e.message);
+    }
+  }
+
+  return notified;
 }
 
 async function generateAIReply(userText) {
@@ -966,18 +1037,59 @@ async function sendWhatsAppMessage(to, text, mediaUrls = [], _options = {}) {
 
   if (!text) return;
 
+  // Build payload: interactive (buttons/list) or plain text
+  let msgPayload;
+  if (_options.buttons && _options.buttons.length > 0) {
+    msgPayload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: text.substring(0, 1024) },
+        action: {
+          buttons: _options.buttons.slice(0, 3).map(b => ({
+            type: 'reply',
+            reply: { id: String(b.id).substring(0, 256), title: String(b.title).substring(0, 20) }
+          }))
+        }
+      }
+    };
+  } else if (_options.listItems && _options.listItems.length > 0) {
+    msgPayload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: text.substring(0, 1024) },
+        action: {
+          button: 'Ver opciones',
+          sections: [{
+            rows: _options.listItems.slice(0, 10).map(item => ({
+              id: String(item.id).substring(0, 256),
+              title: String(item.title).substring(0, 24)
+            }))
+          }]
+        }
+      }
+    };
+  } else {
+    msgPayload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body: text, preview_url: false }
+    };
+  }
+
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const response = await fetch(base, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to,
-          type: 'text',
-          text: { body: text, preview_url: false }
-        })
+        body: JSON.stringify(msgPayload)
       });
 
       if (!response.ok) {
@@ -1052,9 +1164,22 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
   }
 }
 
+const MENU_LIST_ITEMS = [
+  { id: '1', title: 'Ver planes' },
+  { id: '2', title: 'Ya soy cliente' },
+  { id: '3', title: 'Hablar con asesor' },
+  { id: '4', title: 'Reportar falla' },
+  { id: '5', title: 'Migrar servicio' },
+  { id: '6', title: 'Cancelar cita' }
+];
+
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
-    dataManager.registerUser(chatId, { name: 'Usuario', platform: 'whatsapp' });
+    const profile = getProfile(chatId);
+    dataManager.registerUser(chatId, {
+      name: (profile && profile.name) || 'Usuario',
+      platform: 'whatsapp'
+    });
 
     const session = getSession(chatId);
     addMessageToHistory(chatId, 'user', text);
@@ -1062,7 +1187,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
     async function sendReplyObject(replyObj) {
       if (!replyObj.text) return;
       addMessageToHistory(chatId, 'bot', replyObj.text);
-      await sendMsg(chatId, replyObj.text, replyObj.mediaUrls || []);
+      const opts = {};
+      if (replyObj.buttons) opts.buttons = replyObj.buttons;
+      if (replyObj.listItems) opts.listItems = replyObj.listItems;
+      if (replyObj.replyMarkup) opts.replyMarkup = replyObj.replyMarkup;
+      await sendMsg(chatId, replyObj.text, replyObj.mediaUrls || [], opts);
     }
 
     function parseMenuChoice(input) {
@@ -1154,6 +1283,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     if (session.state === 'awaiting_installation_name') {
       const d = session.data || {};
+      updateProfile(chatId, { name: text });
       setSession(chatId, { state: 'awaiting_installation_address', data: { ...d, name: text } });
       await sendMsg(chatId, `¿La dirección de instalación es en ${d.location || 'tu zona'}?`);
       return;
@@ -1431,6 +1561,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_location') {
       const location = detectLocation(text);
       if (location) {
+        updateProfile(chatId, { location });
         setSession(chatId, { state: 'awaiting_plan_selection', data: { location } });
         await sendReplyObject(buildPlanReplyForLocation(location));
         await sendMsg(chatId, '¿Cuál plan te gustaría?');
@@ -1536,6 +1667,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     if (session.state === 'awaiting_report_name') {
       const d = session.data || {};
+      updateProfile(chatId, { name: text });
       setSession(chatId, { state: 'awaiting_report_address', data: { ...d, name: text } });
       await sendMsg(chatId, '¿Dónde está ubicada la casa de la instalación?');
       return;
@@ -1605,6 +1737,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     if (session.state === 'awaiting_agent_name') {
       const d = session.data || {};
+      updateProfile(chatId, { name: text });
       setSession(chatId, { state: 'awaiting_agent_need', data: { ...d, agentName: text } });
       await sendMsg(chatId, '¿Qué necesitas o qué preguntas tienes?');
       return;
@@ -1659,7 +1792,16 @@ async function handleChatMessage(chatId, text, sendMsg) {
     // Default: no session state
     if (isGreetingMessage(text)) {
       setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-      await sendReplyObject(buildMenuReply());
+      const knownProfile = getProfile(chatId);
+      const knownName = knownProfile?.name && knownProfile.name !== 'Usuario' ? knownProfile.name : null;
+      if (knownName) {
+        await sendMsg(chatId, `¡Hola de nuevo, ${knownName}! ¿En qué te puedo ayudar? 👇`, [],
+          { listItems: MENU_LIST_ITEMS });
+      } else {
+        await sendMsg(chatId,
+          'Hola, soy Leo, asistente de León Telecom 👋\n¿En qué te puedo ayudar?', [],
+          { listItems: MENU_LIST_ITEMS });
+      }
       return;
     }
 
@@ -1785,6 +1927,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
   console.log(`[WhatsApp] Incoming: type=${msg.type} from=${from} (raw=${rawFrom}) name=${contactName}`);
 
+  // Save WhatsApp profile name if we don't know this client yet
+  if (contactName && contactName !== 'Usuario') {
+    const existing = getProfile(from);
+    if (!existing?.name || existing.name === 'Usuario') {
+      updateProfile(from, { name: contactName });
+    }
+  }
+
   if (msg.type === 'image') {
     try {
       const imageBase64 = await downloadWhatsAppMedia(msg.image?.id);
@@ -1799,6 +1949,22 @@ app.post('/webhook/whatsapp', async (req, res) => {
   if (msg.type === 'text') {
     const text = msg.text?.body?.trim();
     if (text) await handleChatMessage(from, text, sendWhatsAppMessage);
+    return;
+  }
+
+  // Handle interactive button/list replies (user tapped a button)
+  if (msg.type === 'interactive') {
+    const itype = msg.interactive?.type;
+    let replyId = '';
+    if (itype === 'button_reply') {
+      replyId = msg.interactive.button_reply?.id || msg.interactive.button_reply?.title || '';
+    } else if (itype === 'list_reply') {
+      replyId = msg.interactive.list_reply?.id || msg.interactive.list_reply?.title || '';
+    }
+    if (replyId) {
+      console.log(`[WhatsApp] Interactive reply: ${itype} id="${replyId}" from=${from}`);
+      await handleChatMessage(from, replyId, sendWhatsAppMessage);
+    }
   }
 });
 
