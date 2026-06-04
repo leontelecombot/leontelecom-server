@@ -1759,21 +1759,38 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     if (session.state === 'awaiting_plan_selection') {
-      const hasQuestion = /\?|cuantos|cuanto|como |que |cual|dispositiv|aparato|velocid|precio|mbps|puede|incluye|funciona|instala|diferencia/.test(normalizeText(text));
-      const notInterested = !hasQuestion && normalizeText(text).match(/\b(no|solo preguntaba|solo info|solo queria|nada|luego|despues|no gracias)\b/);
-      if (notInterested) {
+      const v = normalizeText(text);
+      const hasQuestion = /\?|cuantos|cuanto|como |que |cual|dispositiv|aparato|velocid|mbps|puede|incluye|funciona|diferencia/.test(v);
+
+      // Pure cancellation (no question content)
+      if (!hasQuestion && /\b(no|solo preguntaba|solo info|solo queria|nada|luego|despues|no gracias)\b/.test(v)) {
         clearSession(chatId);
         await sendMsg(chatId, 'Sin problema, aquí estamos cuando quieras. 😊');
         return;
       }
+
+      // Question about plans → answer with AI, stay in this state
+      if (hasQuestion) {
+        const planZone2 = session.data?.location;
+        const zPlans = planZone2 === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
+        const plansInfo2 = zPlans.map(p => `${p.name} ${p.speed} ${p.price}`).join(', ');
+        const qReply = await callAI(
+          `Eres Leo de León Telecom. Zona: ${planZone2}. Planes: ${plansInfo2}. León Telecom solo ofrece internet. Responde la pregunta del cliente de forma clara. Máximo 2 oraciones. Solo texto, sin markdown.`,
+          text, { temperature: 0.4, maxTokens: 150 }
+        ).catch(() => null);
+        await sendMsg(chatId, qReply || 'El plan Basic de 80 Mbps permite varios dispositivos conectados al mismo tiempo sin problema. ¿Te gustaría contratarlo?');
+        return; // Stay in awaiting_plan_selection
+      }
+
       const location = session.data?.location;
       const plans = location === LOCATIONS.huitzo ? FIBER_PLANS : WIRELESS_PLANS;
+      // Use word-boundary match to avoid "basico" matching "basic"
       const selectedPlan = plans.find(p =>
-        normalizeText(text).includes(normalizeText(p.name)) ||
-        normalizeText(text).includes(normalizeText(p.speed))
+        new RegExp('\\b' + normalizeText(p.name).replace(/\s+/g, '\\s*') + '\\b').test(v) ||
+        new RegExp('\\b' + normalizeText(p.speed).replace(/\s+/g, '\\s*') + '\\b').test(v)
       );
       // If plan found or user expressed interest → move to contact
-      if (selectedPlan || normalizeText(text).match(/\b(si|sí|quiero|me interesa|ese|dale|ok|ese mismo|el primero|el ultimo|el mas|me gusta|contratar|el de|ese de|quiero ese|ese plan)\b/)) {
+      if (selectedPlan || /\b(si|sí|quiero|me interesa|ese|dale|ok|ese mismo|el primero|el ultimo|el mas|me gusta|contratar|el de|ese de|quiero ese|ese plan)\b/.test(v)) {
         const planData = selectedPlan
           ? { ...session.data, selectedPlan: selectedPlan.name, selectedSpeed: selectedPlan.speed, selectedPrice: selectedPlan.price }
           : session.data;
