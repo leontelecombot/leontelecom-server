@@ -78,7 +78,37 @@
     .alert-error{background:#fce8e8;color:#c0392b}
     #loading{display:none;text-align:center;color:#888;font-size:.85em;padding:10px}
     .empty{text-align:center;color:#aaa;font-size:.85em;padding:20px}
-    @media(max-width:700px){.main{grid-template-columns:1fr}.full-width{grid-column:1}}
+    /* Status banner */
+    .status-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 28px;font-size:.88em;font-weight:600;gap:10px;transition:.3s}
+    .status-bar.online{background:#d4edda;color:#155724;border-bottom:2px solid #b8dfc6}
+    .status-bar.repair{background:#fff3cd;color:#856404;border-bottom:2px solid #ffe69c}
+    .status-bar.cut{background:#fce8e8;color:#c0392b;border-bottom:2px solid #f5c6cb}
+    .status-bar.maintenance{background:#e8f4fd;color:#1565c0;border-bottom:2px solid #b8d9f5}
+    .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:8px;flex-shrink:0}
+    .online .status-dot{background:#28a745;animation:pulse 2s infinite}
+    .repair .status-dot,.cut .status-dot{background:currentColor}
+    .maintenance .status-dot{background:currentColor}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .status-btn{padding:5px 14px;border:1.5px solid currentColor;border-radius:20px;background:transparent;cursor:pointer;font-size:.8em;font-weight:600;color:inherit;white-space:nowrap}
+    .status-btn:hover{opacity:.7}
+    /* Responsive */
+    @media(max-width:750px){
+      .main{grid-template-columns:1fr}
+      .full-width{grid-column:1}
+      .topbar{padding:12px 16px}
+      .topbar .stats{gap:8px;font-size:.78em}
+      .stat{padding:4px 10px}
+      .main{padding:0 12px;margin:16px auto}
+      .quick-btns{flex-wrap:wrap}
+      .qbtn{min-width:calc(50% - 5px)}
+      .schedule-opts{grid-template-columns:1fr 1fr}
+      .status-bar{padding:10px 16px;font-size:.82em}
+      #clientList{overflow-x:auto}
+    }
+    @media(max-width:420px){
+      .qbtn{min-width:100%}
+      .topbar h1 img{height:28px}
+    }
   </style>
 </head>
 <body>
@@ -93,6 +123,15 @@
     <div class="stat">📤 <span id="histCount">0</span> enviados hoy</div>
     <div class="stat" id="activeCount" style="display:none">🟢 <span id="activeNum">0</span> activos</div>
   </div>
+</div>
+
+<!-- Service Status Banner -->
+<div class="status-bar online" id="statusBar">
+  <div style="display:flex;align-items:center">
+    <span class="status-dot"></span>
+    <span id="statusText">🟢 Servicio en línea — Todo operativo</span>
+  </div>
+  <button class="status-btn" onclick="setOnline()" id="statusResetBtn" style="display:none">✅ Marcar como Online</button>
 </div>
 
 <div class="main">
@@ -259,6 +298,29 @@
   let currentSched = 'once';
   let modSched = 'once';
 
+  // Service status
+  const STATUS_MAP = {
+    repair: { cls:'repair', text:'🔧 En reparación — Equipo técnico trabajando' },
+    cut:    { cls:'cut',    text:'⚠️ Corte de servicio — Servicio interrumpido' },
+    ok:     { cls:'online', text:'🟢 Servicio en línea — Todo operativo' },
+    maintenance: { cls:'maintenance', text:'🕐 Mantenimiento programado — Puede haber interrupciones' }
+  };
+
+  function updateStatusBanner(key) {
+    const s = STATUS_MAP[key] || STATUS_MAP['ok'];
+    const bar = document.getElementById('statusBar');
+    bar.className = 'status-bar ' + s.cls;
+    document.getElementById('statusText').textContent = s.text;
+    document.getElementById('statusResetBtn').style.display = key !== 'ok' ? '' : 'none';
+    localStorage.setItem('serviceStatus', key);
+  }
+
+  function setOnline() { updateStatusBanner('ok'); }
+
+  // Restore status on load
+  const savedStatus = localStorage.getItem('serviceStatus');
+  if (savedStatus) updateStatusBanner(savedStatus);
+
   // Load stats on page load
   window.onload = () => { loadStats(); loadScheduled(); loadHistory(); loadClients(); };
 
@@ -393,6 +455,7 @@
       const r = await fetchAuth('/admin/api/broadcast', { method: 'POST', body: JSON.stringify({ type: 'aviso', label: q.label, message: q.msg, scheduleType: 'once' }) });
       const d = await r.json();
       showAlert('formAlert', `✅ Enviado a ${d.result?.sent || 0} clientes`, 'success');
+      updateStatusBanner(key);
       loadStats(); loadHistory();
     } catch(e) { showAlert('formAlert', '❌ Error: ' + e.message, 'error'); }
     finally { document.getElementById('loading').style.display = 'none'; }
