@@ -444,11 +444,6 @@ function isMigrationRequest(text) {
   return /\b(migrar|migracion|migraci|cambiar domicilio|cambio de domicilio|mover servicio|cambiar de casa|otro domicilio|nueva casa|nuevo domicilio)\b/.test(value);
 }
 
-function isExistingCustomer(text) {
-  const value = normalizeText(text);
-  return /\b(ya tengo un plan|ya tengo servicio|soy cliente|tengo un plan|mi plan|ya soy cliente|cliente)\b/.test(value);
-}
-
 function isReportRequest(text) {
   const value = normalizeText(text);
   return /\b(reportar|reporte|reporto|report|denunciar|problema|reportar problema)\b/.test(value);
@@ -691,18 +686,6 @@ function buildAgentReply() {
       'Tu contacto: 📞 9511603125. Alguien te atiende en poco tiempo.'
     ].join(' '),
     mediaUrls: []
-  };
-}
-
-function buildExistingCustomerReply() {
-  return {
-    text: '¿En qué te puedo ayudar?',
-    mediaUrls: [],
-    buttons: [
-      { id: 'problema_tecnico', title: 'Tengo un problema' },
-      { id: 'mi_factura', title: 'Mi factura/pago' },
-      { id: 'cambiar_plan', title: 'Cambiar de plan' }
-    ]
   };
 }
 
@@ -1016,9 +999,8 @@ function buildMenuReply() {
       '1️⃣ Ver planes de internet',
       '2️⃣ Cámaras de seguridad',
       '3️⃣ Soporte técnico',
-      '4️⃣ Ya soy cliente',
-      '5️⃣ Hablar con un asesor',
-      '6️⃣ Migrar mi servicio'
+      '4️⃣ Hablar con un asesor',
+      '5️⃣ Migrar mi servicio'
     ].join('\n'),
     mediaUrls: [],
     replyMarkup: {
@@ -1178,44 +1160,6 @@ async function notifyAgentPaymentReceipt(chatId, userName, analysis) {
 async function generateAIReply(userText) {
   if (!AI_API_KEY) return null;
   return callAI(SYSTEM_PROMPT, userText, { temperature: 0.4, maxTokens: 256 });
-}
-
-async function generateReply(userText) {
-  if (isGreetingMessage(userText)) {
-    return buildMenuReply();
-  }
-
-  const location = detectLocation(userText);
-
-  if (isAgentRequest(userText)) {
-    return buildAgentReply();
-  }
-
-  if (isReportRequest(userText)) {
-    return buildTechnicalReply(userText);
-  }
-
-  if (isExistingCustomer(userText)) {
-    return buildExistingCustomerReply();
-  }
-
-  if (isPlanListRequest(userText)) {
-    return buildPlanReplyForLocation(location);
-  }
-
-  if (isPlanRequest(userText)) {
-    return buildPlanReply(userText);
-  }
-
-  if (isCoverageRequest(userText)) {
-    return buildCoverageReply(userText);
-  }
-
-  if (isTechnicalIssue(userText)) {
-    return buildTechnicalReply(userText);
-  }
-
-  return buildFallbackReply(userText);
 }
 
 async function sendTelegramMessage(chatId, text, mediaUrls = [], options = {}) {
@@ -1578,9 +1522,8 @@ const MENU_LIST_ITEMS = [
   { id: '1', title: 'Ver planes de internet' },
   { id: '2', title: 'Cámaras de seguridad' },
   { id: '3', title: 'Soporte técnico' },
-  { id: '4', title: 'Ya soy cliente' },
-  { id: '5', title: 'Hablar con un asesor' },
-  { id: '6', title: 'Migrar mi servicio' }
+  { id: '4', title: 'Hablar con un asesor' },
+  { id: '5', title: 'Migrar mi servicio' }
 ];
 
 const CAMERA_KNOWLEDGE = `
@@ -1661,9 +1604,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (/^1$|^1\b|\buno\b|ver planes|planes|paquetes|contratar/.test(v)) return 1;
       if (/^2$|^2\b|\bdos\b|camara|camaras|videovigilancia|cctv/.test(v)) return 2;
       if (/^3$|^3\b|\btres\b|reportar|problema|reporte|soporte|tecnico|falla/.test(v)) return 3;
-      if (/^4$|^4\b|\bcuatro\b|ya soy cliente|tengo un plan|soy cliente/.test(v)) return 4;
-      if (/^5$|^5\b|\bcinco\b|hablar con|asesor|agente/.test(v)) return 5;
-      if (/^6$|^6\b|\bseis\b|migrar|migracion|migraci/.test(v)) return 6;
+      if (/^4$|^4\b|\bcuatro\b|hablar con|asesor|agente/.test(v)) return 4;
+      if (/^5$|^5\b|\bcinco\b|migrar|migracion|migraci/.test(v)) return 5;
       return null;
     }
 
@@ -1673,8 +1615,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (detectedChoice === 1) { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); return; }
       if (detectedChoice === 2) { setSession(chatId, { state: 'awaiting_camera_needs', data: {} }); await sendMsg(chatId, '¿Para qué espacio necesita las cámaras y cuántas aproximadamente?'); return; }
       if (detectedChoice === 3) { setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt()); return; }
-      if (detectedChoice === 4) { setSession(chatId, { state: 'awaiting_plan_name', data: {} }); await sendReplyObject(buildExistingCustomerReply()); return; }
-      if (detectedChoice === 5) { setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
+      if (detectedChoice === 4) { setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
     }
 
     if (session.state && session.state !== 'awaiting_menu_choice') {
@@ -1724,9 +1665,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendReplyObject(buildReportPrompt());
         return;
       }
-      if (choice === 4) { setSession(chatId, { state: 'awaiting_plan_name', data: {} }); await sendReplyObject(buildExistingCustomerReply()); return; }
-      if (choice === 5) { setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
-      if (choice === 6) {
+      if (choice === 4) { setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
+      if (choice === 5) {
         setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
         await sendMsg(chatId, '🔄 Migración de servicio\n¿En cuál zona está el servicio ACTUAL?', [], {
           buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
@@ -2021,36 +1961,6 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
-    if (session.state === 'awaiting_plan_name') {
-      // Handle buttons from buildExistingCustomerReply
-      if (text === 'problema_tecnico' || isTechnicalIssue(text)) {
-        setSession(chatId, { state: 'awaiting_report', data: {} });
-        await sendReplyObject(buildReportPrompt());
-        return;
-      }
-      if (text === 'mi_factura' || normalizeText(text).includes('factura') || normalizeText(text).includes('pago')) {
-        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: 'consulta de facturación' } });
-        await sendMsg(chatId, '¿A qué nombre está el servicio?');
-        return;
-      }
-      if (text === 'cambiar_plan' || normalizeText(text).includes('cambiar') || normalizeText(text).includes('cambio')) {
-        setSession(chatId, { state: 'awaiting_location', data: {} });
-        await sendReplyObject(buildLocationPrompt());
-        return;
-      }
-      // Free text → ask what the issue is
-      setSession(chatId, { state: 'awaiting_plan_issue', data: { plan: text } });
-      await sendMsg(chatId, `¿En qué te puedo ayudar con ese plan?`);
-      return;
-    }
-
-    if (session.state === 'awaiting_plan_issue') {
-      const plan = session.data?.plan || '';
-      setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: `${plan}: ${text}` } });
-      await sendMsg(chatId, '¿A qué nombre está el servicio?');
-      return;
-    }
-
     if (session.state === 'awaiting_neighborhood_confirm') {
       const d = session.data || {};
       const yes = text === 'si_ubicacion' || normalizeText(text).match(/\b(si|sí|correcto|exacto|ese|esa|ahí)\b/);
@@ -2224,9 +2134,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
         '1️⃣ Ver planes de internet',
         '2️⃣ Cámaras de seguridad',
         '3️⃣ Soporte técnico',
-        '4️⃣ Ya soy cliente',
-        '5️⃣ Hablar con un asesor',
-        '6️⃣ Migrar mi servicio'
+        '4️⃣ Hablar con un asesor',
+        '5️⃣ Migrar mi servicio'
       ].join('\n');
       if (knownName) {
         await sendMsg(chatId, [
@@ -2243,7 +2152,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           '• Planes de internet (fibra óptica e inalámbrico)',
           '• Cámaras de seguridad (Tapo Wi-Fi e Hikvision profesional)',
           '• Soporte técnico y reportes de fallas',
-          '• Consultas sobre tu servicio activo',
+          '• Conectarte con un asesor',
           '',
           'Elige una opción o escribe tu consulta:',
           '',
