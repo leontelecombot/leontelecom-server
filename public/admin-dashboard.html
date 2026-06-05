@@ -141,9 +141,14 @@
 
       <!-- Image (promo only) -->
       <div class="form-group" id="imageGroup" style="display:none">
-        <label>Imagen (URL pública o subir)</label>
-        <input type="url" id="msgImageUrl" placeholder="https://…" oninput="previewImage()">
+        <label>Imagen</label>
+        <input type="file" id="msgImageFile" accept="image/*" onchange="handleImageFile(this)" style="display:none">
+        <div style="display:flex;gap:8px;align-items:center">
+          <button type="button" class="btn btn-edit" onclick="document.getElementById('msgImageFile').click()" style="width:auto">📁 Seleccionar imagen</button>
+          <span id="imgFileName" style="font-size:.82em;color:#888">Sin imagen seleccionada</span>
+        </div>
         <img id="imgPreview" class="img-preview">
+        <input type="hidden" id="msgImageUrl">
       </div>
 
       <!-- Message -->
@@ -206,6 +211,23 @@
 
 </div>
 
+<!-- Clients section -->
+<div style="max-width:1100px;margin:0 auto 28px;padding:0 20px">
+  <div class="card">
+    <div class="card-header">👥 Base de Clientes <span id="clientTotal" style="font-size:.8em;font-weight:400;color:#888;margin-left:6px"></span></div>
+    <div class="card-body">
+      <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <input type="text" id="newPhone" placeholder="Número (ej: 9511234567)" style="flex:1;min-width:160px">
+        <input type="text" id="newName" placeholder="Nombre (opcional)" style="flex:1;min-width:140px">
+        <button class="btn btn-primary" onclick="addClient()" style="width:auto;padding:9px 18px">➕ Agregar</button>
+        <button class="btn btn-edit" onclick="loadClients()" style="width:auto;padding:9px 14px">🔄</button>
+      </div>
+      <div id="clientAlert" class="alert"></div>
+      <div id="clientList" style="max-height:260px;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Modify modal -->
 <div id="modModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;display:none;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:12px;padding:24px;width:360px;max-width:90vw">
@@ -234,7 +256,7 @@
   let modSched = 'once';
 
   // Load stats on page load
-  window.onload = () => { loadStats(); loadScheduled(); loadHistory(); };
+  window.onload = () => { loadStats(); loadScheduled(); loadHistory(); loadClients(); };
 
   async function loadStats() {
     try {
@@ -259,9 +281,75 @@
   }
 
   function fetchAuth(url, opts = {}) {
-    opts.headers = { ...(opts.headers||{}), 'Content-Type': 'application/json' };
+    if (!(opts.body instanceof FormData)) {
+      opts.headers = { ...(opts.headers||{}), 'Content-Type': 'application/json' };
+    }
+    opts.headers = { ...(opts.headers||{}), 'Authorization': 'Bearer ' + token };
     const sep = url.includes('?') ? '&' : '?';
     return fetch(url + sep + 'token=' + encodeURIComponent(token), opts);
+  }
+
+  // Image file handling
+  async function handleImageFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    document.getElementById('imgFileName').textContent = file.name;
+    // Preview
+    const reader = new FileReader();
+    reader.onload = e => { const img = document.getElementById('imgPreview'); img.src = e.target.result; img.style.display='block'; };
+    reader.readAsDataURL(file);
+    // Upload
+    const fd = new FormData();
+    fd.append('image', file);
+    try {
+      const r = await fetchAuth('/admin/api/upload-image', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.url) { document.getElementById('msgImageUrl').value = d.url; document.getElementById('imgFileName').textContent = '✅ ' + file.name; }
+    } catch(e) { document.getElementById('imgFileName').textContent = '❌ Error al subir'; }
+  }
+
+  // Client management
+  async function loadClients() {
+    try {
+      const r = await fetchAuth('/admin/api/clients');
+      const d = await r.json();
+      document.getElementById('clientTotal').textContent = `(${d.total} registrados)`;
+      document.getElementById('userCount').textContent = d.total;
+      const el = document.getElementById('clientList');
+      if (!d.clients?.length) { el.innerHTML = '<div class="empty">Sin clientes aún. Agrega números manualmente o los clientes que chatean con el bot aparecen automáticamente.</div>'; return; }
+      el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:.85em">
+        <thead><tr style="background:#f5f5f5"><th style="padding:8px;text-align:left">Nombre</th><th>Número</th><th>Origen</th><th></th></tr></thead>
+        <tbody>${d.clients.map(c => `
+          <tr style="border-bottom:1px solid #f0f0f0">
+            <td style="padding:7px 8px">${c.name||'—'}</td>
+            <td style="padding:7px 8px;color:#555">${c.chatId}</td>
+            <td style="padding:7px 8px"><span class="badge" style="${c.source==='manual'?'background:#e8f4fd;color:#1565c0':'background:#f0f0f0;color:#555'}">${c.source==='manual'?'Manual':'Bot'}</span></td>
+            <td style="padding:7px 8px;text-align:right">${c.source==='manual'?`<button class="btn btn-danger btn-sm" onclick="deleteClient('${c.chatId}')">✕</button>`:''}
+            </td>
+          </tr>`).join('')}
+        </tbody></table>`;
+    } catch(e) {}
+  }
+
+  async function addClient() {
+    const phone = document.getElementById('newPhone').value.trim();
+    const name = document.getElementById('newName').value.trim();
+    if (!phone) { showAlert('clientAlert','Ingresa un número','error'); return; }
+    try {
+      const r = await fetchAuth('/admin/api/clients', { method: 'POST', body: JSON.stringify({ phone, name }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      document.getElementById('newPhone').value = '';
+      document.getElementById('newName').value = '';
+      showAlert('clientAlert', `✅ Cliente ${d.phone} agregado`, 'success');
+      loadClients(); loadStats();
+    } catch(e) { showAlert('clientAlert', '❌ ' + e.message, 'error'); }
+  }
+
+  async function deleteClient(phone) {
+    if (!confirm('¿Eliminar este cliente de la lista?')) return;
+    await fetchAuth('/admin/api/clients/' + phone, { method: 'DELETE' });
+    loadClients(); loadStats();
   }
 
   function setType(type) {

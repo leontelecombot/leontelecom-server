@@ -2,8 +2,19 @@ require('dotenv').config();
 
 const express = require('express');
 const path = require('path');
+const multer = require('multer');
 const { analyzePaymentReceipt } = require('./utils/imageAnalysis');
 const dataManager = require('./utils/dataManager');
+
+// File upload config — images saved to public/images/uploads/
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, path.join(__dirname, 'public/images/uploads')),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`)
+});
+const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
+  if (!file.mimetype.startsWith('image/')) return cb(new Error('Solo imágenes'));
+  cb(null, true);
+}});
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -128,6 +139,30 @@ function unpauseChat(chatId) {
   pausedChats.delete(String(chatId));
 }
 
+// ==================== MANUAL CLIENT DATABASE ====================
+// Clients added manually through admin panel (phone numbers)
+const manualClients = new Map(); // phoneNumber → { name, phone, addedAt, notes }
+
+function getAllBroadcastRecipients() {
+  const seen = new Set();
+  const recipients = [];
+  // Auto-discovered clients (from bot conversations)
+  for (const user of dataManager.getAllUsers()) {
+    if (user.platform === 'whatsapp' && !seen.has(user.chatId)) {
+      seen.add(user.chatId);
+      recipients.push({ chatId: user.chatId, name: user.name, source: 'bot' });
+    }
+  }
+  // Manually added clients
+  for (const [phone, client] of manualClients.entries()) {
+    if (!seen.has(phone)) {
+      seen.add(phone);
+      recipients.push({ chatId: phone, name: client.name || phone, source: 'manual' });
+    }
+  }
+  return recipients;
+}
+
 // ==================== ADMIN BROADCAST SYSTEM ====================
 const scheduledBroadcasts = new Map(); // id → broadcast object
 const broadcastHistory = []; // Array of sent records
@@ -137,17 +172,16 @@ function generateBroadcastId() {
 }
 
 async function sendBulkWhatsApp(message, imageUrls = []) {
-  const users = dataManager.getAllUsers().filter(u => u.platform === 'whatsapp');
+  const recipients = getAllBroadcastRecipients();
   let sent = 0, failed = 0;
-  for (const user of users) {
+  for (const r of recipients) {
     try {
-      await sendWhatsAppMessage(user.chatId, message, imageUrls);
+      await sendWhatsAppMessage(r.chatId, message, imageUrls);
       sent++;
     } catch (e) { failed++; }
-    // Small delay to avoid rate limiting
     await new Promise(r => setTimeout(r, 200));
   }
-  return { sent, failed, total: users.length };
+  return { sent, failed, total: recipients.length };
 }
 
 // Scheduler — checks every 60s if any broadcast needs to be sent
@@ -2423,7 +2457,8 @@ app.post('/admin/api/login', (req, res) => {
 
 // Middleware to verify admin token
 function verifyAdminToken(req, res, next) {
-  const token = req.body.token || req.query.token;
+  const authHeader = req.headers.authorization;
+  const token = req.body?.token || req.query.token || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : authHeader);
   if (!token) {
     return res.status(401).json({ error: 'Token requerido' });
   }
@@ -2515,6 +2550,37 @@ app.patch('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
 // API: Broadcast history
 app.get('/admin/api/broadcast-history', verifyAdminToken, (req, res) => {
   res.json({ history: broadcastHistory.slice(0, 50) });
+});
+
+// API: Upload image
+app.post('/admin/api/upload-image', verifyAdminToken, upload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se recibió imagen' });
+  const url = `${SERVER_BASE_URL}/images/uploads/${req.file.filename}`;
+  res.json({ success: true, url });
+});
+
+// API: List all clients (bot + manual)
+app.get('/admin/api/clients', verifyAdminToken, (req, res) => {
+  const recipients = getAllBroadcastRecipients();
+  res.json({ clients: recipients, total: recipients.length });
+});
+
+// API: Add manual client
+app.post('/admin/api/clients', verifyAdminToken, (req, res) => {
+  let { phone, name, notes } = req.body;
+  if (!phone) return res.status(400).json({ error: 'Número requerido' });
+  // Normalize number
+  phone = phone.replace(/\D/g, '');
+  if (!phone.startsWith('52')) phone = '52' + phone;
+  if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
+  manualClients.set(phone, { name: name || '', phone, notes: notes || '', addedAt: new Date().toISOString() });
+  res.json({ success: true, phone });
+});
+
+// API: Delete manual client
+app.delete('/admin/api/clients/:phone', verifyAdminToken, (req, res) => {
+  manualClients.delete(req.params.phone);
+  res.json({ success: true });
 });
 
 // API: Get network status (check Wisphub or return online)
