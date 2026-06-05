@@ -170,7 +170,7 @@
         .then(r => r.json())
         .then(data => {
           if (data.success) {
-            sessionStorage.setItem('admin_auth', data.token);
+            localStorage.setItem('adminToken', data.token);
             window.location.href = '/admin/dashboard';
           } else {
             alert.textContent = data.error || 'Contraseña incorrecta';
