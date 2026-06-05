@@ -2925,7 +2925,7 @@ const port = Number(process.env.PORT || 3000);
   app.listen(port, () => {
     console.log(`León Telecom server listening on port ${port}`);
     console.log(`AI provider: ${AI_PROVIDER}`);
-    console.log(`Persistencia: ${persistence.usingPg ? 'PostgreSQL ✅' : 'archivo local ⚠️ (define DATABASE_URL para producción)'}`);
+    console.log(`Persistencia: ${persistence.label}`);
     console.log(`Horario de atención: ${BUSINESS_HOURS_SUMMARY}`);
   });
 })();

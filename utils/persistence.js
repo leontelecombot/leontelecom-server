@@ -5,60 +5,94 @@
  * historial, clientes manuales, folios, casos de asesor, etc.) para que NO se
  * pierda cuando Render reinicia o se hace un nuevo deploy.
  *
- * - Si existe DATABASE_URL  → usa PostgreSQL (persistente de verdad en Render).
- * - Si NO existe            → usa un archivo local data/store.json (solo sirve
- *                             en desarrollo; en Render free se borra al redeploy).
+ * Soporta 3 backends, en este orden de prioridad:
+ *   1. MONGODB_URI   → MongoDB Atlas (tier gratis M0 NO expira) ✅ recomendado
+ *   2. DATABASE_URL  → PostgreSQL
+ *   3. (ninguno)     → archivo local data/store.json (solo desarrollo; en Render
+ *                      free se borra al redeploy)
  *
- * Todo el estado se guarda como un único registro JSON, lo cual es más que
- * suficiente para el volumen de un ISP local y evita esquemas complicados.
+ * Todo el estado se guarda como un único documento/registro JSON, suficiente
+ * para el volumen de un ISP local y sin esquemas complicados.
  */
 
 const fs = require('fs');
 const path = require('path');
 
+const MONGODB_URI = process.env.MONGODB_URI || '';
+const MONGODB_DB = process.env.MONGODB_DB || 'leontelecom';
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const FILE_PATH = path.join(__dirname, '..', 'data', 'store.json');
 const STATE_KEY = 'leontelecom_state';
 
-let pool = null;
-let _usingPg = false;
+let _backend = 'file'; // 'mongodb' | 'postgres' | 'file'
+
+// Mongo
+let mongoClient = null;
+let mongoCollection = null;
+// Postgres
+let pgPool = null;
 
 async function init() {
+  // 1) MongoDB Atlas
+  if (MONGODB_URI) {
+    try {
+      const { MongoClient } = require('mongodb');
+      mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+      await mongoClient.connect();
+      mongoCollection = mongoClient.db(MONGODB_DB).collection('state');
+      await mongoCollection.findOne({ _id: STATE_KEY }); // valida la conexión
+      _backend = 'mongodb';
+      console.log('[persistence] MongoDB Atlas conectado — datos persistentes ✅');
+      return;
+    } catch (e) {
+      console.error('[persistence] No se pudo conectar a MongoDB:', e.message);
+      mongoClient = null; mongoCollection = null;
+    }
+  }
+
+  // 2) PostgreSQL
   if (DATABASE_URL) {
     try {
       const { Pool } = require('pg');
-      pool = new Pool({
+      pgPool = new Pool({
         connectionString: DATABASE_URL,
         ssl: /sslmode=disable/.test(DATABASE_URL) ? false : { rejectUnauthorized: false }
       });
-      await pool.query(
+      await pgPool.query(
         `CREATE TABLE IF NOT EXISTS kv_store (
            key TEXT PRIMARY KEY,
            value JSONB NOT NULL,
            updated_at TIMESTAMPTZ DEFAULT now()
          )`
       );
-      _usingPg = true;
+      _backend = 'postgres';
       console.log('[persistence] PostgreSQL conectado — datos persistentes ✅');
       return;
     } catch (e) {
-      console.error('[persistence] No se pudo conectar a PostgreSQL, usando archivo local:', e.message);
-      pool = null;
-      _usingPg = false;
+      console.error('[persistence] No se pudo conectar a PostgreSQL:', e.message);
+      pgPool = null;
     }
   }
+
+  // 3) Archivo local (fallback)
+  _backend = 'file';
   try { fs.mkdirSync(path.dirname(FILE_PATH), { recursive: true }); } catch (_) {}
   console.log(
-    DATABASE_URL
-      ? '[persistence] Usando archivo local (falló PostgreSQL)'
-      : '[persistence] Sin DATABASE_URL — usando archivo local ⚠️ (configura DATABASE_URL para que persista en Render)'
+    (MONGODB_URI || DATABASE_URL)
+      ? '[persistence] Usando archivo local (falló la base de datos)'
+      : '[persistence] Sin base de datos — usando archivo local ⚠️ (define MONGODB_URI o DATABASE_URL para que persista en Render)'
   );
 }
 
 async function load() {
   try {
-    if (_usingPg && pool) {
-      const r = await pool.query('SELECT value FROM kv_store WHERE key = $1', [STATE_KEY]);
+    if (_backend === 'mongodb' && mongoCollection) {
+      const doc = await mongoCollection.findOne({ _id: STATE_KEY });
+      if (doc) { const { _id, ...rest } = doc; return rest; }
+      return {};
+    }
+    if (_backend === 'postgres' && pgPool) {
+      const r = await pgPool.query('SELECT value FROM kv_store WHERE key = $1', [STATE_KEY]);
       return r.rows.length ? (r.rows[0].value || {}) : {};
     }
     if (fs.existsSync(FILE_PATH)) {
@@ -71,18 +105,22 @@ async function load() {
 }
 
 async function save(state) {
-  const json = JSON.stringify(state || {});
+  const data = state || {};
   try {
-    if (_usingPg && pool) {
-      await pool.query(
+    if (_backend === 'mongodb' && mongoCollection) {
+      await mongoCollection.replaceOne({ _id: STATE_KEY }, { _id: STATE_KEY, ...data }, { upsert: true });
+      return;
+    }
+    if (_backend === 'postgres' && pgPool) {
+      await pgPool.query(
         `INSERT INTO kv_store (key, value, updated_at)
          VALUES ($1, $2::jsonb, now())
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-        [STATE_KEY, json]
+        [STATE_KEY, JSON.stringify(data)]
       );
-    } else {
-      fs.writeFileSync(FILE_PATH, json);
+      return;
     }
+    fs.writeFileSync(FILE_PATH, JSON.stringify(data));
   } catch (e) {
     console.error('[persistence] Error al guardar estado:', e.message);
   }
@@ -92,5 +130,11 @@ module.exports = {
   init,
   load,
   save,
-  get usingPg() { return _usingPg; }
+  get backend() { return _backend; },
+  get usingPg() { return _backend === 'postgres'; },
+  get label() {
+    if (_backend === 'mongodb') return 'MongoDB Atlas ✅';
+    if (_backend === 'postgres') return 'PostgreSQL ✅';
+    return 'archivo local ⚠️ (define MONGODB_URI o DATABASE_URL para producción)';
+  }
 };

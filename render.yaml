@@ -54,8 +54,11 @@ services:
       - key: LEON_CONTACT_NUMBER
         value: "9511603125"
 
-      # ---- Persistencia (PostgreSQL) ----
-      # Pega aquí la "Internal Database URL" de tu base de datos PostgreSQL de Render.
-      # Sin esto, los datos se borran en cada redeploy.
+      # ---- Persistencia ----
+      # Opción recomendada: MongoDB Atlas (tier gratis M0, NO expira).
+      # Pega aquí tu connection string de Atlas (mongodb+srv://...).
+      - key: MONGODB_URI
+        sync: false
+      # Alternativa: PostgreSQL (p. ej. Render). La free de Render expira a los ~30 días.
       - key: DATABASE_URL
         sync: false
