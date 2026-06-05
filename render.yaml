@@ -48,5 +48,14 @@ services:
       # ---- Admin ----
       - key: ADMIN_PASSWORD
         sync: false
+      # Secreto para firmar los tokens del panel (se genera solo, no tocar)
+      - key: ADMIN_SECRET
+        generateValue: true
       - key: LEON_CONTACT_NUMBER
         value: "9511603125"
+
+      # ---- Persistencia (PostgreSQL) ----
+      # Pega aquí la "Internal Database URL" de tu base de datos PostgreSQL de Render.
+      # Sin esto, los datos se borran en cada redeploy.
+      - key: DATABASE_URL
+        sync: false

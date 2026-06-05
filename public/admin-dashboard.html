@@ -334,7 +334,7 @@
 
   async function loadStats() {
     try {
-      const r = await fetch('/admin/api/user-count');
+      const r = await fetchAuth('/admin/api/user-count');
       const d = await r.json();
       document.getElementById('userCount').textContent = d.count;
     } catch(e) {}
@@ -354,13 +354,19 @@
     } catch(e) {}
   }
 
-  function fetchAuth(url, opts = {}) {
+  async function fetchAuth(url, opts = {}) {
     if (!(opts.body instanceof FormData)) {
       opts.headers = { ...(opts.headers||{}), 'Content-Type': 'application/json' };
     }
     opts.headers = { ...(opts.headers||{}), 'Authorization': 'Bearer ' + token };
     const sep = url.includes('?') ? '&' : '?';
-    return fetch(url + sep + 'token=' + encodeURIComponent(token), opts);
+    const res = await fetch(url + sep + 'token=' + encodeURIComponent(token), opts);
+    if (res.status === 401) {
+      // Token vencido o inválido → volver al login
+      localStorage.removeItem('adminToken');
+      location.href = '/admin/login';
+    }
+    return res;
   }
 
   // Image file handling

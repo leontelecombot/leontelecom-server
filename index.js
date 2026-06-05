@@ -2,9 +2,11 @@ require('dotenv').config();
 
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const multer = require('multer');
 const { analyzePaymentReceipt } = require('./utils/imageAnalysis');
 const dataManager = require('./utils/dataManager');
+const persistence = require('./utils/persistence');
 
 // File upload config — images saved to public/images/uploads/
 const storage = multer.diskStorage({
@@ -48,7 +50,16 @@ const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
 const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
 const AGENT_WHATSAPP_NUMBER = process.env.AGENT_WHATSAPP_NUMBER || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'leon123'; // Change in production!
+// Secreto para firmar los tokens del panel. Si no se define, se deriva de la
+// contraseña (estable entre reinicios). Definir ADMIN_SECRET en Render es lo ideal.
+const ADMIN_SECRET = process.env.ADMIN_SECRET ||
+  crypto.createHash('sha256').update('leontelecom::' + ADMIN_PASSWORD).digest('hex');
+const ADMIN_TOKEN_TTL_MS = 12 * 3600 * 1000; // los tokens del panel expiran en 12 horas
 const WISPHUB_API_URL = process.env.WISPHUB_API_URL || 'https://api.wisphub.net'; // Optional
+
+if (ADMIN_PASSWORD === 'leon123') {
+  console.warn('[seguridad] ⚠️ ADMIN_PASSWORD usa el valor por defecto. Define una contraseña fuerte en Render → Environment.');
+}
 
 // ==================== WHATSAPP CLOUD API ====================
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
@@ -105,7 +116,63 @@ const NEIGHBORHOODS = {
   ]
 };
 
-// Client profiles — remembers name, location across messages (in-memory, resets on redeploy)
+// ==================== HORARIO DE ATENCIÓN ====================
+// El asistente (Leo) responde 24/7. Estos horarios definen cuándo hay un ASESOR
+// HUMANO disponible, para avisarle al cliente a qué hora aproximada lo atenderán.
+// Zona horaria de Oaxaca: America/Mexico_City. Valores en minutos desde medianoche.
+const BUSINESS_TZ = 'America/Mexico_City';
+const BUSINESS_HOURS = {
+  0: [[600, 840]],               // Domingo 10:00–14:00
+  1: [[600, 900], [960, 1200]],  // Lunes   10:00–15:00 y 16:00–20:00
+  2: [[600, 900], [960, 1200]],  // Martes
+  3: [[600, 900], [960, 1200]],  // Miércoles
+  4: [[600, 900], [960, 1200]],  // Jueves
+  5: [[600, 900], [960, 1200]],  // Viernes
+  6: [[600, 900], [960, 1080]]   // Sábado  10:00–15:00 y 16:00–18:00
+};
+const BUSINESS_HOURS_SUMMARY = 'Lun a Vie 10:00–15:00 y 16:00–20:00, Sáb 10:00–15:00 y 16:00–18:00, Dom 10:00–14:00';
+const DAY_NAMES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+// Hora actual en la zona de Oaxaca (Render corre en UTC, por eso lo calculamos así)
+function mexicoNow(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: BUSINESS_TZ, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false
+    }).formatToParts(date).map(p => [p.type, p.value])
+  );
+  const wd = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[parts.weekday];
+  const hour = Number(parts.hour) % 24;
+  const minute = Number(parts.minute);
+  return { dow: wd ?? date.getDay(), hour, minute, minutesOfDay: hour * 60 + minute };
+}
+
+function isWithinBusinessHours(date = new Date()) {
+  const { dow, minutesOfDay } = mexicoNow(date);
+  return (BUSINESS_HOURS[dow] || []).some(([s, e]) => minutesOfDay >= s && minutesOfDay < e);
+}
+
+function formatHour12(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  const ampm = h >= 12 ? 'pm' : 'am';
+  let h12 = h % 12; if (h12 === 0) h12 = 12;
+  return m === 0 ? `${h12}:00 ${ampm}` : `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+// "hoy a las 4:00 pm", "mañana a las 10:00 am" o "el lunes a las 10:00 am"
+function describeNextOpening(date = new Date()) {
+  const { dow, minutesOfDay } = mexicoNow(date);
+  for (let i = 0; i < 8; i++) {
+    const d = (dow + i) % 7;
+    for (const [start] of (BUSINESS_HOURS[d] || [])) {
+      if (i === 0 && minutesOfDay >= start) continue;
+      const when = i === 0 ? 'hoy' : i === 1 ? 'mañana' : `el ${DAY_NAMES[d]}`;
+      return `${when} a las ${formatHour12(start)}`;
+    }
+  }
+  return 'en nuestro próximo horario de atención';
+}
+
+// Client profiles — remembers name, location across messages (persisted)
 const clientProfiles = new Map();
 
 function getProfile(chatId) {
@@ -116,6 +183,7 @@ function updateProfile(chatId, updates) {
   const id = String(chatId);
   const existing = clientProfiles.get(id) || { firstSeen: new Date() };
   clientProfiles.set(id, { ...existing, ...updates, lastSeen: new Date() });
+  schedulePersist();
 }
 
 // Agent takeover — pauses bot for a specific client chat
@@ -123,6 +191,10 @@ const pausedChats = new Map(); // Map<chatId, { pausedUntil: Date }>
 
 // Active relay: which client the agent is currently chatting through the bot
 const agentActiveCases = new Map(); // Map<agentNumber, clientId>
+
+// Clientes que pidieron un asesor y siguen esperando — para enviar recordatorio
+// si nadie los atiende en cierto tiempo. clientId → { since, name, type, stage }
+const pendingAgentRequests = new Map();
 
 function isPaused(chatId) {
   const p = pausedChats.get(String(chatId));
@@ -133,10 +205,12 @@ function isPaused(chatId) {
 
 function pauseChat(chatId, hours = 2) {
   pausedChats.set(String(chatId), { pausedUntil: new Date(Date.now() + hours * 3600000) });
+  schedulePersist();
 }
 
 function unpauseChat(chatId) {
   pausedChats.delete(String(chatId));
+  schedulePersist();
 }
 
 // ==================== WISPHUB INTEGRATION ====================
@@ -277,6 +351,7 @@ setInterval(async () => {
           bc.status = 'completed';
         }
         scheduledBroadcasts.set(id, bc);
+        schedulePersist();
       } catch (e) { console.error('[Broadcast scheduler error]', e.message); }
     }
   }
@@ -308,6 +383,7 @@ function storeFolio(folio, chatId, type, location) {
     location: location,
     createdAt: new Date()
   });
+  schedulePersist();
 }
 
 function retrieveFolio(folio) {
@@ -315,7 +391,54 @@ function retrieveFolio(folio) {
 }
 
 function cancelFolio(folio) {
-  return folios.delete(folio);
+  const ok = folios.delete(folio);
+  schedulePersist();
+  return ok;
+}
+
+// ==================== PERSISTENCIA DE ESTADO ====================
+// Toma una "foto" de todas las colecciones en memoria para guardarlas.
+function buildStateSnapshot() {
+  const mapToObj = (m) => Object.fromEntries(m);
+  return {
+    clientProfiles: mapToObj(clientProfiles),
+    manualClients: mapToObj(manualClients),
+    scheduledBroadcasts: mapToObj(scheduledBroadcasts),
+    broadcastHistory: broadcastHistory.slice(0, 200),
+    folios: mapToObj(folios),
+    pausedChats: Object.fromEntries(
+      [...pausedChats].map(([k, v]) => [k, { pausedUntil: v.pausedUntil instanceof Date ? v.pausedUntil.toISOString() : v.pausedUntil }])
+    ),
+    agentActiveCases: mapToObj(agentActiveCases),
+    pendingAgentRequests: Object.fromEntries(
+      [...pendingAgentRequests].map(([k, v]) => [k, { ...v, since: v.since instanceof Date ? v.since.toISOString() : v.since }])
+    )
+  };
+}
+
+// Restaura las colecciones desde lo guardado (al arrancar el servidor).
+function hydrateState(s) {
+  if (!s || typeof s !== 'object') return;
+  const fill = (map, obj) => { if (obj) for (const [k, v] of Object.entries(obj)) map.set(k, v); };
+  fill(clientProfiles, s.clientProfiles);
+  fill(manualClients, s.manualClients);
+  fill(scheduledBroadcasts, s.scheduledBroadcasts);
+  fill(folios, s.folios);
+  fill(agentActiveCases, s.agentActiveCases);
+  if (Array.isArray(s.broadcastHistory)) { broadcastHistory.length = 0; broadcastHistory.push(...s.broadcastHistory); }
+  if (s.pausedChats) for (const [k, v] of Object.entries(s.pausedChats)) pausedChats.set(k, { pausedUntil: new Date(v.pausedUntil) });
+  if (s.pendingAgentRequests) for (const [k, v] of Object.entries(s.pendingAgentRequests)) pendingAgentRequests.set(k, { ...v, since: new Date(v.since) });
+  console.log(`[persistence] Estado restaurado — perfiles:${clientProfiles.size} clientes:${manualClients.size} avisos:${scheduledBroadcasts.size} folios:${folios.size}`);
+}
+
+// Guardado con "debounce": agrupa varios cambios seguidos en una sola escritura.
+let _persistTimer = null;
+function schedulePersist() {
+  if (_persistTimer) return;
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    persistence.save(buildStateSnapshot()).catch(e => console.error('[persistence] save:', e.message));
+  }, 1500);
 }
 
 // Chat history store - maintains conversation memory per chat
@@ -799,8 +922,15 @@ async function callAI(systemContent, userContent, options = {}) {
 }
 
 function agentNotifiedMsg(notified, name, type = 'asesor') {
-  if (notified) return `Listo, ${name}. Ya le avisamos a un ${type}, te contactarán pronto. 📱`;
-  return `Anotado, ${name}. En breve un ${type} de León Telecom se pondrá en contacto contigo. 📱`;
+  const who = name && name !== 'Usuario' ? `${name}, ` : '';
+  if (isWithinBusinessHours()) {
+    return `Listo, ${who}registré tu solicitud. Un ${type} de León Telecom te contactará en breve. 📱`;
+  }
+  return [
+    `Gracias, ${who}registré tu solicitud. ✅`,
+    `🕒 En este momento estamos fuera de horario de atención, pero un ${type} te contactará ${describeNextOpening()}.`,
+    `Horario de atención: ${BUSINESS_HOURS_SUMMARY}.`
+  ].join('\n');
 }
 
 // ==================== AI BRAIN ====================
@@ -1036,10 +1166,16 @@ async function notifyAgentRequest(chatId, userText, location = '') {
     ).catch(() => userText);
   }
 
+  const withinHours = isWithinBusinessHours();
+  const hoursLine = withinHours
+    ? '🟢 En horario de atención'
+    : `🌙 Fuera de horario — el cliente sabe que lo atenderás ${describeNextOpening()}`;
+
   const fullMessage = [
     '🔔 SOLICITUD — León Telecom',
     `👤 ${clientName}  📱 ${chatId}`,
     location ? `📍 ${location}` : '',
+    hoursLine,
     '',
     summaryLine,
     '',
@@ -1095,6 +1231,13 @@ async function notifyAgentRequest(chatId, userText, location = '') {
   if (!notified) {
     console.warn('[notify] No notification channel configured. Set AGENT_WHATSAPP_NUMBER, AGENT_NOTIFY_CHAT_ID, or AGENT_NOTIFY_WEBHOOK_URL in environment variables.');
   }
+
+  // En horario, registramos al cliente para recordarle si nadie lo atiende pronto.
+  if (withinHours) {
+    pendingAgentRequests.set(String(chatId), { since: new Date(), name: clientName, type: 'asesor', stage: 0 });
+    schedulePersist();
+  }
+
   return notified;
 }
 
@@ -1443,6 +1586,8 @@ async function handleAgentCommand(agentNumber, text) {
     const clientId = normalizeClientNumber(atenderMatch[1]);
     pauseChat(clientId, 4);
     agentActiveCases.set(agentNumber, clientId);
+    pendingAgentRequests.delete(clientId); // ya lo está atendiendo un asesor
+    schedulePersist();
     const clientProfile = getProfile(clientId);
     const clientName = clientProfile?.name && clientProfile.name !== 'Usuario' ? clientProfile.name : clientId;
     try {
@@ -1467,6 +1612,8 @@ async function handleAgentCommand(agentNumber, text) {
     const clientId = normalizeClientNumber(liberarMatch[1]);
     unpauseChat(clientId);
     agentActiveCases.delete(agentNumber);
+    pendingAgentRequests.delete(clientId);
+    schedulePersist();
     try {
       await sendWhatsAppMessage(clientId,
         'El asesor ha finalizado la atención. El asistente virtual queda a tus órdenes. ¿En qué más puedo ayudarte?'
@@ -1498,6 +1645,7 @@ async function handleAgentCommand(agentNumber, text) {
   // Mensaje normal mientras hay un caso activo → relay al cliente
   const activeClient = agentActiveCases.get(agentNumber);
   if (activeClient && !v.startsWith('ATENDER') && !v.startsWith('LIBERAR') && v !== 'PAUSADOS') {
+    pendingAgentRequests.delete(activeClient); // el asesor ya respondió
     try {
       await sendWhatsAppMessage(activeClient, text.trim());
     } catch (e) {
@@ -1516,6 +1664,42 @@ async function handleAgentCommand(agentNumber, text) {
     '',
     'Mientras tienes un caso activo, todo lo que escribas se reenvía al cliente.'
   ].join('\n'));
+}
+
+// ==================== RECORDATORIO AL CLIENTE EN ESPERA ====================
+// Si un cliente pidió asesor y nadie lo atiende, le mandamos un mensaje de calma.
+const REMINDER_1_MIN = 10;   // primer recordatorio
+const REMINDER_2_MIN = 30;   // segundo recordatorio (ofrece teléfono directo)
+const REMINDER_STALE_MIN = 360; // tras 6h sin atención, descartamos la espera
+
+async function sweepAgentReminders() {
+  if (pendingAgentRequests.size === 0) return;
+  if (!isWithinBusinessHours()) return; // solo recordamos en horario de atención
+  const now = Date.now();
+  const attendedClients = new Set(agentActiveCases.values());
+
+  for (const [clientId, info] of [...pendingAgentRequests.entries()]) {
+    // Si ya lo está atendiendo un asesor, dejamos de recordar
+    if (attendedClients.has(clientId)) { pendingAgentRequests.delete(clientId); continue; }
+
+    const since = info.since instanceof Date ? info.since.getTime() : new Date(info.since).getTime();
+    const mins = (now - since) / 60000;
+    if (mins > REMINDER_STALE_MIN) { pendingAgentRequests.delete(clientId); continue; }
+
+    try {
+      if ((info.stage || 0) < 1 && mins >= REMINDER_1_MIN) {
+        await sendWhatsAppMessage(clientId,
+          'Seguimos gestionando tu solicitud. 🙏 En breve un asesor de León Telecom te atenderá, gracias por tu paciencia.');
+        info.stage = 1; pendingAgentRequests.set(clientId, info); schedulePersist();
+      } else if ((info.stage || 0) < 2 && mins >= REMINDER_2_MIN) {
+        await sendWhatsAppMessage(clientId,
+          `Disculpa la demora. 🙏 Si es urgente puedes llamarnos directamente al ${LEON_CONTACT_NUMBER}. Un asesor te atenderá lo antes posible.`);
+        info.stage = 2; pendingAgentRequests.set(clientId, info); schedulePersist();
+      }
+    } catch (e) {
+      console.error('[reminder] error enviando recordatorio:', e.message);
+    }
+  }
 }
 
 const MENU_LIST_ITEMS = [
@@ -2416,40 +2600,77 @@ app.get('/admin/dashboard', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public/admin-dashboard.html'));
 });
 
+// ---- Autenticación del panel: tokens firmados (HMAC) con expiración ----
+function signAdminToken(ttlMs = ADMIN_TOKEN_TTL_MS) {
+  const payload = Buffer.from(JSON.stringify({ role: 'admin', iat: Date.now(), exp: Date.now() + ttlMs })).toString('base64url');
+  const sig = crypto.createHmac('sha256', ADMIN_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifyAdminTokenValue(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return false;
+  const [payload, sig] = token.split('.');
+  if (!payload || !sig) return false;
+  const expected = crypto.createHmac('sha256', ADMIN_SECRET).update(payload).digest('base64url');
+  const a = Buffer.from(sig), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+    return data.role === 'admin' && data.exp && Date.now() < data.exp;
+  } catch (e) { return false; }
+}
+
+function constantTimeEqual(a, b) {
+  const ba = Buffer.from(String(a)), bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+// Límite de intentos de login por IP (anti fuerza bruta)
+const loginAttempts = new Map(); // ip → { count, firstAt, blockedUntil }
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+
+function clientIp(req) {
+  return (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').toString().split(',')[0].trim();
+}
+
 // API: Admin login
 app.post('/admin/api/login', (req, res) => {
-  const { password } = req.body;
+  const ip = clientIp(req);
+  const now = Date.now();
+  const rec = loginAttempts.get(ip) || { count: 0, firstAt: now, blockedUntil: 0 };
 
-  if (password === ADMIN_PASSWORD) {
-    const token = Buffer.from(`admin:${Date.now()}`).toString('base64');
-    res.json({ success: true, token });
-  } else {
-    res.status(401).json({ success: false, error: 'Contraseña incorrecta' });
+  if (rec.blockedUntil > now) {
+    const mins = Math.ceil((rec.blockedUntil - now) / 60000);
+    return res.status(429).json({ success: false, error: `Demasiados intentos. Intenta de nuevo en ${mins} min.` });
   }
+  if (now - rec.firstAt > LOGIN_WINDOW_MS) { rec.count = 0; rec.firstAt = now; }
+
+  const { password } = req.body || {};
+  if (password && constantTimeEqual(password, ADMIN_PASSWORD)) {
+    loginAttempts.delete(ip);
+    return res.json({ success: true, token: signAdminToken(), expiresInHours: Math.round(ADMIN_TOKEN_TTL_MS / 3600000) });
+  }
+
+  rec.count += 1;
+  if (rec.count >= LOGIN_MAX_ATTEMPTS) { rec.blockedUntil = now + LOGIN_BLOCK_MS; rec.count = 0; }
+  loginAttempts.set(ip, rec);
+  return res.status(401).json({ success: false, error: 'Contraseña incorrecta' });
 });
 
 // Middleware to verify admin token
 function verifyAdminToken(req, res, next) {
   const authHeader = req.headers.authorization;
   const token = req.body?.token || req.query.token || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : authHeader);
-  if (!token) {
-    return res.status(401).json({ error: 'Token requerido' });
-  }
-
-  try {
-    const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    if (decoded.startsWith('admin:')) {
-      return next();
-    }
-  } catch (e) {
-    // Fall through
-  }
-
-  res.status(401).json({ error: 'Token inválido' });
+  if (!token) return res.status(401).json({ error: 'Token requerido' });
+  if (verifyAdminTokenValue(token)) return next();
+  return res.status(401).json({ error: 'Sesión expirada o token inválido' });
 }
 
 // API: Get user count
-app.get('/admin/api/user-count', (req, res) => {
+app.get('/admin/api/user-count', verifyAdminToken, (req, res) => {
   res.json({ count: dataManager.getUserCount() });
 });
 
@@ -2482,10 +2703,12 @@ app.post('/admin/api/broadcast', verifyAdminToken, async (req, res) => {
     if (!intervalMs) bc.status = 'completed';
     scheduledBroadcasts.set(id, bc);
     broadcastHistory.unshift({ id, type: bc.type, label: bc.label, message, sentAt: now.toISOString(), result });
+    schedulePersist();
     res.json({ success: true, id, result });
   } catch (e) {
     bc.status = 'failed';
     scheduledBroadcasts.set(id, bc);
+    schedulePersist();
     res.status(500).json({ error: e.message });
   }
 });
@@ -2502,6 +2725,7 @@ app.delete('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
   if (!bc) return res.status(404).json({ error: 'No encontrado' });
   bc.status = 'cancelled';
   scheduledBroadcasts.set(req.params.id, bc);
+  schedulePersist();
   res.json({ success: true });
 });
 
@@ -2517,6 +2741,7 @@ app.patch('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
   else if (scheduleType === 'hourly_6h') { bc.intervalMs = 6*3600000; bc.endAt = new Date(now.getTime() + 6*3600000).toISOString(); }
   bc.scheduleType = scheduleType;
   scheduledBroadcasts.set(req.params.id, bc);
+  schedulePersist();
   res.json({ success: true, broadcast: bc });
 });
 
@@ -2547,12 +2772,14 @@ app.post('/admin/api/clients', verifyAdminToken, (req, res) => {
   if (!phone.startsWith('52')) phone = '52' + phone;
   if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
   manualClients.set(phone, { name: name || '', phone, notes: notes || '', addedAt: new Date().toISOString() });
+  schedulePersist();
   res.json({ success: true, phone });
 });
 
 // API: Delete manual client
 app.delete('/admin/api/clients/:phone', verifyAdminToken, (req, res) => {
   manualClients.delete(req.params.phone);
+  schedulePersist();
   res.json({ success: true });
 });
 
@@ -2573,7 +2800,7 @@ app.post('/admin/api/wisphub-sync', verifyAdminToken, async (req, res) => {
 });
 
 // API: Get network status (check Wisphub or return online)
-app.get('/admin/api/network-status', async (req, res) => {
+app.get('/admin/api/network-status', verifyAdminToken, async (req, res) => {
   try {
     // For now, return online. In production, check Wisphub API
     res.json({ online: true, message: 'Servicio operativo' });
@@ -2583,16 +2810,8 @@ app.get('/admin/api/network-status', async (req, res) => {
 });
 
 // API: Send bulk message
-app.post('/admin/api/send-message', async (req, res) => {
-  const { message, token } = req.body;
-
-  // Basic auth check
-  if (!token || token !== `Bearer ${ADMIN_PASSWORD}-bulk`) {
-    const isAdmin = Buffer.from(token || '', 'base64').toString().startsWith('admin:');
-    if (!isAdmin) {
-      return res.status(401).json({ error: 'No autorizado' });
-    }
-  }
+app.post('/admin/api/send-message', verifyAdminToken, async (req, res) => {
+  const { message } = req.body;
 
   if (!message || !message.trim()) {
     return res.status(400).json({ error: 'Mensaje vacío' });
@@ -2618,13 +2837,8 @@ app.post('/admin/api/send-message', async (req, res) => {
 });
 
 // API: Send promotion
-app.post('/admin/api/send-promotion', async (req, res) => {
-  const { text, imageBase64, token } = req.body;
-
-  // Basic auth check (simplified for demo)
-  if (!token) {
-    return res.status(401).json({ error: 'No autorizado' });
-  }
+app.post('/admin/api/send-promotion', verifyAdminToken, async (req, res) => {
+  const { text, imageBase64 } = req.body;
 
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'Descripción vacía' });
@@ -2673,13 +2887,13 @@ app.post('/admin/api/send-promotion', async (req, res) => {
 });
 
 // API: Get pending reports
-app.get('/admin/api/reports', (req, res) => {
+app.get('/admin/api/reports', verifyAdminToken, (req, res) => {
   const reports = dataManager.getPendingReports();
   res.json({ reports, count: reports.length });
 });
 
 // API: Mark report as contacted
-app.post('/admin/api/reports/:reportId/contact', (req, res) => {
+app.post('/admin/api/reports/:reportId/contact', verifyAdminToken, (req, res) => {
   const { reportId } = req.params;
   const report = dataManager.markReportAsContacted(reportId);
 
@@ -2692,7 +2906,26 @@ app.post('/admin/api/reports/:reportId/contact', (req, res) => {
 
 const port = Number(process.env.PORT || 3000);
 
-app.listen(port, () => {
-  console.log(`León Telecom server listening on port ${port}`);
-  console.log(`AI provider: ${AI_PROVIDER}`);
-});
+(async () => {
+  // 1) Conectar persistencia y restaurar estado guardado
+  try {
+    await persistence.init();
+    hydrateState(await persistence.load());
+  } catch (e) {
+    console.error('[persistence] Error al iniciar:', e.message);
+  }
+
+  // 2) Guardado periódico de seguridad (por si algún cambio no disparó schedulePersist)
+  setInterval(() => schedulePersist(), 30000);
+
+  // 3) Recordatorios a clientes que siguen esperando un asesor
+  setInterval(() => sweepAgentReminders().catch(() => {}), 90000);
+
+  // 4) Levantar el servidor
+  app.listen(port, () => {
+    console.log(`León Telecom server listening on port ${port}`);
+    console.log(`AI provider: ${AI_PROVIDER}`);
+    console.log(`Persistencia: ${persistence.usingPg ? 'PostgreSQL ✅' : 'archivo local ⚠️ (define DATABASE_URL para producción)'}`);
+    console.log(`Horario de atención: ${BUSINESS_HOURS_SUMMARY}`);
+  });
+})();
