@@ -7,8 +7,9 @@
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;min-height:100vh}
-    .topbar{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:16px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 12px rgba(0,0,0,.3)}
-    .topbar h1{font-size:1.3em;display:flex;align-items:center;gap:10px}
+    .topbar{background:linear-gradient(135deg,#2c0a6b,#4a1aa0);color:#fff;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 14px rgba(44,10,107,.4)}
+    .topbar h1{font-size:1.2em;display:flex;align-items:center;gap:12px}
+    .topbar h1 img{height:38px;object-fit:contain}
     .topbar .stats{display:flex;gap:20px;font-size:.85em;opacity:.85}
     .stat{background:rgba(255,255,255,.12);border-radius:20px;padding:5px 14px}
     .main{max-width:1100px;margin:28px auto;padding:0 20px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
@@ -29,23 +30,23 @@
     .form-group{margin-bottom:14px}
     label{display:block;font-size:.82em;font-weight:600;color:#555;margin-bottom:5px}
     input,textarea,select{width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:.88em;transition:.15s;font-family:inherit}
-    input:focus,textarea:focus,select:focus{outline:none;border-color:#667eea}
+    input:focus,textarea:focus,select:focus{outline:none;border-color:#4a1aa0}
     textarea{resize:vertical;min-height:80px}
     .tabs{display:flex;gap:2px;margin-bottom:18px;background:#f5f5f5;border-radius:8px;padding:3px}
     .tab{flex:1;padding:8px;border:none;background:transparent;cursor:pointer;border-radius:6px;font-size:.85em;font-weight:500;color:#666;transition:.15s}
     .tab.active{background:#fff;color:#333;font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.1)}
     .radio-group{display:flex;gap:12px}
     .radio-opt{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.88em;padding:8px 14px;border:1.5px solid #ddd;border-radius:8px;transition:.15s}
-    .radio-opt.selected{border-color:#667eea;background:#f0f0ff;color:#333}
+    .radio-opt.selected{border-color:#4a1aa0;background:#f3eeff;color:#2c0a6b}
     .radio-opt input{width:auto}
     .schedule-opts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
     .sched-opt{padding:10px;border:1.5px solid #ddd;border-radius:8px;cursor:pointer;text-align:center;font-size:.8em;transition:.15s}
-    .sched-opt.selected{border-color:#667eea;background:#f0f0ff}
+    .sched-opt.selected{border-color:#4a1aa0;background:#f3eeff}
     .sched-opt strong{display:block;font-size:1em}
     /* Buttons */
     .btn{padding:10px 22px;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:.88em;transition:.15s}
     .btn:hover{opacity:.9;transform:translateY(-1px)}
-    .btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;width:100%;padding:12px}
+    .btn-primary{background:linear-gradient(135deg,#4a1aa0,#2c0a6b);color:#fff;width:100%;padding:12px}
     .btn-danger{background:#fce8e8;color:#c0392b}
     .btn-edit{background:#e8f4fd;color:#1565c0}
     .btn-sm{padding:6px 12px;font-size:.78em}
@@ -68,7 +69,7 @@
     .hist-item .hist-result{font-size:.78em;color:#28a745;margin-top:4px}
     .section-tabs{display:flex;gap:0;border-bottom:2px solid #eee;margin-bottom:16px}
     .section-tab{padding:10px 20px;border:none;background:transparent;cursor:pointer;font-weight:500;color:#888;font-size:.9em;border-bottom:2px solid transparent;margin-bottom:-2px;transition:.15s}
-    .section-tab.active{color:#667eea;border-bottom-color:#667eea;font-weight:600}
+    .section-tab.active{color:#4a1aa0;border-bottom-color:#4a1aa0;font-weight:600}
     .tab-panel{display:none}
     .tab-panel.active{display:block}
     .img-preview{width:100%;max-height:120px;object-fit:cover;border-radius:8px;margin-top:8px;display:none}
@@ -83,7 +84,10 @@
 <body>
 
 <div class="topbar">
-  <h1>🦁 León Telecom <span style="opacity:.6;font-weight:400;font-size:.85em">Admin</span></h1>
+  <h1>
+    <img src="/images/logo.png" alt="León Telecom">
+    <span style="opacity:.7;font-weight:400;font-size:.85em">Panel Admin</span>
+  </h1>
   <div class="stats">
     <div class="stat">👥 <span id="userCount">—</span> clientes</div>
     <div class="stat">📤 <span id="histCount">0</span> enviados hoy</div>
