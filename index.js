@@ -128,6 +128,62 @@ function unpauseChat(chatId) {
   pausedChats.delete(String(chatId));
 }
 
+// ==================== ADMIN BROADCAST SYSTEM ====================
+const scheduledBroadcasts = new Map(); // id → broadcast object
+const broadcastHistory = []; // Array of sent records
+
+function generateBroadcastId() {
+  return `BC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
+}
+
+async function sendBulkWhatsApp(message, imageUrls = []) {
+  const users = dataManager.getAllUsers().filter(u => u.platform === 'whatsapp');
+  let sent = 0, failed = 0;
+  for (const user of users) {
+    try {
+      await sendWhatsAppMessage(user.chatId, message, imageUrls);
+      sent++;
+    } catch (e) { failed++; }
+    // Small delay to avoid rate limiting
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return { sent, failed, total: users.length };
+}
+
+// Scheduler — checks every 60s if any broadcast needs to be sent
+setInterval(async () => {
+  const now = new Date();
+  for (const [id, bc] of scheduledBroadcasts.entries()) {
+    if (bc.status !== 'active') continue;
+    if (bc.endAt && now > new Date(bc.endAt)) {
+      bc.status = 'completed';
+      scheduledBroadcasts.set(id, bc);
+      continue;
+    }
+    if (now >= new Date(bc.nextSendAt)) {
+      try {
+        const result = await sendBulkWhatsApp(bc.message, bc.imageUrls || []);
+        bc.sentCount = (bc.sentCount || 0) + 1;
+        bc.lastSentAt = now.toISOString();
+        broadcastHistory.unshift({ id, type: bc.type, label: bc.label, message: bc.message, sentAt: now.toISOString(), result });
+        if (broadcastHistory.length > 100) broadcastHistory.pop();
+
+        if (bc.intervalMs) {
+          const next = new Date(now.getTime() + bc.intervalMs);
+          if (!bc.endAt || next <= new Date(bc.endAt)) {
+            bc.nextSendAt = next.toISOString();
+          } else {
+            bc.status = 'completed';
+          }
+        } else {
+          bc.status = 'completed';
+        }
+        scheduledBroadcasts.set(id, bc);
+      } catch (e) { console.error('[Broadcast scheduler error]', e.message); }
+    }
+  }
+}, 60000);
+
 // Simple in-memory session store keyed by chatId. Keeps short conversational state.
 const sessions = new Map();
 
@@ -2391,6 +2447,78 @@ function verifyAdminToken(req, res, next) {
 // API: Get user count
 app.get('/admin/api/user-count', (req, res) => {
   res.json({ count: dataManager.getUserCount() });
+});
+
+// API: Send broadcast NOW (aviso or promo)
+app.post('/admin/api/broadcast', verifyAdminToken, async (req, res) => {
+  const { type, label, message, imageUrl, scheduleType } = req.body;
+  if (!message?.trim()) return res.status(400).json({ error: 'Mensaje vacío' });
+
+  const id = generateBroadcastId();
+  const now = new Date();
+  const imageUrls = imageUrl ? [imageUrl] : [];
+
+  // Calculate endAt and intervalMs based on scheduleType
+  let intervalMs = null, endAt = null;
+  if (scheduleType === 'daily_3days') { intervalMs = 24*3600000; endAt = new Date(now.getTime() + 3*24*3600000).toISOString(); }
+  else if (scheduleType === 'daily_7days') { intervalMs = 24*3600000; endAt = new Date(now.getTime() + 7*24*3600000).toISOString(); }
+  else if (scheduleType === 'hourly_2h') { intervalMs = 2*3600000; endAt = new Date(now.getTime() + 2*3600000).toISOString(); }
+  else if (scheduleType === 'hourly_6h') { intervalMs = 6*3600000; endAt = new Date(now.getTime() + 6*3600000).toISOString(); }
+  // else 'once': no interval, no endAt
+
+  const bc = { id, type: type || 'aviso', label: label || message.substring(0, 40), message, imageUrls, scheduleType, intervalMs, endAt, status: 'active', sentCount: 0, createdAt: now.toISOString(), nextSendAt: now.toISOString() };
+  scheduledBroadcasts.set(id, bc);
+
+  // Send immediately (scheduler will pick it up, but also trigger now)
+  try {
+    const result = await sendBulkWhatsApp(message, imageUrls);
+    bc.sentCount = 1;
+    bc.lastSentAt = now.toISOString();
+    bc.nextSendAt = intervalMs ? new Date(now.getTime() + intervalMs).toISOString() : null;
+    if (!intervalMs) bc.status = 'completed';
+    scheduledBroadcasts.set(id, bc);
+    broadcastHistory.unshift({ id, type: bc.type, label: bc.label, message, sentAt: now.toISOString(), result });
+    res.json({ success: true, id, result });
+  } catch (e) {
+    bc.status = 'failed';
+    scheduledBroadcasts.set(id, bc);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// API: List scheduled broadcasts
+app.get('/admin/api/broadcasts', verifyAdminToken, (req, res) => {
+  const active = [...scheduledBroadcasts.values()].filter(b => b.status === 'active');
+  res.json({ broadcasts: active });
+});
+
+// API: Cancel a broadcast
+app.delete('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
+  const bc = scheduledBroadcasts.get(req.params.id);
+  if (!bc) return res.status(404).json({ error: 'No encontrado' });
+  bc.status = 'cancelled';
+  scheduledBroadcasts.set(req.params.id, bc);
+  res.json({ success: true });
+});
+
+// API: Modify broadcast duration
+app.patch('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
+  const bc = scheduledBroadcasts.get(req.params.id);
+  if (!bc) return res.status(404).json({ error: 'No encontrado' });
+  const { scheduleType } = req.body;
+  const now = new Date();
+  if (scheduleType === 'daily_3days') { bc.intervalMs = 24*3600000; bc.endAt = new Date(now.getTime() + 3*24*3600000).toISOString(); }
+  else if (scheduleType === 'daily_7days') { bc.intervalMs = 24*3600000; bc.endAt = new Date(now.getTime() + 7*24*3600000).toISOString(); }
+  else if (scheduleType === 'hourly_2h') { bc.intervalMs = 2*3600000; bc.endAt = new Date(now.getTime() + 2*3600000).toISOString(); }
+  else if (scheduleType === 'hourly_6h') { bc.intervalMs = 6*3600000; bc.endAt = new Date(now.getTime() + 6*3600000).toISOString(); }
+  bc.scheduleType = scheduleType;
+  scheduledBroadcasts.set(req.params.id, bc);
+  res.json({ success: true, broadcast: bc });
+});
+
+// API: Broadcast history
+app.get('/admin/api/broadcast-history', verifyAdminToken, (req, res) => {
+  res.json({ history: broadcastHistory.slice(0, 50) });
 });
 
 // API: Get network status (check Wisphub or return online)

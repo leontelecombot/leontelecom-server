@@ -3,443 +3,425 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Panel Admin - León Telecom</title>
+  <title>León Telecom — Panel Admin</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-      padding: 20px;
-    }
-
-    .container {
-      max-width: 1000px;
-      margin: 0 auto;
-      background: white;
-      border-radius: 10px;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-      overflow: hidden;
-    }
-
-    .header {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 30px;
-      text-align: center;
-    }
-
-    .header h1 {
-      font-size: 2.5em;
-      margin-bottom: 10px;
-    }
-
-    .header p {
-      opacity: 0.9;
-      font-size: 0.95em;
-    }
-
-    .content {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 30px;
-      padding: 30px;
-    }
-
-    .section {
-      background: #f8f9fa;
-      padding: 25px;
-      border-radius: 8px;
-      border-left: 5px solid #667eea;
-    }
-
-    .section h2 {
-      color: #333;
-      margin-bottom: 20px;
-      font-size: 1.3em;
-    }
-
-    .form-group {
-      margin-bottom: 20px;
-    }
-
-    label {
-      display: block;
-      margin-bottom: 8px;
-      color: #555;
-      font-weight: 600;
-      font-size: 0.95em;
-    }
-
-    input[type="text"],
-    input[type="password"],
-    textarea,
-    input[type="file"] {
-      width: 100%;
-      padding: 12px;
-      border: 2px solid #ddd;
-      border-radius: 5px;
-      font-size: 1em;
-      font-family: inherit;
-      transition: border-color 0.3s;
-    }
-
-    input[type="text"]:focus,
-    input[type="password"]:focus,
-    textarea:focus,
-    input[type="file"]:focus {
-      outline: none;
-      border-color: #667eea;
-    }
-
-    textarea {
-      min-height: 100px;
-      resize: vertical;
-    }
-
-    button {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 12px 30px;
-      border: none;
-      border-radius: 5px;
-      font-size: 1em;
-      font-weight: 600;
-      cursor: pointer;
-      transition: transform 0.2s, box-shadow 0.2s;
-      width: 100%;
-    }
-
-    button:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-    }
-
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
-    }
-
-    .status-box {
-      background: white;
-      padding: 20px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      border: 2px solid #ddd;
-    }
-
-    .status-online {
-      color: #28a745;
-      font-weight: bold;
-    }
-
-    .status-offline {
-      color: #dc3545;
-      font-weight: bold;
-    }
-
-    .status-label {
-      color: #666;
-      font-size: 0.9em;
-      margin-bottom: 5px;
-    }
-
-    .message-preview {
-      background: white;
-      padding: 15px;
-      border-radius: 5px;
-      margin-top: 15px;
-      border-left: 4px solid #667eea;
-    }
-
-    .recipient-count {
-      background: #e7f3ff;
-      padding: 12px;
-      border-radius: 5px;
-      margin: 15px 0;
-      color: #004085;
-      font-size: 0.95em;
-    }
-
-    .two-column {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 15px;
-    }
-
-    .file-preview {
-      width: 100%;
-      max-width: 200px;
-      margin-top: 10px;
-      border-radius: 5px;
-    }
-
-    .alert {
-      padding: 15px;
-      border-radius: 5px;
-      margin-bottom: 20px;
-      display: none;
-    }
-
-    .alert-success {
-      background: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
-      display: block;
-    }
-
-    .alert-error {
-      background: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
-      display: block;
-    }
-
-    @media (max-width: 768px) {
-      .content {
-        grid-template-columns: 1fr;
-      }
-
-      .two-column {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .logout-btn {
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      padding: 8px 16px;
-      background: rgba(255, 255, 255, 0.2);
-      color: white;
-      border: 2px solid white;
-    }
-
-    .logout-btn:hover {
-      background: rgba(255, 255, 255, 0.3);
-    }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;min-height:100vh}
+    .topbar{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:16px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 12px rgba(0,0,0,.3)}
+    .topbar h1{font-size:1.3em;display:flex;align-items:center;gap:10px}
+    .topbar .stats{display:flex;gap:20px;font-size:.85em;opacity:.85}
+    .stat{background:rgba(255,255,255,.12);border-radius:20px;padding:5px 14px}
+    .main{max-width:1100px;margin:28px auto;padding:0 20px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+    .card{background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.07);overflow:hidden}
+    .card-header{padding:16px 20px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px;font-weight:600;font-size:.95em;color:#222}
+    .card-body{padding:20px}
+    .full-width{grid-column:1/-1}
+    /* Quick Actions */
+    .quick-btns{display:flex;gap:10px;flex-wrap:wrap}
+    .qbtn{flex:1;min-width:150px;padding:14px 10px;border:none;border-radius:10px;cursor:pointer;font-size:.85em;font-weight:600;transition:.15s;display:flex;flex-direction:column;align-items:center;gap:4px}
+    .qbtn .icon{font-size:1.6em}
+    .qbtn:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.15)}
+    .qbtn.repair{background:#fff3cd;color:#856404}
+    .qbtn.cut{background:#fce8e8;color:#c0392b}
+    .qbtn.ok{background:#d4edda;color:#155724}
+    .qbtn.promo{background:#e8f4fd;color:#1565c0}
+    /* Form */
+    .form-group{margin-bottom:14px}
+    label{display:block;font-size:.82em;font-weight:600;color:#555;margin-bottom:5px}
+    input,textarea,select{width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:.88em;transition:.15s;font-family:inherit}
+    input:focus,textarea:focus,select:focus{outline:none;border-color:#667eea}
+    textarea{resize:vertical;min-height:80px}
+    .tabs{display:flex;gap:2px;margin-bottom:18px;background:#f5f5f5;border-radius:8px;padding:3px}
+    .tab{flex:1;padding:8px;border:none;background:transparent;cursor:pointer;border-radius:6px;font-size:.85em;font-weight:500;color:#666;transition:.15s}
+    .tab.active{background:#fff;color:#333;font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+    .radio-group{display:flex;gap:12px}
+    .radio-opt{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.88em;padding:8px 14px;border:1.5px solid #ddd;border-radius:8px;transition:.15s}
+    .radio-opt.selected{border-color:#667eea;background:#f0f0ff;color:#333}
+    .radio-opt input{width:auto}
+    .schedule-opts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .sched-opt{padding:10px;border:1.5px solid #ddd;border-radius:8px;cursor:pointer;text-align:center;font-size:.8em;transition:.15s}
+    .sched-opt.selected{border-color:#667eea;background:#f0f0ff}
+    .sched-opt strong{display:block;font-size:1em}
+    /* Buttons */
+    .btn{padding:10px 22px;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:.88em;transition:.15s}
+    .btn:hover{opacity:.9;transform:translateY(-1px)}
+    .btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;width:100%;padding:12px}
+    .btn-danger{background:#fce8e8;color:#c0392b}
+    .btn-edit{background:#e8f4fd;color:#1565c0}
+    .btn-sm{padding:6px 12px;font-size:.78em}
+    /* Broadcast list */
+    .bc-item{border:1px solid #eee;border-radius:10px;padding:14px;margin-bottom:10px}
+    .bc-item .bc-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+    .bc-item .bc-label{font-weight:600;font-size:.9em;color:#222}
+    .bc-item .bc-actions{display:flex;gap:6px}
+    .bc-item .bc-meta{font-size:.78em;color:#888;display:flex;gap:12px;flex-wrap:wrap}
+    .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.75em;font-weight:600}
+    .badge-aviso{background:#fff3cd;color:#856404}
+    .badge-promo{background:#e8f4fd;color:#1565c0}
+    .badge-active{background:#d4edda;color:#155724}
+    /* History */
+    .hist-item{border-left:3px solid #ddd;padding:10px 14px;margin-bottom:8px;background:#fafafa;border-radius:0 8px 8px 0}
+    .hist-item.aviso{border-left-color:#f0ad4e}
+    .hist-item.promo{border-left-color:#5b9bd5}
+    .hist-item .hist-top{display:flex;justify-content:space-between;font-size:.82em;color:#888;margin-bottom:4px}
+    .hist-item .hist-msg{font-size:.87em;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .hist-item .hist-result{font-size:.78em;color:#28a745;margin-top:4px}
+    .section-tabs{display:flex;gap:0;border-bottom:2px solid #eee;margin-bottom:16px}
+    .section-tab{padding:10px 20px;border:none;background:transparent;cursor:pointer;font-weight:500;color:#888;font-size:.9em;border-bottom:2px solid transparent;margin-bottom:-2px;transition:.15s}
+    .section-tab.active{color:#667eea;border-bottom-color:#667eea;font-weight:600}
+    .tab-panel{display:none}
+    .tab-panel.active{display:block}
+    .img-preview{width:100%;max-height:120px;object-fit:cover;border-radius:8px;margin-top:8px;display:none}
+    .alert{padding:10px 14px;border-radius:8px;font-size:.85em;margin-bottom:12px;display:none}
+    .alert-success{background:#d4edda;color:#155724}
+    .alert-error{background:#fce8e8;color:#c0392b}
+    #loading{display:none;text-align:center;color:#888;font-size:.85em;padding:10px}
+    .empty{text-align:center;color:#aaa;font-size:.85em;padding:20px}
+    @media(max-width:700px){.main{grid-template-columns:1fr}.full-width{grid-column:1}}
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <button class="logout-btn" onclick="logout()">Salir</button>
-      <h1>🚀 Panel Admin - León Telecom</h1>
-      <p>Gestiona mensajes, ofertas y estado de red</p>
-    </div>
 
-    <div class="content">
-      <!-- SECCIÓN 1: MENSAJES MASIVOS -->
-      <div class="section">
-        <h2>📢 Mensajes Masivos</h2>
-        
-        <div id="statusAlert" class="alert"></div>
+<div class="topbar">
+  <h1>🦁 León Telecom <span style="opacity:.6;font-weight:400;font-size:.85em">Admin</span></h1>
+  <div class="stats">
+    <div class="stat">👥 <span id="userCount">—</span> clientes</div>
+    <div class="stat">📤 <span id="histCount">0</span> enviados hoy</div>
+    <div class="stat" id="activeCount" style="display:none">🟢 <span id="activeNum">0</span> activos</div>
+  </div>
+</div>
 
-        <div class="status-box">
-          <div class="status-label">Estado de la Red</div>
-          <div id="networkStatus" class="status-online">🟢 En línea</div>
-          <button onclick="checkNetworkStatus()" style="margin-top: 10px; padding: 8px;">
-            Actualizar Estado
-          </button>
-        </div>
+<div class="main">
 
-        <div class="form-group">
-          <label>Mensaje para todos los usuarios:</label>
-          <textarea 
-            id="messageText" 
-            placeholder="Escribe el mensaje que deseas enviar a todos los usuarios..."
-            rows="6"
-          ></textarea>
-        </div>
-
-        <div class="recipient-count" id="recipientCount">
-          Cargando cantidad de usuarios...
-        </div>
-
-        <button onclick="sendBulkMessage()">
-          📤 Enviar Mensaje Masivo
+  <!-- Quick Actions -->
+  <div class="card full-width">
+    <div class="card-header">⚡ Avisos Rápidos</div>
+    <div class="card-body">
+      <div class="quick-btns">
+        <button class="qbtn repair" onclick="sendQuick('repair')">
+          <span class="icon">🔧</span>En Reparación
         </button>
-      </div>
-
-      <!-- SECCIÓN 2: OFERTAS -->
-      <div class="section">
-        <h2>🎁 Enviar Oferta</h2>
-
-        <div class="form-group">
-          <label>Imagen de la oferta:</label>
-          <input 
-            type="file" 
-            id="promoImage" 
-            accept="image/*"
-            onchange="previewImage(event)"
-          >
-          <img id="imagePreview" class="file-preview" style="display: none;">
-        </div>
-
-        <div class="form-group">
-          <label>Descripción/Texto de la oferta:</label>
-          <textarea 
-            id="promoText" 
-            placeholder="Describe la oferta aquí..."
-            rows="6"
-          ></textarea>
-        </div>
-
-        <div class="recipient-count">
-          ⚠️ La oferta se enviará a todos los usuarios
-        </div>
-
-        <button onclick="sendPromotion()">
-          🎯 Enviar Oferta
+        <button class="qbtn cut" onclick="sendQuick('cut')">
+          <span class="icon">⚠️</span>Corte de Servicio
+        </button>
+        <button class="qbtn ok" onclick="sendQuick('ok')">
+          <span class="icon">✅</span>Servicio Restaurado
+        </button>
+        <button class="qbtn promo" onclick="sendQuick('maintenance')">
+          <span class="icon">🕐</span>Mantenimiento Programado
         </button>
       </div>
     </div>
   </div>
 
-  <script>
-    // Check if user is authenticated
-    window.addEventListener('load', () => {
-      const auth = sessionStorage.getItem('admin_auth');
-      if (!auth) {
-        window.location.href = '/admin/login';
-      }
-      loadUserCount();
-      checkNetworkStatus();
+  <!-- New Message Form -->
+  <div class="card">
+    <div class="card-header">📢 Nuevo Mensaje</div>
+    <div class="card-body">
+      <div id="formAlert" class="alert"></div>
+
+      <!-- Type -->
+      <div class="form-group">
+        <label>Clasificación</label>
+        <div class="radio-group">
+          <label class="radio-opt selected" id="opt-aviso" onclick="setType('aviso')">
+            <input type="radio" name="msgType" value="aviso" checked> 📋 Aviso
+          </label>
+          <label class="radio-opt" id="opt-promo" onclick="setType('promo')">
+            <input type="radio" name="msgType" value="promo"> 🎯 Promoción
+          </label>
+        </div>
+      </div>
+
+      <!-- Label -->
+      <div class="form-group">
+        <label>Etiqueta interna (referencia)</label>
+        <input type="text" id="msgLabel" placeholder="ej: Promo Junio, Aviso mantenimiento…">
+      </div>
+
+      <!-- Image (promo only) -->
+      <div class="form-group" id="imageGroup" style="display:none">
+        <label>Imagen (URL pública o subir)</label>
+        <input type="url" id="msgImageUrl" placeholder="https://…" oninput="previewImage()">
+        <img id="imgPreview" class="img-preview">
+      </div>
+
+      <!-- Message -->
+      <div class="form-group">
+        <label>Mensaje</label>
+        <textarea id="msgText" placeholder="Escribe el mensaje que recibirán todos los clientes…" rows="4"></textarea>
+      </div>
+
+      <!-- Schedule (promo only) -->
+      <div class="form-group" id="scheduleGroup" style="display:none">
+        <label>Duración del envío</label>
+        <div class="schedule-opts">
+          <div class="sched-opt selected" data-val="once" onclick="selectSched(this)">
+            <strong>Una vez</strong>Ahora, sin repetir
+          </div>
+          <div class="sched-opt" data-val="hourly_2h" onclick="selectSched(this)">
+            <strong>Cada 2 horas</strong>Durante 2 horas
+          </div>
+          <div class="sched-opt" data-val="hourly_6h" onclick="selectSched(this)">
+            <strong>Cada 6 horas</strong>Durante 6 horas
+          </div>
+          <div class="sched-opt" data-val="daily_3days" onclick="selectSched(this)">
+            <strong>Diario — 3 días</strong>Una vez al día
+          </div>
+          <div class="sched-opt" data-val="daily_7days" onclick="selectSched(this)">
+            <strong>Diario — 1 semana</strong>Una vez al día × 7
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" onclick="sendBroadcast()">
+        📤 Enviar a todos los clientes
+      </button>
+      <div id="loading">Enviando…</div>
+    </div>
+  </div>
+
+  <!-- Programados + Historial -->
+  <div class="card">
+    <div class="card-header">📋 Actividad</div>
+    <div class="card-body">
+      <div class="section-tabs">
+        <button class="section-tab active" onclick="showTab('scheduled')">🟢 Programados</button>
+        <button class="section-tab" onclick="showTab('history')">📜 Historial</button>
+      </div>
+
+      <!-- Scheduled -->
+      <div class="tab-panel active" id="tab-scheduled">
+        <div id="scheduledList"><div class="empty">Sin envíos programados activos</div></div>
+        <button class="btn btn-edit btn-sm" style="margin-top:8px;width:100%" onclick="loadScheduled()">🔄 Actualizar</button>
+      </div>
+
+      <!-- History -->
+      <div class="tab-panel" id="tab-history">
+        <div id="historyList"><div class="empty">Sin historial aún</div></div>
+        <button class="btn btn-edit btn-sm" style="margin-top:8px;width:100%" onclick="loadHistory()">🔄 Actualizar</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Modify modal -->
+<div id="modModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;display:none;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:24px;width:360px;max-width:90vw">
+    <h3 style="margin-bottom:16px">Modificar duración</h3>
+    <input type="hidden" id="modBcId">
+    <div class="schedule-opts" id="modSchedOpts">
+      <div class="sched-opt selected" data-val="once" onclick="selectModSched(this)"><strong>Una vez</strong>Cancelar repetición</div>
+      <div class="sched-opt" data-val="hourly_2h" onclick="selectModSched(this)"><strong>2 horas</strong>Cada 2h</div>
+      <div class="sched-opt" data-val="hourly_6h" onclick="selectModSched(this)"><strong>6 horas</strong>Cada 6h</div>
+      <div class="sched-opt" data-val="daily_3days" onclick="selectModSched(this)"><strong>3 días</strong>Diario</div>
+      <div class="sched-opt" data-val="daily_7days" onclick="selectModSched(this)"><strong>1 semana</strong>Diario</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn btn-primary" onclick="applyModify()" style="flex:1">Guardar</button>
+      <button class="btn" onclick="closeModal()" style="background:#eee;flex:1">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const token = localStorage.getItem('adminToken');
+  if (!token) { location.href = '/admin/login'; }
+
+  let currentType = 'aviso';
+  let currentSched = 'once';
+  let modSched = 'once';
+
+  // Load stats on page load
+  window.onload = () => { loadStats(); loadScheduled(); loadHistory(); };
+
+  async function loadStats() {
+    try {
+      const r = await fetch('/admin/api/user-count');
+      const d = await r.json();
+      document.getElementById('userCount').textContent = d.count;
+    } catch(e) {}
+    try {
+      const r = await fetchAuth('/admin/api/broadcasts');
+      const d = await r.json();
+      const n = (d.broadcasts || []).length;
+      document.getElementById('activeNum').textContent = n;
+      document.getElementById('activeCount').style.display = n > 0 ? '' : 'none';
+    } catch(e) {}
+    try {
+      const r = await fetchAuth('/admin/api/broadcast-history');
+      const d = await r.json();
+      const today = new Date().toDateString();
+      const todayCount = (d.history||[]).filter(h => new Date(h.sentAt).toDateString() === today).length;
+      document.getElementById('histCount').textContent = todayCount;
+    } catch(e) {}
+  }
+
+  function fetchAuth(url, opts = {}) {
+    opts.headers = { ...(opts.headers||{}), 'Content-Type': 'application/json' };
+    const sep = url.includes('?') ? '&' : '?';
+    return fetch(url + sep + 'token=' + encodeURIComponent(token), opts);
+  }
+
+  function setType(type) {
+    currentType = type;
+    document.getElementById('opt-aviso').className = 'radio-opt' + (type==='aviso'?' selected':'');
+    document.getElementById('opt-promo').className = 'radio-opt' + (type==='promo'?' selected':'');
+    document.getElementById('imageGroup').style.display = type==='promo' ? '' : 'none';
+    document.getElementById('scheduleGroup').style.display = type==='promo' ? '' : 'none';
+  }
+
+  function selectSched(el) {
+    document.querySelectorAll('.schedule-opts .sched-opt').forEach(e => e.classList.remove('selected'));
+    el.classList.add('selected');
+    currentSched = el.dataset.val;
+  }
+
+  function previewImage() {
+    const url = document.getElementById('msgImageUrl').value;
+    const img = document.getElementById('imgPreview');
+    if (url) { img.src = url; img.style.display = 'block'; }
+    else { img.style.display = 'none'; }
+  }
+
+  const QUICK_MSGS = {
+    repair: { label: 'En Reparación', msg: '🔧 León Telecom informa que el servicio está en mantenimiento. Nuestro equipo técnico trabaja para restablecer la conexión lo antes posible. Disculpe las molestias.' },
+    cut: { label: 'Corte de Servicio', msg: '⚠️ León Telecom informa que se ha presentado un corte de servicio en la zona. Nuestro equipo técnico está trabajando para restablecer la conexión. Le informaremos cuando esté disponible. Disculpe los inconvenientes.' },
+    ok: { label: 'Servicio Restaurado', msg: '✅ León Telecom informa que el servicio ha sido restablecido. Su conexión a internet ya está disponible. Gracias por su paciencia.' },
+    maintenance: { label: 'Mantenimiento Programado', msg: '🕐 León Telecom le informa que realizará mantenimiento programado. Es posible que experimente interrupciones breves en el servicio. Agradecemos su comprensión.' }
+  };
+
+  async function sendQuick(key) {
+    const q = QUICK_MSGS[key];
+    if (!confirm(`¿Enviar aviso "${q.label}" a todos los clientes?`)) return;
+    showAlert('formAlert', '', '');
+    document.getElementById('loading').style.display = 'block';
+    try {
+      const r = await fetchAuth('/admin/api/broadcast', { method: 'POST', body: JSON.stringify({ type: 'aviso', label: q.label, message: q.msg, scheduleType: 'once' }) });
+      const d = await r.json();
+      showAlert('formAlert', `✅ Enviado a ${d.result?.sent || 0} clientes`, 'success');
+      loadStats(); loadHistory();
+    } catch(e) { showAlert('formAlert', '❌ Error: ' + e.message, 'error'); }
+    finally { document.getElementById('loading').style.display = 'none'; }
+  }
+
+  async function sendBroadcast() {
+    const message = document.getElementById('msgText').value.trim();
+    const label = document.getElementById('msgLabel').value.trim() || message.substring(0,40);
+    const imageUrl = document.getElementById('msgImageUrl').value.trim();
+    if (!message) { showAlert('formAlert', 'Escribe un mensaje', 'error'); return; }
+    if (!confirm(`¿Enviar a todos los clientes registrados?`)) return;
+    document.getElementById('loading').style.display = 'block';
+    showAlert('formAlert', '', '');
+    try {
+      const body = { type: currentType, label, message, imageUrl: imageUrl || null, scheduleType: currentType === 'promo' ? currentSched : 'once' };
+      const r = await fetchAuth('/admin/api/broadcast', { method: 'POST', body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      const schedLabel = currentType === 'promo' && currentSched !== 'once' ? ' (programado)' : '';
+      showAlert('formAlert', `✅ Enviado a ${d.result?.sent || 0} clientes${schedLabel}`, 'success');
+      document.getElementById('msgText').value = '';
+      document.getElementById('msgLabel').value = '';
+      document.getElementById('msgImageUrl').value = '';
+      document.getElementById('imgPreview').style.display = 'none';
+      loadStats(); loadScheduled(); loadHistory();
+    } catch(e) { showAlert('formAlert', '❌ Error: ' + e.message, 'error'); }
+    finally { document.getElementById('loading').style.display = 'none'; }
+  }
+
+  async function loadScheduled() {
+    try {
+      const r = await fetchAuth('/admin/api/broadcasts');
+      const d = await r.json();
+      const el = document.getElementById('scheduledList');
+      if (!d.broadcasts?.length) { el.innerHTML = '<div class="empty">Sin envíos programados activos</div>'; return; }
+      el.innerHTML = d.broadcasts.map(b => {
+        const nextStr = b.nextSendAt ? new Date(b.nextSendAt).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'}) : '—';
+        const endStr = b.endAt ? new Date(b.endAt).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'}) : 'Una vez';
+        return `<div class="bc-item">
+          <div class="bc-top">
+            <div>
+              <span class="bc-label">${b.label}</span>
+              <span class="badge badge-${b.type}" style="margin-left:6px">${b.type}</span>
+            </div>
+            <div class="bc-actions">
+              <button class="btn btn-edit btn-sm" onclick="openModify('${b.id}','${b.scheduleType||'once'}')">✏️</button>
+              <button class="btn btn-danger btn-sm" onclick="cancelBc('${b.id}')">✕</button>
+            </div>
+          </div>
+          <div class="bc-meta">
+            <span>📤 ${b.sentCount} envíos</span>
+            <span>⏭ Próximo: ${nextStr}</span>
+            <span>🔚 Termina: ${endStr}</span>
+          </div>
+        </div>`;
+      }).join('');
+    } catch(e) {}
+  }
+
+  async function loadHistory() {
+    try {
+      const r = await fetchAuth('/admin/api/broadcast-history');
+      const d = await r.json();
+      const el = document.getElementById('historyList');
+      if (!d.history?.length) { el.innerHTML = '<div class="empty">Sin historial aún</div>'; return; }
+      el.innerHTML = d.history.slice(0,20).map(h => {
+        const dateStr = new Date(h.sentAt).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'});
+        return `<div class="hist-item ${h.type}">
+          <div class="hist-top"><span><span class="badge badge-${h.type}">${h.type}</span> ${h.label}</span><span>${dateStr}</span></div>
+          <div class="hist-msg">${h.message}</div>
+          <div class="hist-result">✓ ${h.result?.sent||0} enviados · ${h.result?.failed||0} fallidos</div>
+        </div>`;
+      }).join('');
+    } catch(e) {}
+  }
+
+  async function cancelBc(id) {
+    if (!confirm('¿Cancelar este envío programado?')) return;
+    await fetchAuth('/admin/api/broadcasts/' + id, { method: 'DELETE' });
+    loadScheduled(); loadStats();
+  }
+
+  function openModify(id, current) {
+    document.getElementById('modBcId').value = id;
+    modSched = current;
+    document.querySelectorAll('#modSchedOpts .sched-opt').forEach(e => {
+      e.classList.toggle('selected', e.dataset.val === current);
     });
+    document.getElementById('modModal').style.display = 'flex';
+  }
 
-    function previewImage(event) {
-      const file = event.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const preview = document.getElementById('imagePreview');
-          preview.src = e.target.result;
-          preview.style.display = 'block';
-        };
-        reader.readAsDataURL(file);
-      }
-    }
+  function selectModSched(el) {
+    document.querySelectorAll('#modSchedOpts .sched-opt').forEach(e => e.classList.remove('selected'));
+    el.classList.add('selected');
+    modSched = el.dataset.val;
+  }
 
-    function loadUserCount() {
-      fetch('/admin/api/user-count')
-        .then(r => r.json())
-        .then(data => {
-          document.getElementById('recipientCount').innerHTML = 
-            `👥 Se enviará a <strong>${data.count}</strong> usuario${data.count !== 1 ? 's' : ''}`;
-        })
-        .catch(e => console.error('Error loading user count:', e));
-    }
+  async function applyModify() {
+    const id = document.getElementById('modBcId').value;
+    await fetchAuth('/admin/api/broadcasts/' + id, { method: 'PATCH', body: JSON.stringify({ scheduleType: modSched }) });
+    closeModal();
+    loadScheduled();
+  }
 
-    function checkNetworkStatus() {
-      // In a real scenario, this would check Wisphub API
-      // For now, we'll simulate with a simple endpoint
-      fetch('/admin/api/network-status')
-        .then(r => r.json())
-        .then(data => {
-          const statusEl = document.getElementById('networkStatus');
-          if (data.online) {
-            statusEl.className = 'status-online';
-            statusEl.textContent = '🟢 En línea';
-          } else {
-            statusEl.className = 'status-offline';
-            statusEl.textContent = '🔴 Fuera de servicio - ' + (data.message || 'Sin conexión');
-          }
-        })
-        .catch(e => console.error('Error checking status:', e));
-    }
+  function closeModal() { document.getElementById('modModal').style.display = 'none'; }
 
-    function showAlert(message, type = 'success') {
-      const alert = document.getElementById('statusAlert');
-      alert.textContent = message;
-      alert.className = `alert alert-${type}`;
-      alert.style.display = 'block';
-      setTimeout(() => {
-        alert.style.display = 'none';
-      }, 5000);
-    }
+  function showTab(tab) {
+    document.querySelectorAll('.section-tab').forEach((t,i) => t.classList.toggle('active', ['scheduled','history'][i]===tab));
+    document.querySelectorAll('.tab-panel').forEach((p,i) => p.classList.toggle('active', ['tab-scheduled','tab-history'][i]==='tab-'+tab));
+    if (tab==='scheduled') loadScheduled();
+    else loadHistory();
+  }
 
-    function sendBulkMessage() {
-      const message = document.getElementById('messageText').value.trim();
-      
-      if (!message) {
-        showAlert('Por favor escribe un mensaje', 'error');
-        return;
-      }
-
-      if (message.length > 1000) {
-        showAlert('El mensaje es muy largo (máximo 1000 caracteres)', 'error');
-        return;
-      }
-
-      fetch('/admin/api/send-message', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
-      })
-        .then(r => r.json())
-        .then(data => {
-          if (data.success) {
-            showAlert(`✅ Mensaje enviado a ${data.sent} usuario${data.sent !== 1 ? 's' : ''}`, 'success');
-            document.getElementById('messageText').value = '';
-          } else {
-            showAlert('Error: ' + (data.error || 'No se pudo enviar'), 'error');
-          }
-        })
-        .catch(e => showAlert('Error de conexión: ' + e.message, 'error'));
-    }
-
-    function sendPromotion() {
-      const text = document.getElementById('promoText').value.trim();
-      const fileInput = document.getElementById('promoImage');
-
-      if (!text) {
-        showAlert('Por favor escribe una descripción de la oferta', 'error');
-        return;
-      }
-
-      if (!fileInput.files[0]) {
-        showAlert('Por favor selecciona una imagen para la oferta', 'error');
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const imageBase64 = e.target.result.split(',')[1];
-
-        fetch('/admin/api/send-promotion', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text,
-            imageBase64
-          })
-        })
-          .then(r => r.json())
-          .then(data => {
-            if (data.success) {
-              showAlert(`✅ Oferta enviada a ${data.sent} usuario${data.sent !== 1 ? 's' : ''}`, 'success');
-              document.getElementById('promoText').value = '';
-              fileInput.value = '';
-              document.getElementById('imagePreview').style.display = 'none';
-            } else {
-              showAlert('Error: ' + (data.error || 'No se pudo enviar'), 'error');
-            }
-          })
-          .catch(e => showAlert('Error de conexión: ' + e.message, 'error'));
-      };
-      reader.readAsDataURL(fileInput.files[0]);
-    }
-
-    function logout() {
-      sessionStorage.removeItem('admin_auth');
-      window.location.href = '/admin/login';
-    }
-  </script>
+  function showAlert(id, msg, type) {
+    const el = document.getElementById(id);
+    if (!msg) { el.style.display='none'; return; }
+    el.className = 'alert alert-' + type;
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(() => el.style.display='none', 5000);
+  }
+</script>
 </body>
 </html>
