@@ -2404,12 +2404,8 @@ app.get('/admin/login', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public/admin-login.html'));
 });
 
-// Admin dashboard page
-app.get('/admin/dashboard', (req, res) => {
-  const auth = req.headers.authorization || req.query.auth;
-  if (!auth || auth !== `Bearer ${process.env.ADMIN_TOKEN || 'temp-token'}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+// Admin dashboard page — auth handled client-side via localStorage token
+app.get('/admin/dashboard', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public/admin-dashboard.html'));
 });
 
