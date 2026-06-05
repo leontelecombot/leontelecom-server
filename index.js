@@ -139,25 +139,89 @@ function unpauseChat(chatId) {
   pausedChats.delete(String(chatId));
 }
 
+// ==================== WISPHUB INTEGRATION ====================
+const WISPHUB_API_KEY = process.env.WISPHUB_API_KEY || '';
+let wisphubClients = new Map(); // phone → { name, phone, status, wisphubId }
+let lastWisphubSync = null;
+let wisphubSyncError = null;
+
+async function syncWisphubClients() {
+  if (!WISPHUB_API_URL || WISPHUB_API_URL === 'https://api.wisphub.net' || !WISPHUB_API_KEY) {
+    return { synced: 0, error: 'WISPHUB_API_URL o WISPHUB_API_KEY no configurados' };
+  }
+  try {
+    const base = WISPHUB_API_URL.replace(/\/$/, '');
+    // Fetch up to 1000 clients — adjust if you have more
+    const res = await fetch(`${base}/api/clientes/?format=json&limit=1000&estado=1`, {
+      headers: { 'Authorization': `Token ${WISPHUB_API_KEY}` }
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const items = Array.isArray(data) ? data : (data.results || []);
+    wisphubClients.clear();
+    let synced = 0;
+    for (const c of items) {
+      // Wisphub uses: telefono, celular, nombre, apellidos
+      const rawPhone = c.telefono || c.celular || c.phone || '';
+      if (!rawPhone) continue;
+      let phone = rawPhone.replace(/\D/g, '');
+      if (phone.length === 10) phone = '52' + phone;
+      if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
+      if (phone.length < 12) continue; // skip invalid
+      const name = [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.name || rawPhone;
+      wisphubClients.set(phone, { name, phone, status: c.estado, wisphubId: c.id, source: 'wisphub' });
+      synced++;
+    }
+    lastWisphubSync = new Date().toISOString();
+    wisphubSyncError = null;
+    console.log(`[Wisphub] Sync OK: ${synced} clientes`);
+    return { synced, total: items.length };
+  } catch (e) {
+    wisphubSyncError = e.message;
+    console.error('[Wisphub] Sync error:', e.message);
+    return { synced: 0, error: e.message };
+  }
+}
+
+// Auto-sync on startup + every 6 hours
+syncWisphubClients();
+setInterval(syncWisphubClients, 6 * 3600 * 1000);
+
 // ==================== MANUAL CLIENT DATABASE ====================
-// Clients added manually through admin panel (phone numbers)
 const manualClients = new Map(); // phoneNumber → { name, phone, addedAt, notes }
+
+function normalizePhone(raw) {
+  let p = raw.replace(/\D/g, '');
+  if (p.length === 10) p = '52' + p;
+  if (p.startsWith('521') && p.length === 13) p = '52' + p.slice(3);
+  return p;
+}
 
 function getAllBroadcastRecipients() {
   const seen = new Set();
   const recipients = [];
-  // Auto-discovered clients (from bot conversations)
-  for (const user of dataManager.getAllUsers()) {
-    if (user.platform === 'whatsapp' && !seen.has(user.chatId)) {
-      seen.add(user.chatId);
-      recipients.push({ chatId: user.chatId, name: user.name, source: 'bot' });
+  // 1. Wisphub clients (most authoritative)
+  for (const [phone, client] of wisphubClients.entries()) {
+    if (!seen.has(phone)) {
+      seen.add(phone);
+      recipients.push({ chatId: phone, name: client.name, source: 'wisphub' });
     }
   }
-  // Manually added clients
+  // 2. Manually added clients
   for (const [phone, client] of manualClients.entries()) {
     if (!seen.has(phone)) {
       seen.add(phone);
       recipients.push({ chatId: phone, name: client.name || phone, source: 'manual' });
+    }
+  }
+  // 3. Auto-discovered bot clients
+  for (const user of dataManager.getAllUsers()) {
+    if (user.platform === 'whatsapp' && !seen.has(user.chatId)) {
+      seen.add(user.chatId);
+      recipients.push({ chatId: user.chatId, name: user.name, source: 'bot' });
     }
   }
   return recipients;
@@ -2581,6 +2645,22 @@ app.post('/admin/api/clients', verifyAdminToken, (req, res) => {
 app.delete('/admin/api/clients/:phone', verifyAdminToken, (req, res) => {
   manualClients.delete(req.params.phone);
   res.json({ success: true });
+});
+
+// API: Wisphub sync status
+app.get('/admin/api/wisphub-status', verifyAdminToken, (req, res) => {
+  res.json({
+    configured: !!(WISPHUB_API_URL && WISPHUB_API_KEY && WISPHUB_API_URL !== 'https://api.wisphub.net'),
+    lastSync: lastWisphubSync,
+    error: wisphubSyncError,
+    count: wisphubClients.size
+  });
+});
+
+// API: Trigger Wisphub sync manually
+app.post('/admin/api/wisphub-sync', verifyAdminToken, async (req, res) => {
+  const result = await syncWisphubClients();
+  res.json(result);
 });
 
 // API: Get network status (check Wisphub or return online)
