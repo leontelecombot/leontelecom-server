@@ -544,6 +544,32 @@ function isTechnicalIssue(text) {
   return /\b(falla|sin servicio|no funciona|intermitente|reiniciar|caido|caida|sin internet|no jala|no agarra|se cae|se corta|no carga|no hay internet|se fue el internet|no tengo internet|se corto el internet)\b/.test(value);
 }
 
+// ¿A qué "flujo" pertenece el estado actual de la conversación?
+function currentFlow(state) {
+  if (!state) return 'none';
+  if (state.includes('camera')) return 'camera';
+  if (state.includes('migration')) return 'migration';
+  if (state.includes('report') || state.includes('neighborhood') || state.includes('emergency')) return 'support';
+  if (state.includes('agent')) return 'agent';
+  if (state.includes('location') || state.includes('plan') || state.includes('contract') || state.includes('household')) return 'plan';
+  return 'other';
+}
+
+// Detecta si el cliente está pidiendo OTRO tema (por palabra clave, NO por números
+// sueltos, para no confundir respuestas como "somos 3" con la opción 3 del menú).
+function detectNewIntent(text) {
+  const v = normalizeText(text);
+  if (isMigrationRequest(text)) return 'migration';
+  if (isCameraRequest(text)) return 'camera';
+  if (/\b(asesor|agente|ejecutivo|humano|una persona|con alguien|con un humano)\b/.test(v) || /hablar con/.test(v)) return 'agent';
+  if (isReportRequest(text) || isTechnicalIssue(text)) return 'support';
+  // "plan" solo con palabras específicas de internet (NO "costo/precio" sueltos,
+  // que también aplican a cámaras y harían cambiar de tema por error).
+  if (/\b(plan|planes|paquete|paquetes|tarifa|tarifas|fibra|inalambric|megas|mbps)\b/.test(v) ||
+      /\b(contratar|quiero internet|instalar internet|quiero el servicio|quiero contratar)\b/.test(v)) return 'plan';
+  return null;
+}
+
 // Emergencia / falla de infraestructura: debe pasar a un técnico DE INMEDIATO.
 // Cubre cosas como "se está quemando", chispas, humo, poste/cable caído, corto, etc.
 function isEmergency(text) {
@@ -1880,42 +1906,38 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     // ===== INTENT INTERRUPTION LAYER =====
-    const detectedChoice = parseMenuChoice(text);
-    if (session.state && session.state !== 'awaiting_menu_choice' && detectedChoice !== null) {
-      if (detectedChoice === 1) { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); return; }
-      if (detectedChoice === 2) { setSession(chatId, { state: 'awaiting_camera_needs', data: {} }); await sendMsg(chatId, '¿Para qué espacio necesita las cámaras y cuántas aproximadamente?'); return; }
-      if (detectedChoice === 3) { setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt()); return; }
-      if (detectedChoice === 4) { setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } }); await sendMsg(chatId, '¿Cuál es tu nombre?'); return; }
-    }
-
+    // Si el cliente está dentro de un flujo (eligió algo del menú) y luego pide
+    // OTRA cosa, cambiamos al tema nuevo en vez de forzar su mensaje como respuesta
+    // del flujo anterior. Funciona aun dentro de soporte/cámaras/asesor/migración.
     if (session.state && session.state !== 'awaiting_menu_choice') {
-      const inSupportFlow = session.state.includes('report') || session.state.includes('agent') || session.state.includes('contract') || session.state.includes('camera') || session.state.includes('migration');
-      if (!inSupportFlow) {
-        if (isMigrationRequest(text)) {
+      const newIntent = detectNewIntent(text);
+      const flow = currentFlow(session.state);
+      if (newIntent && newIntent !== flow) {
+        if (newIntent === 'migration') {
           setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
           await sendMsg(chatId, '¡Con gusto te ayudamos con la migración! ¿En cuál zona está el servicio ACTUAL?', [], {
             buttons: [{ id: 'huitzo', title: 'Huitzo' }, { id: 'telixtlahuaca', title: 'Telixtlahuaca' }, { id: 'suchilquitongo', title: 'Suchilquitongo' }]
           });
           return;
         }
-        if (isCameraRequest(text)) {
+        if (newIntent === 'camera') {
           setSession(chatId, { state: 'awaiting_camera_needs', data: {} });
           await sendMsg(chatId, 'Con gusto te asesoro en cámaras. ¿Qué espacio quieres vigilar y cuántas cámaras necesitas?');
           return;
         }
-        if (isPlanRequest(text) && !session.state.includes('plan')) {
-          setSession(chatId, { state: 'awaiting_location', data: {} });
-          await sendReplyObject(buildLocationPrompt());
-          return;
-        }
-        if (isAgentRequest(text) && !session.state.includes('agent')) {
+        if (newIntent === 'agent') {
           setSession(chatId, { state: 'awaiting_agent_name', data: { ...session.data, initialRequest: text } });
-          await sendMsg(chatId, '¿Cuál es su nombre?');
+          await sendMsg(chatId, '¿Cuál es tu nombre?');
           return;
         }
-        if ((isReportRequest(text) || isTechnicalIssue(text)) && !session.state.includes('report')) {
+        if (newIntent === 'support') {
           setSession(chatId, { state: 'awaiting_report', data: {} });
           await sendReplyObject(buildReportPrompt());
+          return;
+        }
+        if (newIntent === 'plan') {
+          setSession(chatId, { state: 'awaiting_location', data: {} });
+          await sendReplyObject(buildLocationPrompt());
           return;
         }
       }
