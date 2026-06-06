@@ -8,12 +8,8 @@ const { analyzePaymentReceipt } = require('./utils/imageAnalysis');
 const dataManager = require('./utils/dataManager');
 const persistence = require('./utils/persistence');
 
-// File upload config — images saved to public/images/uploads/
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(__dirname, 'public/images/uploads')),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`)
-});
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
+// File upload config — imágenes en memoria; se guardan en MongoDB (persistentes).
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
   if (!file.mimetype.startsWith('image/')) return cb(new Error('Solo imágenes'));
   cb(null, true);
 }});
@@ -170,6 +166,28 @@ function describeNextOpening(date = new Date()) {
     }
   }
   return 'en nuestro próximo horario de atención';
+}
+
+// ¿El cliente está preguntando por el horario de atención?
+function isHoursRequest(text) {
+  const v = normalizeText(text);
+  return /\b(horario|horarios|que hora|a que hora|a q hora|que dias|dias atienden|dias abren|cuando abren|cuando atienden|estan abiertos|estan abierto|siguen abiertos|ya cerraron|a que hora abren|a que hora cierran|hora de atencion)\b/.test(v)
+    || (/\b(abren|cierran|atienden)\b/.test(v) && /\?|hora|dia/.test(v));
+}
+
+// Mensaje con el horario de atención en formato de lista.
+function buildBusinessHoursMessage() {
+  const abierto = isWithinBusinessHours();
+  return [
+    abierto ? '🟢 Ahorita estamos ABIERTOS para atención con un asesor.' : `🔴 Ahorita estamos fuera de horario. Volvemos ${describeNextOpening()}.`,
+    '',
+    '🕒 Horario de atención (asesores):',
+    '• Lunes a Viernes: 10:00 – 15:00 y 16:00 – 20:00',
+    '• Sábado: 10:00 – 15:00 y 16:00 – 18:00',
+    '• Domingo: 10:00 – 14:00',
+    '',
+    'Yo, el asistente virtual, te atiendo las 24 horas. 🤖'
+  ].join('\n');
 }
 
 // Client profiles — remembers name, location across messages (persisted)
@@ -1885,6 +1903,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
+    // Pregunta por el horario de atención → responder con la lista (sin romper el flujo)
+    if (isHoursRequest(text)) {
+      addMessageToHistory(chatId, 'bot', 'horario');
+      await sendMsg(chatId, buildBusinessHoursMessage());
+      return;
+    }
+
     async function sendReplyObject(replyObj) {
       if (!replyObj.text) return;
       addMessageToHistory(chatId, 'bot', replyObj.text);
@@ -2863,11 +2888,25 @@ app.get('/admin/api/broadcast-history', verifyAdminToken, (req, res) => {
   res.json({ history: broadcastHistory.slice(0, 50) });
 });
 
-// API: Upload image
-app.post('/admin/api/upload-image', verifyAdminToken, upload.single('image'), (req, res) => {
+// API: Upload image → se guarda en MongoDB y se sirve desde /images/db/:id
+app.post('/admin/api/upload-image', verifyAdminToken, upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No se recibió imagen' });
-  const url = `${SERVER_BASE_URL}/images/uploads/${req.file.filename}`;
-  res.json({ success: true, url });
+  let ext = (path.extname(req.file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '');
+  if (!ext || ext === '.') ext = '.jpg';
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+  const ok = await persistence.saveImage(id, req.file.mimetype, req.file.buffer);
+  if (!ok) return res.status(500).json({ error: 'No se pudo guardar la imagen' });
+  res.json({ success: true, url: `${SERVER_BASE_URL}/images/db/${id}` });
+});
+
+// Servir imágenes guardadas (público: WhatsApp las descarga desde esta URL)
+app.get('/images/db/:id', async (req, res) => {
+  const id = String(req.params.id).replace(/[^a-zA-Z0-9._-]/g, '');
+  const img = await persistence.loadImage(id);
+  if (!img) return res.status(404).send('No encontrado');
+  res.set('Content-Type', img.contentType);
+  res.set('Cache-Control', 'public, max-age=31536000');
+  res.send(img.buffer);
 });
 
 // API: List all clients (bot + manual)

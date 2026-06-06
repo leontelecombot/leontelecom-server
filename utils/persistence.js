@@ -22,13 +22,16 @@ const MONGODB_URI = process.env.MONGODB_URI || '';
 const MONGODB_DB = process.env.MONGODB_DB || 'leontelecom';
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const FILE_PATH = path.join(__dirname, '..', 'data', 'store.json');
+const UPLOADS_DIR = path.join(__dirname, '..', 'data', 'uploads');
 const STATE_KEY = 'leontelecom_state';
+const EXT_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' };
 
 let _backend = 'file'; // 'mongodb' | 'postgres' | 'file'
 
 // Mongo
 let mongoClient = null;
 let mongoCollection = null;
+let mongoImages = null;
 // Postgres
 let pgPool = null;
 
@@ -40,6 +43,7 @@ async function init() {
       mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
       await mongoClient.connect();
       mongoCollection = mongoClient.db(MONGODB_DB).collection('state');
+      mongoImages = mongoClient.db(MONGODB_DB).collection('images');
       await mongoCollection.findOne({ _id: STATE_KEY }); // valida la conexión
       _backend = 'mongodb';
       console.log('[persistence] MongoDB Atlas conectado — datos persistentes ✅');
@@ -126,10 +130,51 @@ async function save(state) {
   }
 }
 
+// ---- Imágenes (promos/avisos) ----
+// En MongoDB se guardan como base64 (persisten entre redeploys). En modo archivo
+// se guardan en data/uploads/ (no persiste en Render free, pero sirve en local).
+async function saveImage(id, contentType, buffer) {
+  try {
+    if (_backend === 'mongodb' && mongoImages) {
+      await mongoImages.replaceOne(
+        { _id: id },
+        { _id: id, contentType, data: buffer.toString('base64'), createdAt: new Date() },
+        { upsert: true }
+      );
+      return true;
+    }
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(UPLOADS_DIR, id), buffer);
+    return true;
+  } catch (e) {
+    console.error('[persistence] saveImage:', e.message);
+    return false;
+  }
+}
+
+async function loadImage(id) {
+  try {
+    if (_backend === 'mongodb' && mongoImages) {
+      const doc = await mongoImages.findOne({ _id: id });
+      if (!doc) return null;
+      return { contentType: doc.contentType || 'image/jpeg', buffer: Buffer.from(doc.data, 'base64') };
+    }
+    const p = path.join(UPLOADS_DIR, id);
+    if (!fs.existsSync(p)) return null;
+    const ext = path.extname(id).toLowerCase();
+    return { contentType: EXT_MIME[ext] || 'application/octet-stream', buffer: fs.readFileSync(p) };
+  } catch (e) {
+    console.error('[persistence] loadImage:', e.message);
+    return null;
+  }
+}
+
 module.exports = {
   init,
   load,
   save,
+  saveImage,
+  loadImage,
   get backend() { return _backend; },
   get usingPg() { return _backend === 'postgres'; },
   get label() {
