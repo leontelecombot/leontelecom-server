@@ -544,6 +544,17 @@ function isTechnicalIssue(text) {
   return /\b(falla|sin servicio|no funciona|intermitente|reiniciar|caido|caida|sin internet|no jala|no agarra|se cae|se corta|no carga|no hay internet|se fue el internet|no tengo internet|se corto el internet)\b/.test(value);
 }
 
+// Emergencia / falla de infraestructura: debe pasar a un técnico DE INMEDIATO.
+// Cubre cosas como "se está quemando", chispas, humo, poste/cable caído, corto, etc.
+function isEmergency(text) {
+  const v = normalizeText(text);
+  // Fuego / eléctrico
+  const fuego = /(se esta quemando|esta quemando|quemandose|se quema|se quemo|quemando|incendi|hay fuego|en llamas|llamarada|chispa|chisporrot|huele a quemad|olor a quemad|sale humo|hay humo|hace corto|hizo corto|corto circuito|cortocircuito|exploto|explosion|explot|revento|reventando|transformador)/.test(v);
+  // Daño físico a cable/poste (en cualquier orden de palabras)
+  const infra = /(cable|cables|cableado|poste|postes)/.test(v) && /(ca[ií]d|cayo|cayendo|tirad|roto|rota|colgan|suelt|revent|chispe|quema)/.test(v);
+  return fuego || infra;
+}
+
 function isAgentRequest(text) {
   const value = normalizeText(text);
   return /\b(agente|asesor|ejecutivo|humano|persona|llamar|contactar|ventas|atencion|atención)\b/.test(value);
@@ -982,21 +993,24 @@ async function callMainAI(chatId, userText) {
     recentMsgs || '(primera interacción)',
     '',
     'INSTRUCCIONES DE RESPUESTA:',
-    'Analiza el mensaje y responde con JSON puro (sin texto extra):',
-    '{"message":"respuesta natural aquí","action":null,"location":null,"neighborhood":null}',
+    'LEE BIEN el mensaje completo y responde de forma natural y útil (no como robot). Responde con JSON puro (sin texto extra):',
+    '{"message":"respuesta natural aquí","action":null,"location":null,"neighborhood":null,"urgent":false}',
     '',
     'Valores de "action":',
     '"show_plans" → quiere ver planes/precios de internet, contratar, preguntar por instalación o costos',
-    '"show_support" → falla ACTIVA: sin internet, internet lento, se cae, no funciona. NO para preguntas generales sobre planes, velocidad o dispositivos.',
+    '"show_support" → falla ACTIVA o problema de INFRAESTRUCTURA: sin internet, lento, se cae, no funciona, equipo/módem/antena dañado, un cable o poste caído, algo que se quema, huele a quemado, chispas, humo, corto. NO para preguntas generales sobre planes, velocidad o dispositivos.',
     '"show_cameras" → pregunta por cámaras, videovigilancia, CCTV, seguridad',
     '"show_migration" → quiere MIGRAR o MOVER su servicio a otro domicilio o zona. Palabras clave: migrar, cambiar domicilio, mover servicio, nueva casa, otro domicilio. Mensaje: confirmar que se iniciará el proceso.',
     '"request_agent" → SOLO cuando el cliente pide EXPLÍCITAMENTE hablar con un humano/asesor/persona. Ejemplos: "quiero hablar con alguien", "me comunicas con un asesor", "necesito hablar con una persona".',
     'null → preguntas de información, dudas sobre planes, velocidades, dispositivos, precios, comparaciones. Responde directo.',
+    '',
+    'REGLA CRÍTICA: NUNCA derives un problema de infraestructura (cable, poste, antena, equipo, algo que se quema/echa humo/chispas) a las autoridades, al 911 ni al municipio como si no fuera de León Telecom. León Telecom tiene postes, cables, antenas y equipo en campo: ESOS reportes SIEMPRE son "show_support" y se pasan a un técnico. Si hay riesgo de incendio, además sugiere llamar al 911, pero igual escala con el técnico.',
+    'Pon "urgent": true cuando haya riesgo o daño físico: algo se quema, humo, chispas, fuego, poste o cable caído, corto, transformador. En esos casos NO pidas datos de más: usa la ubicación que ya dio el cliente.',
     'NUNCA uses request_agent para: preguntas sobre cuántos dispositivos, velocidad, precio, diferencias entre planes, "oigan", "disculpen", etc.',
     'IMPORTANTE: "quiero migrar/cambiar mi servicio/domicilio" → SIEMPRE show_migration, no show_plans',
     '',
     '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
-    '"neighborhood" → colonia/barrio/sección mencionada, o null'
+    '"neighborhood" → colonia/barrio/sección mencionada (incluye "la segunda"→Segunda Sección, etc.), o null'
   ].filter(Boolean).join('\n');
 
   try {
@@ -1010,6 +1024,7 @@ async function callMainAI(chatId, userText) {
         action: parsed.action || null,
         location: parsed.location || null,
         neighborhood: parsed.neighborhood || null,
+        urgent: parsed.urgent === true,
         cameraContext: parsed.cameraContext || null
       };
     }
@@ -1144,7 +1159,7 @@ function buildMenuReply() {
   };
 }
 
-async function notifyAgentRequest(chatId, userText, location = '') {
+async function notifyAgentRequest(chatId, userText, location = '', opts = {}) {
   // Build a short conversation history for context
   const history = getHistory(chatId);
   const recentMsgs = history.messages.slice(-8);
@@ -1155,9 +1170,9 @@ async function notifyAgentRequest(chatId, userText, location = '') {
   const profile = getProfile(chatId);
   const clientName = profile?.name && profile.name !== 'Usuario' ? profile.name : 'Desconocido';
 
-  // AI-generated concise summary
+  // AI-generated concise summary (en emergencias usamos el texto tal cual, sin resumir)
   let summaryLine = userText;
-  if (AI_API_KEY && recentMsgs.length > 0) {
+  if (!opts.urgent && AI_API_KEY && recentMsgs.length > 0) {
     const shortHistory = recentMsgs.slice(-5).map(m => `${m.role === 'user' ? 'C' : 'L'}: ${m.text.substring(0, 120)}`).join('\n');
     summaryLine = await callAI(
       'Resume en máximo 2 líneas qué quiere o necesita el cliente. Formato:\nMOTIVO: [qué quiere]\nDETALLE: [info clave]\nSin texto extra.',
@@ -1172,7 +1187,7 @@ async function notifyAgentRequest(chatId, userText, location = '') {
     : `🌙 Fuera de horario — el cliente sabe que lo atenderás ${describeNextOpening()}`;
 
   const fullMessage = [
-    '🔔 SOLICITUD — León Telecom',
+    opts.urgent ? '🚨🚨 EMERGENCIA — ATENDER DE INMEDIATO 🚨🚨' : '🔔 SOLICITUD — León Telecom',
     `👤 ${clientName}  📱 ${chatId}`,
     location ? `📍 ${location}` : '',
     hoursLine,
@@ -1748,6 +1763,65 @@ function getCameraImages(context) {
   return [`${base}camarawifi.jpeg`];
 }
 
+// Arma la línea de ubicación a partir de la colonia detectada y/o la zona del perfil.
+function resolveEmergencyLocation(text, profile) {
+  const nbhd = searchAllNeighborhoods(text);
+  const zoneFromText = detectLocation(text);
+  const profileZone = profile?.location || '';
+  if (nbhd) {
+    return { line: [nbhd.name, nbhd.zone].filter(Boolean).join(', '), zone: nbhd.zone, have: true };
+  }
+  if (zoneFromText) return { line: zoneFromText, zone: zoneFromText, have: true };
+  if (profileZone) return { line: profileZone, zone: profileZone, have: true };
+  return { line: 'no especificada', zone: '', have: false };
+}
+
+// Reporte de emergencia / falla urgente → avisar al técnico DE INMEDIATO,
+// usando la info que ya venga en el mensaje (sin preguntas de más).
+async function handleEmergency(chatId, text, sendMsg) {
+  const profile = getProfile(chatId);
+  const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+  const ubic = resolveEmergencyLocation(text, profile);
+
+  await notifyAgentRequest(chatId, [
+    '🚨 EMERGENCIA / FALLA URGENTE',
+    knownName ? `Cliente: ${knownName}` : '',
+    `Reporte: ${text}`,
+    `Ubicación: ${ubic.line}`
+  ].filter(Boolean).join('\n'), ubic.zone, { urgent: true }).catch(() => {});
+
+  if (ubic.have) {
+    clearSession(chatId);
+    await sendMsg(chatId,
+      `🚨 Gracias por avisar${knownName ? ', ' + knownName : ''}. Ya reporté esto como URGENTE a nuestro equipo técnico (ubicación: ${ubic.line}) y lo revisarán con prioridad. Si hay fuego o riesgo para las personas, aléjate y llama al 911.`
+    );
+  } else {
+    setSession(chatId, { state: 'awaiting_emergency_location', data: { description: text } });
+    await sendMsg(chatId,
+      `🚨 Gracias por avisar${knownName ? ', ' + knownName : ''}. Ya estoy alertando a nuestro equipo técnico. Para que lleguen rápido, dime la sección/colonia y alguna referencia (calle o casa cercana).`
+    );
+  }
+}
+
+// Segundo paso: el cliente respondió con la ubicación de la emergencia.
+async function finishEmergencyWithLocation(chatId, text, data, sendMsg) {
+  const profile = getProfile(chatId);
+  const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+  const nbhd = searchAllNeighborhoods(text);
+  const zone = (nbhd && nbhd.zone) || detectLocation(text) || profile?.location || '';
+  const locationLine = nbhd ? [nbhd.name, nbhd.zone].filter(Boolean).join(', ') : (text.trim() || zone || 'no especificada');
+
+  await notifyAgentRequest(chatId, [
+    '🚨 EMERGENCIA / FALLA URGENTE (ubicación)',
+    knownName ? `Cliente: ${knownName}` : '',
+    `Reporte: ${data?.description || ''}`,
+    `Ubicación/referencia: ${locationLine}`
+  ].filter(Boolean).join('\n'), zone, { urgent: true }).catch(() => {});
+
+  clearSession(chatId);
+  await sendMsg(chatId, `Listo${knownName ? ', ' + knownName : ''}. Pasé la ubicación a nuestro equipo técnico para que acudan con prioridad. Gracias por reportarlo.`);
+}
+
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
     // If agent has taken over this chat, relay client message to agent
@@ -1772,6 +1846,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     const session = getSession(chatId);
     addMessageToHistory(chatId, 'user', text);
+
+    // ===== EMERGENCIAS / FALLAS URGENTES (máxima prioridad) =====
+    // Si el cliente ya estaba dando la ubicación de una emergencia, la procesamos.
+    if (session.state === 'awaiting_emergency_location') {
+      await finishEmergencyWithLocation(chatId, text, session.data, sendMsg);
+      return;
+    }
+    // Detección directa: "se está quemando", chispas, poste/cable caído, etc.
+    if (isEmergency(text)) {
+      await handleEmergency(chatId, text, sendMsg);
+      return;
+    }
 
     async function sendReplyObject(replyObj) {
       if (!replyObj.text) return;
@@ -2375,6 +2461,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
 
     } else if (aiResult.action === 'show_support') {
+      // Emergencia detectada por la IA → escalar directo a un técnico, sin preguntas de más
+      if (aiResult.urgent || isEmergency(text)) {
+        await handleEmergency(chatId, text, sendMsg);
+        return;
+      }
       const detectedNbhd = (aiResult.neighborhood ? searchAllNeighborhoods(aiResult.neighborhood) : null) || searchAllNeighborhoods(text);
       if (detectedNbhd) {
         if (aiResult.message) await sendMsg(chatId, aiResult.message);
