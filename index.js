@@ -238,18 +238,23 @@ let lastWisphubSync = null;
 let wisphubSyncError = null;
 
 async function syncWisphubClients() {
-  if (!WISPHUB_API_URL || WISPHUB_API_URL === 'https://api.wisphub.net' || !WISPHUB_API_KEY) {
-    return { synced: 0, error: 'WISPHUB_API_URL o WISPHUB_API_KEY no configurados' };
+  if (!WISPHUB_API_KEY) {
+    return { synced: 0, error: 'WISPHUB_API_KEY no configurado' };
   }
   try {
-    const base = WISPHUB_API_URL.replace(/\/$/, '');
-    // Fetch up to 1000 clients — adjust if you have more
-    const res = await fetch(`${base}/api/clientes/?format=json&limit=1000&estado=1`, {
-      headers: { 'Authorization': `Token ${WISPHUB_API_KEY}` }
-    });
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`);
+    const base = (WISPHUB_API_URL || 'https://api.wisphub.net').replace(/\/$/, '');
+    const url = `${base}/api/clientes/?format=json&limit=1000&estado=1`;
+    // Wisphub puede usar distintos esquemas de Authorization; probamos los comunes.
+    const schemes = ['Api-Key', 'Token', 'Bearer'];
+    let res = null, lastTxt = '';
+    for (const scheme of schemes) {
+      res = await fetch(url, { headers: { 'Authorization': `${scheme} ${WISPHUB_API_KEY}` } });
+      if (res.ok) { console.log(`[Wisphub] Autenticado con esquema "${scheme}"`); break; }
+      lastTxt = await res.text().catch(() => '');
+      if (res.status !== 401 && res.status !== 403) break; // error que no es de auth → no insistir
+    }
+    if (!res || !res.ok) {
+      throw new Error(`HTTP ${res ? res.status : '??'}: ${lastTxt.slice(0, 200)}`);
     }
     const data = await res.json();
     const items = Array.isArray(data) ? data : (data.results || []);
@@ -2938,7 +2943,7 @@ app.delete('/admin/api/clients/:phone', verifyAdminToken, (req, res) => {
 // API: Wisphub sync status
 app.get('/admin/api/wisphub-status', verifyAdminToken, (req, res) => {
   res.json({
-    configured: !!(WISPHUB_API_URL && WISPHUB_API_KEY && WISPHUB_API_URL !== 'https://api.wisphub.net'),
+    configured: !!WISPHUB_API_KEY,
     lastSync: lastWisphubSync,
     error: wisphubSyncError,
     count: wisphubClients.size
