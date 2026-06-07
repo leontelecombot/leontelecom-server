@@ -81,10 +81,22 @@ const HUITZO_FIBER_ZONES = [
 const INSTALLATION_COSTS = {
   huitzoFibra: { costo: '$800', promo: 'primer mes gratis' },
   huitzoAntena: { costo: 'a cotizar con técnico', promo: '' },
-  telixtlahuacaCentro: { costo: '$800', promo: '' },     // centro de Telixtlahuaca
+  telixtlahuacaCentro: { costo: '$800', promo: '' },     // centro/cabecera de Telixtlahuaca
   telixtlahuacaAgencias: { costo: '$1,200', promo: '' }, // agencias/alrededores
   suchilquitongo: { costo: 'a cotizar con técnico', promo: '' }
 };
+
+// Centro/cabecera de Telixtlahuaca → instalación $800. El resto (agencias y
+// localidades de los alrededores) → $1,200.
+const TELIXTLAHUACA_CENTRO_ZONES = [
+  'Colonia Centro', 'Barrio Bajo', 'Colonia Y Griega', 'Colonia Yuquenchi',
+  'Colonia Independencia', 'Camino Nacional'
+];
+const TELIXTLAHUACA_AGENCIAS = [
+  'San Sebastián Sedas', 'Faustino G. Olivera', 'Plan Seco', 'Ojo de Agua',
+  'Santa Cruz el Salto', 'Las Trancas', 'La Carbonera', 'El Nuevo Manzanito',
+  'Cañada las Sedas', 'Boca de León', 'Tierra Colorada', 'El Moral'
+];
 
 const NEIGHBORHOODS = {
   huitzo: [
@@ -1018,7 +1030,7 @@ async function callMainAI(chatId, userText) {
     '',
     'SERVICIOS DE INTERNET (las 3 zonas SÍ tienen cobertura):',
     `Huitzo — fibra óptica en: Primera/Segunda/Tercera Sección, La Guadalupe, La Cantera, Cañada del Chisme, Ojo de Agua, Esmeralda, Privada del Laurel, El Llano, Gasolinera, Loma los Pinos, Agua Blanca, Santa María Tenéxpam. Instalación: $800, primer mes gratis. Resto de Huitzo: antena inalámbrica. Planes fibra: ${fiberPlans}`,
-    `Telixtlahuaca (inalámbrico/antena): instalación $800 en el CENTRO de Telixtlahuaca; $1,200 en las agencias/comunidades de los alrededores. Si el cliente no especifica, pregunta si es en el centro o en una agencia. Planes: ${wirelessPlans}`,
+    `Telixtlahuaca (inalámbrico/antena): instalación $800 en el CENTRO/cabecera (${TELIXTLAHUACA_CENTRO_ZONES.join(', ')}); $1,200 en las AGENCIAS/alrededores (${TELIXTLAHUACA_AGENCIAS.join(', ')}). Si el cliente no especifica colonia, pregunta si es en el centro o en una agencia antes de dar el costo. Planes: ${wirelessPlans}`,
     `Suchilquitongo —también llamado "Suchil"— (inalámbrico/antena): instalación a cotizar con técnico. Planes: ${wirelessPlans}`,
     'IMPORTANTE: León Telecom SOLO ofrece internet. NO ofrece telefonía, TV, cable ni otros servicios.',
     'Las 3 zonas SÍ tienen cobertura. Nunca digas que no hay servicio.',
