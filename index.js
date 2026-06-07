@@ -1886,6 +1886,16 @@ function looksLikeName(text) {
   return true;
 }
 
+// ¿El cliente quiere CONTRATAR internet / un plan? (sin confundir con una falla)
+function wantsInternet(text) {
+  const v = normalizeText(text);
+  if (isTechnicalIssue(text)) return false;
+  if (/\b(no tengo|sin internet|se cayo|se fue|no hay|no sirve|no funciona|no jala|no agarra|lento|lenta)\b/.test(v)) return false;
+  if (/\b(quiero|necesito|me interesa|contratar|instalar|dar de alta|poner|adquirir|info de|informacion de)\b/.test(v) &&
+      /\b(internet|servicio|wifi|plan|planes|paquete|fibra|inalambric|megas)\b/.test(v)) return true;
+  return isPlanRequest(text);
+}
+
 let _promoIndex = 0;
 function nextPromoProduct() {
   const p = PRODUCTS[_promoIndex % PRODUCTS.length];
@@ -2642,6 +2652,21 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId, `🛍️ *${p.name}* — ${p.price}`, [getProductImageUrl(p)]);
       }
       await sendMsg(chatId, '¿Quieres apartar alguno? Te puedo pasar con un asesor. 😊');
+      return;
+    }
+
+    // Quiere internet/planes → flujo estructurado (pregunta zona con BOTONES y
+    // luego muestra planes con FOTO). No dejamos que la IA lo conteste en texto.
+    if (wantsInternet(text)) {
+      const loc0 = detectLocation(text);
+      if (loc0) {
+        updateProfile(chatId, { location: loc0 });
+        setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc0 } });
+        await sendReplyObject(buildPlanReplyForLocation(loc0));
+      } else {
+        setSession(chatId, { state: 'awaiting_location', data: {} });
+        await sendReplyObject(buildLocationPrompt());
+      }
       return;
     }
 
