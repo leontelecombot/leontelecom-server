@@ -1825,6 +1825,78 @@ function getCameraImages(context) {
   return [`${base}camarawifi.jpeg`];
 }
 
+// ==================== PRODUCTOS / VITRINA ====================
+// Productos en la vitrina de la oficina. Imágenes en public/images/products/.
+const PRODUCT_IMG_BASE = (SERVER_BASE_URL ? `${SERVER_BASE_URL}` : '') + '/images/products/';
+const PRODUCTS = [
+  { name: 'Roku Streaming Stick Plus 4K', price: '$720', img: 'ROkuplus4K.jpeg', cat: 'Streaming', kw: ['roku 4k', 'roku plus', 'streaming 4k', 'roku'] },
+  { name: 'Roku Streaming Stick HD', price: '$680', img: 'RokuStickHD.jpeg', cat: 'Streaming', kw: ['roku hd', 'roku stick'] },
+  { name: 'Extensor de rango Wi-Fi TP-Link N300', price: '$450', img: 'extensorderangowifitplink.jpeg', cat: 'Internet', kw: ['extensor', 'repetidor', 'amplificador wifi'] },
+  { name: 'Adaptador USB Wi-Fi TP-Link AC600', price: '$220', img: 'adaptadorwifimini.jpeg', cat: 'Internet', kw: ['adaptador wifi', 'antena usb', 'antena wifi', 'usb wifi'] },
+  { name: 'Tinta original HP GT52/GT53 (4 pzas)', price: '$750', img: 'tintaoriginalHP4pz.jpeg', cat: 'Cómputo', kw: ['tinta', 'cartucho'] },
+  { name: 'Memoria USB ADATA 32GB (USB 3.2)', price: '$90', img: 'USB adata 32Gb.jpeg', cat: 'Cómputo', kw: ['memoria 32', 'usb 32', '32gb'] },
+  { name: 'Memoria USB ADATA 64GB (USB 2.0)', price: '$140', img: 'UBS adata 64 Gb.jpeg', cat: 'Cómputo', kw: ['memoria 64', 'usb 64', '64gb'] },
+  { name: 'Mouse inalámbrico UGREEN', price: '$190', img: 'mouseugreen.jpeg', cat: 'Cómputo', kw: ['mouse', 'raton'] },
+  { name: 'Base enfriadora ACTECK (laptop 15")', price: '$180', img: 'baseenfriadoraacteck.jpeg', cat: 'Cómputo', kw: ['enfriadora', 'cooler', 'base laptop', 'base para laptop', 'ventilador laptop'] },
+  { name: 'Soporte para TV 13"–42" (full motion)', price: '$400', img: 'soporteparatvde13pulgadashassta42pulgadas.jpeg', cat: 'TV', kw: ['soporte tv', 'soporte para tv', 'soporte de tv', 'rack tv', 'base tv'] },
+  { name: 'Adaptador UGREEN USB-C a USB-A', price: '$150', img: 'AdapatadorUSBCaUSBA.jpeg', cat: 'Cables', kw: ['usb c a usb a', 'adaptador tipo c a usb'] },
+  { name: 'Adaptador UGREEN USB-A a USB-C', price: '$175', img: 'adaptadorUSBAaUSBC.jpeg', cat: 'Cables', kw: ['usb a a usb c', 'adaptador usb a tipo c'] },
+  { name: 'Cable UGREEN USB-C a Lightning (iPhone) 20W', price: '$280', img: 'cableligthningacugreen.jpeg', cat: 'Cables', kw: ['cable iphone', 'cable lightning', 'cargador iphone', 'lightning'] },
+  { name: 'Cable HDMI Manhattan 4K 1.8m', price: '$80', img: 'cableshdmisuperspeed.jpeg', cat: 'Cables', kw: ['cable hdmi', 'hdmi 4k'] },
+  { name: 'Cable UGREEN USB-C a USB-C 60W', price: '$150', img: 'cabletipocatipocugreen.jpeg', cat: 'Cables', kw: ['cable tipo c', 'cable usb c', 'cable type c'] },
+  { name: 'Convertidor Steren HDMI a RCA', price: '$320', img: 'convertidordeHDMIaRCAsteren.jpeg', cat: 'Cables', kw: ['convertidor hdmi', 'hdmi a rca', 'hdmi rca'] },
+  { name: 'Reflector solar JWL 100W (2 pzas)', price: '$1,300', img: 'reflectorsolar100W.jpeg', cat: 'Iluminación', kw: ['reflector solar 100', 'reflector 100', 'reflector solar', 'reflector'] },
+  { name: 'Reflector solar JWL 200W (2 pzas)', price: '$1,500', img: 'reflectorsolar.jpeg', cat: 'Iluminación', kw: ['reflector solar 200', 'reflector 200', 'reflector solar', 'reflector'] },
+  { name: 'Tira LED JWL 5m (12V)', price: '$250', img: 'TIRALED5M.jpeg', cat: 'Iluminación', kw: ['tira led', 'tira de led', 'tiras led'] },
+  { name: 'Luminario público JWL 150W LED (con fotocelda)', price: '$1,050', img: 'luminariopublico150W.jpeg', cat: 'Iluminación', kw: ['luminario', 'luminaria', 'lampara publica', 'alumbrado'] },
+  { name: 'Espuma limpiadora SILIMEX SILIMPO 454ml', price: '$120', img: 'espumalimpiadoraslimpoo.jpeg', cat: 'Limpieza', kw: ['espuma', 'limpiador espuma'] }
+];
+
+function getProductImageUrl(p) { return PRODUCT_IMG_BASE + encodeURIComponent(p.img); }
+
+function isProductRequest(text) {
+  const v = normalizeText(text);
+  return /\b(producto|productos|accesorio|accesorios|que venden|que mas venden|que mas tienen|que tienen en la oficina|vitrina|articulos|en oferta|ofertas)\b/.test(v);
+}
+
+function findProducts(text) {
+  const v = normalizeText(text);
+  return PRODUCTS.filter(p => p.kw.some(k => v.includes(k)));
+}
+
+// ¿El cliente está cerrando la conversación? (para el destacado de producto)
+function isClosing(text) {
+  const v = normalizeText(text);
+  if (/\?|cuant|como |cual|donde|precio|plan|mbps|instala/.test(v)) return false;
+  return /\b(gracias|muchas gracias|ok gracias|listo gracias|eso es todo|es todo|nada mas|ya no|por ahora no|adios|hasta luego|bye|sale gracias|de acuerdo gracias|esta bien gracias)\b/.test(v);
+}
+
+let _promoIndex = 0;
+function nextPromoProduct() {
+  const p = PRODUCTS[_promoIndex % PRODUCTS.length];
+  _promoIndex++;
+  return p;
+}
+
+// Destacado de producto al cerrar el chat (rotando entre el catálogo).
+async function sendProductHighlight(chatId, sendMsg) {
+  const p = nextPromoProduct();
+  await sendMsg(chatId,
+    `Por cierto 👀 en nuestra oficina también vendemos:\n🛍️ *${p.name}* — ${p.price}\n¿Te interesa? Escribe *productos* para ver más.`,
+    [getProductImageUrl(p)]
+  );
+}
+
+function buildProductListText() {
+  const cats = {};
+  for (const p of PRODUCTS) { (cats[p.cat] = cats[p.cat] || []).push(`• ${p.name} — ${p.price}`); }
+  const order = ['Streaming', 'Internet', 'TV', 'Cables', 'Cómputo', 'Iluminación', 'Limpieza'];
+  const lines = ['🛍️ *Productos y accesorios en nuestra oficina:*', ''];
+  for (const c of order) { if (cats[c]) { lines.push(`*${c}*`, ...cats[c], ''); } }
+  lines.push('Escríbeme el nombre del que te interese y te mando foto. 😊');
+  return lines.join('\n');
+}
+
 // Arma la línea de ubicación a partir de la colonia detectada y/o la zona del perfil.
 function resolveEmergencyLocation(text, profile) {
   const nbhd = searchAllNeighborhoods(text);
@@ -2487,6 +2559,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           '• Planes de internet (fibra óptica e inalámbrico)',
           '• Cámaras de seguridad (Tapo Wi-Fi e Hikvision profesional)',
           '• Soporte técnico y reportes de fallas',
+          '• Productos y accesorios (Roku, cables, reflectores, USB…) — escribe "productos"',
           '• Conectarte con un asesor',
           '',
           'Elige una opción o escribe tu consulta:',
@@ -2494,6 +2567,28 @@ async function handleChatMessage(chatId, text, sendMsg) {
           menuOptions
         ].join('\n'));
       }
+      return;
+    }
+
+    // Cierre de conversación → despedida + producto destacado (vitrina)
+    if (isClosing(text)) {
+      await sendMsg(chatId, '¡Con gusto! Que tengas excelente día. 🙌');
+      try { await sendProductHighlight(chatId, sendMsg); } catch (e) {}
+      clearSession(chatId);
+      return;
+    }
+
+    // Productos / vitrina (lista general o producto específico)
+    if (isProductRequest(text)) {
+      await sendMsg(chatId, buildProductListText());
+      return;
+    }
+    const prodMatches = findProducts(text);
+    if (prodMatches.length && !isTechnicalIssue(text) && !isAgentRequest(text) && !isPlanRequest(text) && !isMigrationRequest(text) && !isCameraRequest(text)) {
+      for (const p of prodMatches.slice(0, 3)) {
+        await sendMsg(chatId, `🛍️ *${p.name}* — ${p.price}`, [getProductImageUrl(p)]);
+      }
+      await sendMsg(chatId, '¿Quieres apartar alguno? Te puedo pasar con un asesor. 😊');
       return;
     }
 
