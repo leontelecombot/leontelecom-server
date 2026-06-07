@@ -1072,7 +1072,7 @@ async function callMainAI(chatId, userText) {
     'NUNCA uses request_agent para: preguntas sobre cuántos dispositivos, velocidad, precio, diferencias entre planes, "oigan", "disculpen", etc.',
     'IMPORTANTE: "quiero migrar/cambiar mi servicio/domicilio" → SIEMPRE show_migration, no show_plans',
     '',
-    '"location" → zona mencionada (Huitzo/Telixtlahuaca/Suchilquitongo), o null',
+    '"location" → SOLO la zona que el cliente mencione EN SU MENSAJE (Huitzo/Telixtlahuaca/Suchilquitongo), o null. NUNCA afirmes ni adivines en qué zona vive (no digas "estás en X, ¿verdad?"); si no la dijo, deja location en null.',
     '"neighborhood" → colonia/barrio/sección mencionada (incluye "la segunda"→Segunda Sección, etc.), o null'
   ].filter(Boolean).join('\n');
 
@@ -2665,10 +2665,16 @@ async function handleChatMessage(chatId, text, sendMsg) {
         if (aiResult.message) await sendMsg(chatId, aiResult.message);
         setSession(chatId, { state: 'awaiting_contract_name', data: { location: loc } });
         await sendMsg(chatId, '¿A qué nombre te contactamos?', [], { buttons: [{ id: 'solo_preguntaba', title: 'Solo preguntaba' }] });
-      } else {
+      } else if (loc) {
         if (aiResult.message) await sendMsg(chatId, aiResult.message);
-        if (loc) { updateProfile(chatId, { location: loc }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } }); await sendReplyObject(buildPlanReplyForLocation(loc)); }
-        else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
+        updateProfile(chatId, { location: loc });
+        setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc } });
+        await sendReplyObject(buildPlanReplyForLocation(loc));
+      } else {
+        // No mencionó zona → NO mandamos el mensaje de la IA (que tiende a adivinar);
+        // solo preguntamos la zona directamente.
+        setSession(chatId, { state: 'awaiting_location', data: {} });
+        await sendReplyObject(buildLocationPrompt());
       }
 
     } else if (aiResult.action === 'show_support') {
