@@ -81,7 +81,8 @@ const HUITZO_FIBER_ZONES = [
 const INSTALLATION_COSTS = {
   huitzoFibra: { costo: '$800', promo: 'primer mes gratis' },
   huitzoAntena: { costo: 'a cotizar con técnico', promo: '' },
-  telixtlahuaca: { costo: '$1,200', promo: '' },
+  telixtlahuacaCentro: { costo: '$800', promo: '' },     // centro de Telixtlahuaca
+  telixtlahuacaAgencias: { costo: '$1,200', promo: '' }, // agencias/alrededores
   suchilquitongo: { costo: 'a cotizar con técnico', promo: '' }
 };
 
@@ -841,7 +842,7 @@ function buildPlanReplyForLocation(location) {
         buildPlanLines(WIRELESS_PLANS),
         '',
         location === LOCATIONS.telixtlahuaca
-          ? '💰 Instalación: $1,200'
+          ? '💰 Instalación: Centro de Telixtlahuaca $800 · Agencias de los alrededores $1,200'
           : '💰 Instalación: a cotizar con técnico',
         '¿Te interesa alguno? Dime cuál y te conectamos con un asesor.'
       ].join('\n'),
@@ -1017,7 +1018,7 @@ async function callMainAI(chatId, userText) {
     '',
     'SERVICIOS DE INTERNET (las 3 zonas SÍ tienen cobertura):',
     `Huitzo — fibra óptica en: Primera/Segunda/Tercera Sección, La Guadalupe, La Cantera, Cañada del Chisme, Ojo de Agua, Esmeralda, Privada del Laurel, El Llano, Gasolinera, Loma los Pinos, Agua Blanca, Santa María Tenéxpam. Instalación: $800, primer mes gratis. Resto de Huitzo: antena inalámbrica. Planes fibra: ${fiberPlans}`,
-    `Telixtlahuaca (inalámbrico/antena): instalación $1,200. Planes: ${wirelessPlans}`,
+    `Telixtlahuaca (inalámbrico/antena): instalación $800 en el CENTRO de Telixtlahuaca; $1,200 en las agencias/comunidades de los alrededores. Si el cliente no especifica, pregunta si es en el centro o en una agencia. Planes: ${wirelessPlans}`,
     `Suchilquitongo —también llamado "Suchil"— (inalámbrico/antena): instalación a cotizar con técnico. Planes: ${wirelessPlans}`,
     'IMPORTANTE: León Telecom SOLO ofrece internet. NO ofrece telefonía, TV, cable ni otros servicios.',
     'Las 3 zonas SÍ tienen cobertura. Nunca digas que no hay servicio.',
