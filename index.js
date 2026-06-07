@@ -599,6 +599,7 @@ function detectNewIntent(text) {
   if (isCameraRequest(text)) return 'camera';
   if (/\b(asesor|agente|ejecutivo|humano|una persona|con alguien|con un humano)\b/.test(v) || /hablar con/.test(v)) return 'agent';
   if (isReportRequest(text) || isTechnicalIssue(text)) return 'support';
+  if (isProductRequest(text)) return 'products';
   // "plan" solo con palabras específicas de internet (NO "costo/precio" sueltos,
   // que también aplican a cámaras y harían cambiar de tema por error).
   if (/\b(plan|planes|paquete|paquetes|tarifa|tarifas|fibra|inalambric|megas|mbps)\b/.test(v) ||
@@ -1207,13 +1208,14 @@ function buildMenuReply() {
       '2️⃣ Cámaras de seguridad',
       '3️⃣ Soporte técnico',
       '4️⃣ Hablar con un asesor',
-      '5️⃣ Migrar mi servicio'
+      '5️⃣ Migrar mi servicio',
+      '6️⃣ Productos y accesorios 🛍️'
     ].join('\n'),
     mediaUrls: [],
     replyMarkup: {
       keyboard: [
         [{ text: '1' }, { text: '2' }, { text: '3' }],
-        [{ text: '4' }, { text: '5' }]
+        [{ text: '4' }, { text: '5' }, { text: '6' }]
       ],
       one_time_keyboard: true,
       resize_keyboard: true
@@ -1784,7 +1786,8 @@ const MENU_LIST_ITEMS = [
   { id: '2', title: 'Cámaras de seguridad' },
   { id: '3', title: 'Soporte técnico' },
   { id: '4', title: 'Hablar con un asesor' },
-  { id: '5', title: 'Migrar mi servicio' }
+  { id: '5', title: 'Migrar mi servicio' },
+  { id: '6', title: 'Productos y accesorios' }
 ];
 
 const CAMERA_KNOWLEDGE = `
@@ -2017,6 +2020,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (/^3$|^3\b|\btres\b|reportar|problema|reporte|soporte|tecnico|falla/.test(v)) return 3;
       if (/^4$|^4\b|\bcuatro\b|hablar con|asesor|agente/.test(v)) return 4;
       if (/^5$|^5\b|\bcinco\b|migrar|migracion|migraci/.test(v)) return 5;
+      if (/^6$|^6\b|\bseis\b|producto|productos|accesorio|accesorios/.test(v)) return 6;
       return null;
     }
 
@@ -2055,6 +2059,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
           await sendReplyObject(buildLocationPrompt());
           return;
         }
+        if (newIntent === 'products') {
+          clearSession(chatId);
+          await sendMsg(chatId, buildProductListText());
+          return;
+        }
       }
     }
     // ===== END INTENT INTERRUPTION LAYER =====
@@ -2080,6 +2089,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         });
         return;
       }
+      if (choice === 6) { clearSession(chatId); await sendMsg(chatId, buildProductListText()); return; }
       // Nothing matched — let AI handle it (same logic as default handler)
       const aiResult2 = await callMainAI(chatId, text);
       if (!aiResult2) { await sendReplyObject(buildFallbackReply(text)); return; }
@@ -2542,7 +2552,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
         '2️⃣ Cámaras de seguridad',
         '3️⃣ Soporte técnico',
         '4️⃣ Hablar con un asesor',
-        '5️⃣ Migrar mi servicio'
+        '5️⃣ Migrar mi servicio',
+        '6️⃣ Productos y accesorios 🛍️'
       ].join('\n');
       if (knownName) {
         await sendMsg(chatId, [
