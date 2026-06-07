@@ -1874,6 +1874,18 @@ function isClosing(text) {
   return /\b(gracias|muchas gracias|ok gracias|listo gracias|eso es todo|es todo|nada mas|ya no|por ahora no|adios|hasta luego|bye|sale gracias|de acuerdo gracias|esta bien gracias)\b/.test(v);
 }
 
+// ¿El texto parece un nombre propio (y NO una pregunta o una intención)?
+// Evita que "¿qué planes tienes?" se guarde como el nombre del cliente.
+function looksLikeName(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 40) return false;
+  if (/[?¿]/.test(t)) return false;
+  if (/\d{4,}/.test(t)) return false;
+  const v = normalizeText(t);
+  if (/\b(plan|planes|precio|precios|costo|costos|cuanto|cuant|que|como|cual|donde|cuando|producto|productos|accesorio|internet|camara|camaras|wifi|megas|mbps|tienes|tienen|hay|info|informacion|reflector|roku|cable|usb|mouse|tinta|soporte|cotiz|instala|paquete|telefono|numero)\b/.test(v)) return false;
+  return true;
+}
+
 let _promoIndex = 0;
 function nextPromoProduct() {
   const p = PRODUCTS[_promoIndex % PRODUCTS.length];
@@ -2271,6 +2283,17 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     if (session.state === 'awaiting_plan_selection') {
       const v = normalizeText(text);
+
+      // ¿Mencionó OTRA zona? (ej. estaba viendo Telixtlahuaca y dice "quiero en Huitzo")
+      // → cambiar de zona y mostrar sus planes, en vez de tomarlo como selección.
+      const mentionedZone = detectLocation(text);
+      if (mentionedZone && mentionedZone !== session.data?.location) {
+        updateProfile(chatId, { location: mentionedZone });
+        setSession(chatId, { state: 'awaiting_plan_selection', data: { ...session.data, location: mentionedZone } });
+        await sendReplyObject(buildPlanReplyForLocation(mentionedZone));
+        return;
+      }
+
       const hasQuestion = /\?|cuantos|cuanto|como |que |cual|dispositiv|aparato|velocid|mbps|puede|incluye|funciona|diferencia/.test(v);
 
       // Pure cancellation (no question content)
@@ -2339,6 +2362,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (text === 'solo_preguntaba' || normalizeText(text).match(/\b(solo preguntaba|solo info|no gracias|solo informacion|nada mas|despues|luego|solo queria saber|solo curiosidad)\b/)) {
         clearSession(chatId);
         await sendMsg(chatId, 'Ah, sin problema 😊 Cuando quieras contratar aquí estamos, cualquier duda me dices.');
+        return;
+      }
+      // Si no parece un nombre (es una duda/pregunta), no lo guardamos como nombre.
+      if (!looksLikeName(text)) {
+        if (d.location) {
+          setSession(chatId, { state: 'awaiting_plan_selection', data: d });
+          await sendReplyObject(buildPlanReplyForLocation(d.location));
+        } else {
+          const ai = await callMainAI(chatId, text).catch(() => null);
+          if (ai?.message) await sendMsg(chatId, ai.message);
+          await sendMsg(chatId, 'Y para coordinar, ¿a qué nombre te contactamos?', [], { buttons: [{ id: 'solo_preguntaba', title: 'Solo preguntaba' }] });
+        }
         return;
       }
       updateProfile(chatId, { name: text });
@@ -2499,6 +2534,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       const d = session.data || {};
+      // Si no parece un nombre (es una duda), respondemos y volvemos a pedir el nombre.
+      if (!looksLikeName(text)) {
+        const ai = await callMainAI(chatId, text).catch(() => null);
+        if (ai?.message) await sendMsg(chatId, ai.message);
+        await sendMsg(chatId, 'Con gusto. ¿A qué nombre te contactamos para que un asesor te atienda?');
+        return;
+      }
       updateProfile(chatId, { name: text });
       // If we already have context from initialRequest, notify immediately
       if (d.initialRequest) {
@@ -2610,11 +2652,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
 
     if (aiResult.action === 'show_plans') {
-      // Only use location from the CURRENT message — never assume profile location for contracting
-      // (profile location could be a different place than where they want the new service)
-      const loc = aiResult.location
-        ? (detectLocation(aiResult.location) || aiResult.location)
-        : null;
+      // Solo usamos la zona si el cliente la menciona EN ESTE mensaje (no asumir
+      // la del perfil ni la que invente la IA). Si no, abajo se le pregunta la zona.
+      const loc = detectLocation(text);
 
       const wantsContract = /\b(quiero contratar|quiero el servicio|me interesa|dale|lo quiero|ya quiero)\b/i.test(text);
       if (wantsContract && loc && knownName) {
