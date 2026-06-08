@@ -996,7 +996,7 @@ async function callAI(systemContent, userContent, options = {}) {
 }
 
 function agentNotifiedMsg(notified, name, type = 'asesor') {
-  const who = name && name !== 'Usuario' ? `${name}, ` : '';
+  const who = (name && name !== 'Usuario' && looksLikeName(name)) ? `${name}, ` : '';
   if (isWithinBusinessHours()) {
     return `Listo, ${who}registré tu solicitud. Un ${type} de León Telecom te contactará en breve. 📱`;
   }
@@ -1019,7 +1019,7 @@ async function callMainAI(chatId, userText) {
     .map(m => `${m.role === 'user' ? 'Cliente' : 'Leo'}: ${m.text}`)
     .join('\n');
 
-  const clientName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+  const clientName = nameOf(profile);
   const clientLocation = profile?.location || null;
 
   const fiberPlans = FIBER_PLANS.map(p => `${p.name} ${p.speed}/${p.price}`).join(', ');
@@ -1232,7 +1232,7 @@ async function notifyAgentRequest(chatId, userText, location = '', opts = {}) {
     : '(sin historial)';
 
   const profile = getProfile(chatId);
-  const clientName = profile?.name && profile.name !== 'Usuario' ? profile.name : 'Desconocido';
+  const clientName = nameOf(profile, 'Desconocido');
 
   // AI-generated concise summary (en emergencias usamos el texto tal cual, sin resumir)
   let summaryLine = userText;
@@ -1668,7 +1668,7 @@ async function handleAgentCommand(agentNumber, text) {
     pendingAgentRequests.delete(clientId); // ya lo está atendiendo un asesor
     schedulePersist();
     const clientProfile = getProfile(clientId);
-    const clientName = clientProfile?.name && clientProfile.name !== 'Usuario' ? clientProfile.name : clientId;
+    const clientName = nameOf(clientProfile, clientId);
     try {
       await sendWhatsAppMessage(clientId,
         'Un asesor de León Telecom ya está en línea y te atenderá directamente. 📱'
@@ -1709,7 +1709,7 @@ async function handleAgentCommand(agentNumber, text) {
       if (new Date() < data.pausedUntil) {
         const mins = Math.round((data.pausedUntil - new Date()) / 60000);
         const cp = getProfile(chatId);
-        const name = cp?.name && cp.name !== 'Usuario' ? cp.name : chatId;
+        const name = nameOf(cp, chatId);
         activos.push(`• ${name} — ${chatId} (${mins} min)`);
       }
     }
@@ -1886,6 +1886,13 @@ function looksLikeName(text) {
   return true;
 }
 
+// Devuelve el nombre del cliente SOLO si es válido. Protege contra nombres
+// corruptos ya guardados en el perfil (ej. una pregunta guardada como nombre).
+function nameOf(profile, fallback = null) {
+  const n = profile && profile.name;
+  return (n && n !== 'Usuario' && looksLikeName(n)) ? n : fallback;
+}
+
 // ¿El cliente quiere CONTRATAR internet / un plan? (sin confundir con una falla)
 function wantsInternet(text) {
   const v = normalizeText(text);
@@ -1939,7 +1946,7 @@ function resolveEmergencyLocation(text, profile) {
 // usando la info que ya venga en el mensaje (sin preguntas de más).
 async function handleEmergency(chatId, text, sendMsg) {
   const profile = getProfile(chatId);
-  const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+  const knownName = nameOf(profile);
   const ubic = resolveEmergencyLocation(text, profile);
 
   await notifyAgentRequest(chatId, [
@@ -1965,7 +1972,7 @@ async function handleEmergency(chatId, text, sendMsg) {
 // Segundo paso: el cliente respondió con la ubicación de la emergencia.
 async function finishEmergencyWithLocation(chatId, text, data, sendMsg) {
   const profile = getProfile(chatId);
-  const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+  const knownName = nameOf(profile);
   const nbhd = searchAllNeighborhoods(text);
   const zone = (nbhd && nbhd.zone) || detectLocation(text) || profile?.location || '';
   const locationLine = nbhd ? [nbhd.name, nbhd.zone].filter(Boolean).join(', ') : (text.trim() || zone || 'no especificada');
@@ -1987,7 +1994,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (isPaused(chatId)) {
       if (AGENT_WHATSAPP_NUMBER) {
         const cp = getProfile(chatId);
-        const clientName = cp?.name && cp.name !== 'Usuario' ? cp.name : chatId;
+        const clientName = nameOf(cp, chatId);
         try {
           await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER,
             `💬 ${clientName}:\n${text}`
@@ -2115,7 +2122,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // Nothing matched — let AI handle it (same logic as default handler)
       const aiResult2 = await callMainAI(chatId, text);
       if (!aiResult2) { await sendReplyObject(buildFallbackReply(text)); return; }
-      const knownName2 = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+      const knownName2 = nameOf(profile);
       if (aiResult2.action === 'show_plans') {
         const loc2 = aiResult2.location ? (detectLocation(aiResult2.location) || aiResult2.location) : null;
         if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
@@ -2255,7 +2262,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const d = session.data || {};
       const nbhd = searchAllNeighborhoods(text);
       const newData = { ...d, newDetails: text, newNeighborhood: nbhd?.name || null };
-      const migKnownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+      const migKnownName = nameOf(profile);
       if (migKnownName) {
         const notifyText = buildMigrationNotification(newData, migKnownName);
         await notifyAgentRequest(chatId, notifyText, d.newLocation).catch(() => {});
@@ -2429,7 +2436,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const no = text === 'no_ubicacion' || normalizeText(text).match(/\b(no|incorrecto|otra|otro)\b/);
       if (yes) {
         updateProfile(chatId, { location: d.detectedZone });
-        const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+        const knownName = nameOf(profile);
         if (knownName) {
           const notified = await notifyAgentRequest(chatId, [
             `REPORTE DE FALLA`,
@@ -2477,7 +2484,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
       if (advice) await sendMsg(chatId, advice);
 
-      const reportKnownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+      const reportKnownName = nameOf(profile);
       // Always ask for location + references for accurate dispatch
       setSession(chatId, { state: 'awaiting_report_location', data: { problemDescription, knownName: reportKnownName } });
       await sendMsg(chatId, '¿En qué colonia o barrio es el problema y cuáles son las referencias del domicilio? (ej: Colonia Centro, cerca de la iglesia)');
@@ -2598,7 +2605,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (isGreetingMessage(text)) {
       setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
       const knownProfile = getProfile(chatId);
-      const knownName = knownProfile?.name && knownProfile.name !== 'Usuario' ? knownProfile.name : null;
+      const knownName = nameOf(knownProfile);
       const menuOptions = [
         '1️⃣ Ver planes de internet',
         '2️⃣ Cámaras de seguridad',
@@ -2674,7 +2681,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const aiResult = await callMainAI(chatId, text);
     if (!aiResult) { setSession(chatId, { state: 'awaiting_menu_choice', data: {} }); await sendReplyObject(buildMenuReply()); return; }
 
-    const knownName = profile?.name && profile.name !== 'Usuario' ? profile.name : null;
+    const knownName = nameOf(profile);
 
     if (aiResult.action === 'show_plans') {
       // Solo usamos la zona si el cliente la menciona EN ESTE mensaje (no asumir
