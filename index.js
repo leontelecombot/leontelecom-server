@@ -8,9 +8,13 @@ const { analyzePaymentReceipt } = require('./utils/imageAnalysis');
 const dataManager = require('./utils/dataManager');
 const persistence = require('./utils/persistence');
 
-// File upload config — imágenes en memoria; se guardan en MongoDB (persistentes).
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
-  if (!file.mimetype.startsWith('image/')) return cb(new Error('Solo imágenes'));
+// Compresión de imágenes (opcional: si sharp no carga, se guarda sin comprimir).
+let sharp = null;
+try { sharp = require('sharp'); } catch (e) { console.warn('[upload] sharp no disponible; imágenes sin comprimir'); }
+
+// File upload config — imágenes en memoria; se comprimen y se guardan en MongoDB.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
+  if (!file.mimetype.startsWith('image/')) return cb(new Error('El archivo debe ser una imagen (jpg, png, etc.)'));
   cb(null, true);
 }});
 
@@ -65,6 +69,8 @@ const WHATSAPP_API_VERSION = 'v22.0';
 // Plantilla aprobada para avisos masivos (corte/reparación/reactivado) — permite
 // enviar a TODOS aunque hayan pasado +24h sin chatear. Cuerpo con un parámetro {{1}}.
 const WHATSAPP_AVISO_TEMPLATE = process.env.WHATSAPP_AVISO_TEMPLATE || '';
+// Plantilla de Marketing con ENCABEZADO de imagen + cuerpo {{1}}, para promos a todos.
+const WHATSAPP_PROMO_TEMPLATE = process.env.WHATSAPP_PROMO_TEMPLATE || '';
 const WHATSAPP_TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'es_MX';
 
 const LOCATIONS = {
@@ -363,12 +369,16 @@ async function sendBulkWhatsApp(message, imageUrls = []) {
 }
 
 // Envía una PLANTILLA aprobada (funciona aunque hayan pasado +24h sin chatear).
-// La plantilla debe tener un único parámetro {{1}} en el cuerpo = el mensaje.
-async function sendWhatsAppTemplate(to, message) {
+// opts.templateName: nombre de la plantilla (default = aviso). opts.imageUrl: imagen de encabezado.
+async function sendWhatsAppTemplate(to, message, opts = {}) {
   if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN) throw new Error('Faltan credenciales de WhatsApp');
-  if (!WHATSAPP_AVISO_TEMPLATE) throw new Error('WHATSAPP_AVISO_TEMPLATE no configurada');
+  const name = opts.templateName || WHATSAPP_AVISO_TEMPLATE;
+  if (!name) throw new Error('Plantilla no configurada');
   // El parámetro de una plantilla no admite saltos de línea ni espacios largos.
   const param = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  const components = [];
+  if (opts.imageUrl) components.push({ type: 'header', parameters: [{ type: 'image', image: { link: opts.imageUrl } }] });
+  components.push({ type: 'body', parameters: [{ type: 'text', text: param }] });
   const res = await fetch(`https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
@@ -376,35 +386,33 @@ async function sendWhatsAppTemplate(to, message) {
       messaging_product: 'whatsapp',
       to,
       type: 'template',
-      template: {
-        name: WHATSAPP_AVISO_TEMPLATE,
-        language: { code: WHATSAPP_TEMPLATE_LANG },
-        components: [{ type: 'body', parameters: [{ type: 'text', text: param }] }]
-      }
+      template: { name, language: { code: WHATSAPP_TEMPLATE_LANG }, components }
     })
   });
   if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`); }
   return true;
 }
 
-// Envío masivo por PLANTILLA a todos los clientes (avisos a todos, sin límite 24h).
-async function sendBulkTemplate(message) {
+// Envío masivo por PLANTILLA a todos los clientes (sin límite 24h).
+async function sendBulkTemplate(message, opts = {}) {
   const recipients = getAllBroadcastRecipients();
   let sent = 0, failed = 0;
   for (const r of recipients) {
-    try { await sendWhatsAppTemplate(r.chatId, message); sent++; }
+    try { await sendWhatsAppTemplate(r.chatId, message, opts); sent++; }
     catch (e) { failed++; }
     await new Promise(r => setTimeout(r, 200));
   }
   return { sent, failed, total: recipients.length };
 }
 
-// Decide el método: si hay plantilla configurada y NO hay imagen, usa plantilla
-// (llega a todos aunque pasaron +24h). Si hay imagen, usa texto+imagen (límite 24h).
+// Decide el método de envío masivo:
+//  - Con imagen + plantilla de promo → plantilla con imagen (llega a TODOS).
+//  - Sin imagen + plantilla de aviso → plantilla de texto (llega a TODOS).
+//  - Si no hay plantilla → texto/imagen normal (solo dentro de 24h).
 async function sendBroadcastSmart(message, imageUrls = []) {
-  if (WHATSAPP_AVISO_TEMPLATE && (!imageUrls || imageUrls.length === 0)) {
-    return await sendBulkTemplate(message);
-  }
+  const img = imageUrls && imageUrls[0];
+  if (img && WHATSAPP_PROMO_TEMPLATE) return await sendBulkTemplate(message, { templateName: WHATSAPP_PROMO_TEMPLATE, imageUrl: img });
+  if (!img && WHATSAPP_AVISO_TEMPLATE) return await sendBulkTemplate(message);
   return await sendBulkWhatsApp(message, imageUrls);
 }
 
@@ -3184,15 +3192,36 @@ app.get('/admin/api/broadcast-history', verifyAdminToken, (req, res) => {
   res.json({ history: broadcastHistory.slice(0, 50) });
 });
 
-// API: Upload image → se guarda en MongoDB y se sirve desde /images/db/:id
-app.post('/admin/api/upload-image', verifyAdminToken, upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No se recibió imagen' });
-  let ext = (path.extname(req.file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '');
-  if (!ext || ext === '.') ext = '.jpg';
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-  const ok = await persistence.saveImage(id, req.file.mimetype, req.file.buffer);
-  if (!ok) return res.status(500).json({ error: 'No se pudo guardar la imagen' });
-  res.json({ success: true, url: `${SERVER_BASE_URL}/images/db/${id}` });
+// API: Upload image → comprime, guarda en MongoDB y sirve desde /images/db/:id
+app.post('/admin/api/upload-image', verifyAdminToken, (req, res) => {
+  upload.single('image')(req, res, async (err) => {
+    // Errores de multer (archivo muy grande, no es imagen) → respuesta JSON clara
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'La imagen es muy grande (máx 25 MB).' : (err.message || 'Error al subir el archivo.');
+      return res.status(400).json({ error: msg });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No se recibió imagen' });
+    try {
+      let buffer = req.file.buffer;
+      let contentType = req.file.mimetype;
+      let ext = (path.extname(req.file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '') || '.jpg';
+      // Comprimir/redimensionar para que cargue rápido y quepa en la base
+      if (sharp) {
+        try {
+          buffer = await sharp(req.file.buffer).rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+          contentType = 'image/jpeg';
+          ext = '.jpg';
+        } catch (e) { console.warn('[upload] compresión falló, se guarda original:', e.message); }
+      }
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+      const ok = await persistence.saveImage(id, contentType, buffer);
+      if (!ok) return res.status(500).json({ error: 'No se pudo guardar la imagen' });
+      res.json({ success: true, url: `${SERVER_BASE_URL}/images/db/${id}` });
+    } catch (e) {
+      console.error('[upload] error:', e.message);
+      res.status(500).json({ error: 'No se pudo procesar la imagen' });
+    }
+  });
 });
 
 // Servir imágenes guardadas (público: WhatsApp las descarga desde esta URL)
