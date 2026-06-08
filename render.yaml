@@ -14,6 +14,12 @@ services:
         sync: false
       - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
         value: leontelecom-verify
+      # Plantilla aprobada para avisos masivos (corte/reparación/reactivado),
+      # permite enviar a TODOS aunque hayan pasado +24h. Cuerpo con un {{1}}.
+      - key: WHATSAPP_AVISO_TEMPLATE
+        sync: false
+      - key: WHATSAPP_TEMPLATE_LANG
+        value: es_MX
       # Número WhatsApp del asesor para notificaciones (formato: 529xxxxxxxxx)
       - key: AGENT_WHATSAPP_NUMBER
         sync: false

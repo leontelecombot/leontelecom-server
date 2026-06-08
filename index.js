@@ -62,6 +62,10 @@ const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'leontelecom-verify';
 const WHATSAPP_API_VERSION = 'v22.0';
+// Plantilla aprobada para avisos masivos (corte/reparación/reactivado) — permite
+// enviar a TODOS aunque hayan pasado +24h sin chatear. Cuerpo con un parámetro {{1}}.
+const WHATSAPP_AVISO_TEMPLATE = process.env.WHATSAPP_AVISO_TEMPLATE || '';
+const WHATSAPP_TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'es_MX';
 
 const LOCATIONS = {
   huitzo: 'Huitzo',
@@ -358,6 +362,52 @@ async function sendBulkWhatsApp(message, imageUrls = []) {
   return { sent, failed, total: recipients.length };
 }
 
+// Envía una PLANTILLA aprobada (funciona aunque hayan pasado +24h sin chatear).
+// La plantilla debe tener un único parámetro {{1}} en el cuerpo = el mensaje.
+async function sendWhatsAppTemplate(to, message) {
+  if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN) throw new Error('Faltan credenciales de WhatsApp');
+  if (!WHATSAPP_AVISO_TEMPLATE) throw new Error('WHATSAPP_AVISO_TEMPLATE no configurada');
+  // El parámetro de una plantilla no admite saltos de línea ni espacios largos.
+  const param = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  const res = await fetch(`https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: WHATSAPP_AVISO_TEMPLATE,
+        language: { code: WHATSAPP_TEMPLATE_LANG },
+        components: [{ type: 'body', parameters: [{ type: 'text', text: param }] }]
+      }
+    })
+  });
+  if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`); }
+  return true;
+}
+
+// Envío masivo por PLANTILLA a todos los clientes (avisos a todos, sin límite 24h).
+async function sendBulkTemplate(message) {
+  const recipients = getAllBroadcastRecipients();
+  let sent = 0, failed = 0;
+  for (const r of recipients) {
+    try { await sendWhatsAppTemplate(r.chatId, message); sent++; }
+    catch (e) { failed++; }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return { sent, failed, total: recipients.length };
+}
+
+// Decide el método: si hay plantilla configurada y NO hay imagen, usa plantilla
+// (llega a todos aunque pasaron +24h). Si hay imagen, usa texto+imagen (límite 24h).
+async function sendBroadcastSmart(message, imageUrls = []) {
+  if (WHATSAPP_AVISO_TEMPLATE && (!imageUrls || imageUrls.length === 0)) {
+    return await sendBulkTemplate(message);
+  }
+  return await sendBulkWhatsApp(message, imageUrls);
+}
+
 // Scheduler — checks every 60s if any broadcast needs to be sent
 setInterval(async () => {
   const now = new Date();
@@ -370,7 +420,7 @@ setInterval(async () => {
     }
     if (now >= new Date(bc.nextSendAt)) {
       try {
-        const result = await sendBulkWhatsApp(bc.message, bc.imageUrls || []);
+        const result = await sendBroadcastSmart(bc.message, bc.imageUrls || []);
         bc.sentCount = (bc.sentCount || 0) + 1;
         bc.lastSentAt = now.toISOString();
         broadcastHistory.unshift({ id, type: bc.type, label: bc.label, message: bc.message, sentAt: now.toISOString(), result });
@@ -3080,7 +3130,7 @@ app.post('/admin/api/broadcast', verifyAdminToken, async (req, res) => {
 
   // Send immediately (scheduler will pick it up, but also trigger now)
   try {
-    const result = await sendBulkWhatsApp(message, imageUrls);
+    const result = await sendBroadcastSmart(message, imageUrls);
     bc.sentCount = 1;
     bc.lastSentAt = now.toISOString();
     bc.nextSendAt = intervalMs ? new Date(now.getTime() + intervalMs).toISOString() : null;
