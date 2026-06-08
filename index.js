@@ -1929,6 +1929,48 @@ function buildProductListText() {
   return lines.join('\n');
 }
 
+// ==================== PROMO POR INACTIVIDAD ====================
+// Si el cliente deja de responder unos minutos, le mandamos UN producto destacado
+// (dentro de la ventana de 24h de WhatsApp, así no requiere plantilla).
+const promoTracker = new Map(); // chatId → { lastMsg, lastPromoAt, eligible }
+const PROMO_IDLE_MIN = 10;                  // minutos de inactividad para enviar
+const PROMO_IDLE_MAX_MIN = 120;             // si pasaron más de 2h, ya no (se siente fuera de lugar)
+const PROMO_COOLDOWN_MS = 6 * 3600 * 1000;  // máx. un promo de inactividad cada 6h por cliente
+
+function markClientActivity(chatId) {
+  const id = String(chatId);
+  const pt = promoTracker.get(id) || { lastPromoAt: 0 };
+  pt.lastMsg = Date.now();
+  pt.eligible = true;
+  promoTracker.set(id, pt);
+}
+
+function markPromoSent(chatId) {
+  const id = String(chatId);
+  const pt = promoTracker.get(id) || {};
+  pt.lastPromoAt = Date.now();
+  pt.eligible = false;
+  promoTracker.set(id, pt);
+}
+
+async function sweepIdlePromos() {
+  if (promoTracker.size === 0) return;
+  const now = Date.now();
+  for (const [chatId, pt] of [...promoTracker.entries()]) {
+    if (!pt.eligible) continue;
+    const idleMin = (now - (pt.lastMsg || 0)) / 60000;
+    if (idleMin < PROMO_IDLE_MIN || idleMin > PROMO_IDLE_MAX_MIN) continue;
+    if (now - (pt.lastPromoAt || 0) < PROMO_COOLDOWN_MS) { pt.eligible = false; continue; }
+    if (isPaused(chatId)) continue;                 // un asesor está atendiendo
+    const s = getSession(chatId);
+    if (s && s.state && s.state !== 'awaiting_menu_choice') continue; // está a medio flujo
+    try {
+      await sendProductHighlight(chatId, sendWhatsAppMessage);
+      markPromoSent(chatId);
+    } catch (e) { pt.eligible = false; }
+  }
+}
+
 // Arma la línea de ubicación a partir de la colonia detectada y/o la zona del perfil.
 function resolveEmergencyLocation(text, profile) {
   const nbhd = searchAllNeighborhoods(text);
@@ -2012,6 +2054,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     const session = getSession(chatId);
     addMessageToHistory(chatId, 'user', text);
+    markClientActivity(chatId); // reinicia el reloj de inactividad para la promo
 
     // ===== EMERGENCIAS / FALLAS URGENTES (máxima prioridad) =====
     // Si el cliente ya estaba dando la ubicación de una emergencia, la procesamos.
@@ -2644,6 +2687,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (isClosing(text)) {
       await sendMsg(chatId, '¡Con gusto! Que tengas excelente día. 🙌');
       try { await sendProductHighlight(chatId, sendMsg); } catch (e) {}
+      markPromoSent(chatId); // ya se promocionó; evita el promo por inactividad
       clearSession(chatId);
       return;
     }
@@ -3274,6 +3318,9 @@ const port = Number(process.env.PORT || 3000);
 
   // 3) Recordatorios a clientes que siguen esperando un asesor
   setInterval(() => sweepAgentReminders().catch(() => {}), 90000);
+
+  // 3b) Promo de productos a clientes que dejaron de responder unos minutos
+  setInterval(() => sweepIdlePromos().catch(() => {}), 120000);
 
   // 4) Levantar el servidor
   app.listen(port, () => {
