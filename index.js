@@ -8,9 +8,14 @@ const { analyzePaymentReceipt } = require('./utils/imageAnalysis');
 const dataManager = require('./utils/dataManager');
 const persistence = require('./utils/persistence');
 
-// Compresión de imágenes (opcional: si sharp no carga, se guarda sin comprimir).
-let sharp = null;
-try { sharp = require('sharp'); } catch (e) { console.warn('[upload] sharp no disponible; imágenes sin comprimir'); }
+// Compresión de imágenes: se carga PEREZOSAMENTE (solo al primer upload), para no
+// pesar en el arranque ni en la memoria del servidor cuando no se usa.
+let _sharp; // undefined = aún no intentado; null = no disponible
+function getSharp() {
+  if (_sharp !== undefined) return _sharp;
+  try { _sharp = require('sharp'); } catch (e) { _sharp = null; console.warn('[upload] sharp no disponible; imágenes sin comprimir'); }
+  return _sharp;
+}
 
 // File upload config — imágenes en memoria; se comprimen y se guardan en MongoDB.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
@@ -1987,6 +1992,34 @@ function buildProductListText() {
   return lines.join('\n');
 }
 
+// Saludo + menú (determinista, sin IA) — respuesta rápida a "hola/buenas".
+async function sendWelcomeMenu(chatId, sendMsg) {
+  setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
+  const knownName = nameOf(getProfile(chatId));
+  const menuOptions = [
+    '1️⃣ Ver planes de internet',
+    '2️⃣ Cámaras de seguridad',
+    '3️⃣ Soporte técnico',
+    '4️⃣ Hablar con un asesor',
+    '5️⃣ Migrar mi servicio',
+    '6️⃣ Productos y accesorios 🛍️'
+  ].join('\n');
+  if (knownName) {
+    await sendMsg(chatId, [`Bienvenido de vuelta, ${knownName}. 👋`, '¿En qué puedo ayudarte hoy?', '', menuOptions].join('\n'));
+  } else {
+    await sendMsg(chatId, [
+      'Hola, soy Leo, el asistente virtual de León Telecom. 👋', '',
+      'Puedo ayudarte con:',
+      '• Planes de internet (fibra óptica e inalámbrico)',
+      '• Cámaras de seguridad (Tapo Wi-Fi e Hikvision profesional)',
+      '• Soporte técnico y reportes de fallas',
+      '• Productos y accesorios (Roku, cables, reflectores, USB…) — escribe "productos"',
+      '• Conectarte con un asesor', '',
+      'Elige una opción o escribe tu consulta:', '', menuOptions
+    ].join('\n'));
+  }
+}
+
 // ==================== PROMO POR INACTIVIDAD ====================
 // Si el cliente deja de responder unos minutos, le mandamos UN producto destacado
 // (dentro de la ventana de 24h de WhatsApp, así no requiere plantilla).
@@ -2130,6 +2163,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (isHoursRequest(text)) {
       addMessageToHistory(chatId, 'bot', 'horario');
       await sendMsg(chatId, buildBusinessHoursMessage());
+      return;
+    }
+
+    // Saludo ("hola/buenas") → SIEMPRE el menú, al instante y sin depender de la IA.
+    // (aunque haya una sesión activa: reinicia la conversación limpiamente)
+    if (isGreetingMessage(text)) {
+      await sendWelcomeMenu(chatId, sendMsg);
       return;
     }
 
@@ -2704,40 +2744,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     // Default: no session state
     if (isGreetingMessage(text)) {
-      setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-      const knownProfile = getProfile(chatId);
-      const knownName = nameOf(knownProfile);
-      const menuOptions = [
-        '1️⃣ Ver planes de internet',
-        '2️⃣ Cámaras de seguridad',
-        '3️⃣ Soporte técnico',
-        '4️⃣ Hablar con un asesor',
-        '5️⃣ Migrar mi servicio',
-        '6️⃣ Productos y accesorios 🛍️'
-      ].join('\n');
-      if (knownName) {
-        await sendMsg(chatId, [
-          `Bienvenido de vuelta, ${knownName}. 👋`,
-          '¿En qué puedo ayudarte hoy?',
-          '',
-          menuOptions
-        ].join('\n'));
-      } else {
-        await sendMsg(chatId, [
-          'Hola, soy Leo, el asistente virtual de León Telecom. 👋',
-          '',
-          'Puedo ayudarte con:',
-          '• Planes de internet (fibra óptica e inalámbrico)',
-          '• Cámaras de seguridad (Tapo Wi-Fi e Hikvision profesional)',
-          '• Soporte técnico y reportes de fallas',
-          '• Productos y accesorios (Roku, cables, reflectores, USB…) — escribe "productos"',
-          '• Conectarte con un asesor',
-          '',
-          'Elige una opción o escribe tu consulta:',
-          '',
-          menuOptions
-        ].join('\n'));
-      }
+      await sendWelcomeMenu(chatId, sendMsg);
       return;
     }
 
@@ -3206,6 +3213,7 @@ app.post('/admin/api/upload-image', verifyAdminToken, (req, res) => {
       let contentType = req.file.mimetype;
       let ext = (path.extname(req.file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '') || '.jpg';
       // Comprimir/redimensionar para que cargue rápido y quepa en la base
+      const sharp = getSharp();
       if (sharp) {
         try {
           buffer = await sharp(req.file.buffer).rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
