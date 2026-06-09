@@ -1015,47 +1015,56 @@ function buildAllPlansForLocation(location) {
 async function callAI(systemContent, userContent, options = {}) {
   if (!AI_API_KEY) return null;
   const temperature = options.temperature || 0.4;
+  // Timeout: si la IA tarda demasiado, abortamos para no dejar al cliente sin respuesta.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 15000);
 
-  if (AI_PROVIDER === 'anthropic') {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+  try {
+    if (AI_PROVIDER === 'anthropic') {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': AI_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: AI_MODEL || 'claude-haiku-4-5-20251001',
+          max_tokens: options.maxTokens || 512,
+          system: systemContent,
+          messages: [{ role: 'user', content: userContent }],
+          temperature
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`Anthropic API failed (${response.status}): ${await response.text()}`);
+      const payload = await response.json();
+      return payload.content?.[0]?.text || null;
+    }
+
+    // OpenAI-compatible (Groq, etc.)
+    const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': AI_API_KEY,
-        'anthropic-version': '2023-06-01'
+        Authorization: `Bearer ${AI_API_KEY}`
       },
       body: JSON.stringify({
-        model: AI_MODEL || 'claude-haiku-4-5-20251001',
-        max_tokens: options.maxTokens || 512,
-        system: systemContent,
-        messages: [{ role: 'user', content: userContent }],
+        model: AI_MODEL,
+        messages: [
+          { role: 'system', content: systemContent },
+          { role: 'user', content: userContent }
+        ],
         temperature
-      })
+      }),
+      signal: controller.signal
     });
-    if (!response.ok) throw new Error(`Anthropic API failed (${response.status}): ${await response.text()}`);
+    if (!response.ok) throw new Error(`AI request failed (${response.status}): ${await response.text()}`);
     const payload = await response.json();
-    return payload.content?.[0]?.text || null;
+    return payload.choices?.[0]?.message?.content || null;
+  } finally {
+    clearTimeout(timer);
   }
-
-  // OpenAI-compatible (Groq, etc.)
-  const response = await fetch(`${AI_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${AI_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: AI_MODEL,
-      messages: [
-        { role: 'system', content: systemContent },
-        { role: 'user', content: userContent }
-      ],
-      temperature
-    })
-  });
-  if (!response.ok) throw new Error(`AI request failed (${response.status}): ${await response.text()}`);
-  const payload = await response.json();
-  return payload.choices?.[0]?.message?.content || null;
 }
 
 function agentNotifiedMsg(notified, name, type = 'asesor') {
