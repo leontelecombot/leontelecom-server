@@ -640,7 +640,7 @@ function isCoverageRequest(text) {
 function isTechnicalIssue(text) {
   const value = normalizeText(text);
   // Requires explicit problem signal — NOT just mention of "internet"
-  return /\b(falla|sin servicio|no funciona|intermitente|reiniciar|caido|caida|sin internet|no jala|no agarra|se cae|se corta|no carga|no hay internet|se fue el internet|no tengo internet|se corto el internet)\b/.test(value);
+  return /\b(falla|sin servicio|no funciona|intermitente|reiniciar|caido|caida|sin internet|no jala|no agarra|se cae|se corta|no carga|no hay internet|se fue el internet|no tengo internet|se corto el internet|lentisim[oa]|lentit[oa]|muy lent[oa]|va lent[oa]|esta lent[oa]|anda lent[oa]|internet lent[oa]|wifi lent[oa]|super lent[oa]|sigue lent[oa]|esta fallando|no sirve|no me sirve|no funca|sin senal|sin señal)\b/.test(value);
 }
 
 // ¿A qué "flujo" pertenece el estado actual de la conversación?
@@ -2122,6 +2122,21 @@ async function finishEmergencyWithLocation(chatId, text, data, sendMsg) {
   await sendMsg(chatId, `Listo${knownName ? ', ' + knownName : ''}. Pasé la ubicación a nuestro equipo técnico para que acudan con prioridad. Gracias por reportarlo.`);
 }
 
+// Inicia el flujo de reporte cuando el cliente YA describió la falla (en "text").
+// Da un tip, captura el problema y pide solo la ubicación — sin re-preguntar el síntoma.
+async function startReportFlow(chatId, text, sendMsg) {
+  await sendMsg(chatId, 'Entendido. 🔧 Tip rápido: reinicia tu módem ~2 minutos. Si sigue igual, lo revisamos.');
+  const nbhd = searchAllNeighborhoods(text);
+  const knownName = nameOf(getProfile(chatId));
+  if (nbhd) {
+    setSession(chatId, { state: 'awaiting_neighborhood_confirm', data: { problemDescription: text, detectedNeighborhood: nbhd.name, detectedZone: nbhd.zone } });
+    await sendMsg(chatId, `¿La ubicación es ${nbhd.name}, ${nbhd.zone}?`, [], { buttons: [{ id: 'si_ubicacion', title: 'Sí, es ahí' }, { id: 'no_ubicacion', title: 'No, es otra' }] });
+  } else {
+    setSession(chatId, { state: 'awaiting_report_location', data: { problemDescription: text, knownName } });
+    await sendMsg(chatId, '¿En qué colonia o barrio es y cuáles son las referencias del domicilio? (ej: Colonia Centro, casa azul frente a la cancha)');
+  }
+}
+
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
     // If agent has taken over this chat, relay client message to agent
@@ -2238,8 +2253,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
           return;
         }
         if (newIntent === 'support') {
-          setSession(chatId, { state: 'awaiting_report', data: {} });
-          await sendReplyObject(buildReportPrompt());
+          if (isTechnicalIssue(text)) {
+            // Ya describió la falla → no re-preguntar el síntoma
+            await startReportFlow(chatId, text, sendMsg);
+          } else {
+            // Reporte genérico ("quiero reportar algo") → sí preguntamos qué pasa
+            setSession(chatId, { state: 'awaiting_report', data: {} });
+            await sendReplyObject(buildReportPrompt());
+          }
           return;
         }
         if (newIntent === 'plan') {
@@ -2288,10 +2309,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
         if (loc2) { updateProfile(chatId, { location: loc2 }); setSession(chatId, { state: 'awaiting_plan_selection', data: { location: loc2 } }); await sendReplyObject(buildPlanReplyForLocation(loc2)); }
         else { setSession(chatId, { state: 'awaiting_location', data: {} }); await sendReplyObject(buildLocationPrompt()); }
       } else if (aiResult2.action === 'show_support') {
-        if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
-        setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
-        if (!knownName2) await sendReplyObject(buildReportPrompt());
-        else { const n2 = await notifyAgentRequest(chatId, [`REPORTE`, `Nombre: ${knownName2}`, `Problema: ${text}`].join('\n'), '').catch(() => false); clearSession(chatId); await sendMsg(chatId, agentNotifiedMsg(n2, knownName2, 'técnico')); }
+        if (isTechnicalIssue(text)) {
+          await startReportFlow(chatId, text, sendMsg); // ya dijo la falla → no re-preguntar
+        } else {
+          setSession(chatId, { state: 'awaiting_report', data: {} });
+          await sendReplyObject(buildReportPrompt());
+        }
       } else if (aiResult2.action === 'show_migration') {
         if (aiResult2.message) await sendMsg(chatId, aiResult2.message);
         setSession(chatId, { state: 'awaiting_migration_current_location', data: {} });
@@ -2842,21 +2865,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await handleEmergency(chatId, text, sendMsg);
         return;
       }
-      const detectedNbhd = (aiResult.neighborhood ? searchAllNeighborhoods(aiResult.neighborhood) : null) || searchAllNeighborhoods(text);
-      if (detectedNbhd) {
-        if (aiResult.message) await sendMsg(chatId, aiResult.message);
-        setSession(chatId, { state: 'awaiting_neighborhood_confirm', data: { problemDescription: text, detectedNeighborhood: detectedNbhd.name, detectedZone: detectedNbhd.zone } });
-        await sendMsg(chatId, `¿La ubicación es ${detectedNbhd.name}, ${detectedNbhd.zone}?`, [], { buttons: [{ id: 'si_ubicacion', title: 'Sí, es ahí' }, { id: 'no_ubicacion', title: 'No, es otra' }] });
-      } else if (knownName) {
-        // ONE message: AI advice already mentions to contact tech if persists. Notify silently.
-        await notifyAgentRequest(chatId, [`REPORTE DE FALLA`, `Nombre: ${knownName}`, `Problema: ${text}`].join('\n'), '').catch(() => {});
-        clearSession(chatId);
-        await sendMsg(chatId, aiResult.message || `Ya avisamos al equipo técnico, ${knownName}. Te contactarán pronto.`);
-      } else {
-        if (aiResult.message) await sendMsg(chatId, aiResult.message);
-        setSession(chatId, { state: 'awaiting_report', data: { problemDescription: text } });
-        await sendReplyObject(buildReportPrompt());
-      }
+      // El cliente YA describió el problema → no re-preguntamos el síntoma.
+      await startReportFlow(chatId, text, sendMsg);
 
     } else if (aiResult.action === 'show_migration') {
       if (aiResult.message) await sendMsg(chatId, aiResult.message);
