@@ -453,7 +453,8 @@
         el.innerHTML = `<span style="color:var(--danger)">❌ Error: ${d.error}</span>`;
       } else {
         const syncTime = d.lastSync ? new Date(d.lastSync).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'}) : 'nunca';
-        el.innerHTML = `<span style="color:#15803d">✅ ${d.count} clientes sincronizados</span> <span style="color:var(--muted);font-size:.9em">· Última sync: ${syncTime}</span>`;
+        const detalle = (d.total ? ` de ${d.total} activos` : '') + (d.sinTelefono ? ` · ${d.sinTelefono} sin teléfono` : '');
+        el.innerHTML = `<span style="color:#15803d">✅ ${d.count} con WhatsApp${detalle}</span> <span style="color:var(--muted);font-size:.9em">· Sync: ${syncTime}</span>`;
       }
     } catch(e) {}
   }

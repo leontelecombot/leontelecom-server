@@ -264,6 +264,8 @@ const WISPHUB_API_KEY = process.env.WISPHUB_API_KEY || '';
 let wisphubClients = new Map(); // phone → { name, phone, status, wisphubId }
 let lastWisphubSync = null;
 let wisphubSyncError = null;
+let lastWisphubTotal = null;      // activos revisados en el último sync
+let lastWisphubSinTel = null;     // activos sin teléfono válido
 
 async function syncWisphubClients() {
   if (!WISPHUB_API_KEY) {
@@ -316,10 +318,15 @@ async function syncWisphubClients() {
       data = await res.json();
     }
 
+    const unicos = wisphubClients.size;       // números de WhatsApp únicos (lo real)
+    const sinTelefono = revisados - synced;   // activos sin teléfono válido en Wisphub
+    const repetidos = synced - unicos;        // comparten número con otro cliente
     lastWisphubSync = new Date().toISOString();
     wisphubSyncError = null;
-    console.log(`[Wisphub] Sync OK: ${synced} clientes (${revisados} revisados, ${pages} páginas)`);
-    return { synced, total: revisados };
+    lastWisphubTotal = revisados;
+    lastWisphubSinTel = sinTelefono;
+    console.log(`[Wisphub] Sync OK: ${unicos} números únicos | ${revisados} activos | ${sinTelefono} sin teléfono válido | ${repetidos} con número repetido`);
+    return { synced: unicos, total: revisados, sinTelefono, repetidos };
   } catch (e) {
     wisphubSyncError = e.message;
     console.error('[Wisphub] Sync error:', e.message);
@@ -3318,7 +3325,9 @@ app.get('/admin/api/wisphub-status', verifyAdminToken, (req, res) => {
     configured: !!WISPHUB_API_KEY,
     lastSync: lastWisphubSync,
     error: wisphubSyncError,
-    count: wisphubClients.size
+    count: wisphubClients.size,
+    total: lastWisphubTotal,
+    sinTelefono: lastWisphubSinTel
   });
 });
 
