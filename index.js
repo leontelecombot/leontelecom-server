@@ -271,39 +271,54 @@ async function syncWisphubClients() {
   }
   try {
     const base = (WISPHUB_API_URL || 'https://api.wisphub.net').replace(/\/$/, '');
-    const url = `${base}/api/clientes/?format=json&limit=1000&estado=1`;
-    // Wisphub puede usar distintos esquemas de Authorization; probamos los comunes.
     const schemes = ['Api-Key', 'Token', 'Bearer'];
-    let res = null, lastTxt = '';
+
+    // 1ª página: detectamos el esquema de Authorization correcto.
+    let authHeader = null, lastTxt = '';
+    let data = null;
+    const firstUrl = `${base}/api/clientes/?format=json&limit=500&estado=1`;
     for (const scheme of schemes) {
-      res = await fetch(url, { headers: { 'Authorization': `${scheme} ${WISPHUB_API_KEY}` } });
-      if (res.ok) { console.log(`[Wisphub] Autenticado con esquema "${scheme}"`); break; }
+      const res = await fetch(firstUrl, { headers: { 'Authorization': `${scheme} ${WISPHUB_API_KEY}` } });
+      if (res.ok) { authHeader = `${scheme} ${WISPHUB_API_KEY}`; data = await res.json(); console.log(`[Wisphub] Autenticado con esquema "${scheme}"`); break; }
       lastTxt = await res.text().catch(() => '');
-      if (res.status !== 401 && res.status !== 403) break; // error que no es de auth → no insistir
+      if (res.status !== 401 && res.status !== 403) break;
     }
-    if (!res || !res.ok) {
-      throw new Error(`HTTP ${res ? res.status : '??'}: ${lastTxt.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    const items = Array.isArray(data) ? data : (data.results || []);
+    if (!authHeader) throw new Error(`Auth falló: ${lastTxt.slice(0, 200)}`);
+
     wisphubClients.clear();
-    let synced = 0;
-    for (const c of items) {
-      // Wisphub uses: telefono, celular, nombre, apellidos
-      const rawPhone = c.telefono || c.celular || c.phone || '';
-      if (!rawPhone) continue;
-      let phone = rawPhone.replace(/\D/g, '');
-      if (phone.length === 10) phone = '52' + phone;
-      if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
-      if (phone.length < 12) continue; // skip invalid
-      const name = [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.name || rawPhone;
-      wisphubClients.set(phone, { name, phone, status: c.estado, wisphubId: c.id, source: 'wisphub' });
-      synced++;
+    let synced = 0, revisados = 0, pages = 0, offset = 0;
+    const count = (data && data.count) || null;
+
+    // Paginación MANUAL por offset (siempre https). Los "next" de Wisphub vienen
+    // en http:// y al seguirlos se pierde la autenticación, por eso no los usamos.
+    const PAGE = 500;
+    while (data && pages < 50) {
+      const items = Array.isArray(data) ? data : (data.results || []);
+      if (!items.length) break;
+      revisados += items.length;
+      for (const c of items) {
+        const rawPhone = c.telefono || c.celular || c.phone || '';
+        if (!rawPhone) continue;
+        let phone = String(rawPhone).replace(/\D/g, '');
+        if (phone.length === 10) phone = '52' + phone;
+        if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
+        if (phone.length < 12) continue; // teléfono inválido
+        const name = [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.razon_social || c.usuario || rawPhone;
+        wisphubClients.set(phone, { name, phone, status: c.estado, wisphubId: c.id_servicio || c.id, source: 'wisphub' });
+        synced++;
+      }
+      offset += items.length;
+      pages++;
+      if (count && offset >= count) break;
+      const res = await fetch(`${base}/api/clientes/?format=json&limit=${PAGE}&offset=${offset}&estado=1`, { headers: { 'Authorization': authHeader } });
+      if (!res.ok) break;
+      data = await res.json();
     }
+
     lastWisphubSync = new Date().toISOString();
     wisphubSyncError = null;
-    console.log(`[Wisphub] Sync OK: ${synced} clientes`);
-    return { synced, total: items.length };
+    console.log(`[Wisphub] Sync OK: ${synced} clientes (${revisados} revisados, ${pages} páginas)`);
+    return { synced, total: revisados };
   } catch (e) {
     wisphubSyncError = e.message;
     console.error('[Wisphub] Sync error:', e.message);
