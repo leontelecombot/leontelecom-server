@@ -291,8 +291,9 @@ async function syncWisphubClients() {
 
     // Paginación MANUAL por offset (siempre https). Los "next" de Wisphub vienen
     // en http:// y al seguirlos se pierde la autenticación, por eso no los usamos.
+    // Tope alto (pages < 2000 ≈ 600,000 clientes) para crecer sin límite práctico.
     const PAGE = 500;
-    while (data && pages < 50) {
+    while (data && pages < 2000) {
       const items = Array.isArray(data) ? data : (data.results || []);
       if (!items.length) break;
       revisados += items.length;
