@@ -2323,10 +2323,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (session.state === 'awaiting_camera_needs') {
       // Exit conditions — only if no real question in the message
       const hasRealQ = /\?|cuantos|cuanto|como |que |cual|dispositiv|camara|modelo|precio|diferencia|funciona|puede/.test(normalizeText(text));
-      const goodbye = !hasRealQ && normalizeText(text).match(/\b(no gracias|no|ya no|solo preguntaba|nada|gracias nada mas|es todo)\b/);
+      const goodbye = !hasRealQ && /\b(no gracias|no|ya no|solo preguntaba|nada|gracias nada mas|es todo|luego|despues|al rato|mas tarde|ahorita no|ahora no|por ahora no|lo pienso|pensarlo|mejor luego|mejor despues|deja(me)? pensarlo)\b/.test(normalizeText(text));
       if (goodbye) {
         clearSession(chatId);
-        await sendMsg(chatId, 'Con gusto. Cuando guste nos contacta para cotizar. 😊');
+        await sendMsg(chatId, 'Con gusto, aquí estamos cuando quieras. 😊');
         return;
       }
 
