@@ -1105,7 +1105,7 @@ async function callMainAI(chatId, userText) {
     `Huitzo — fibra óptica en: Primera/Segunda/Tercera Sección, La Guadalupe, La Cantera, Cañada del Chisme, Ojo de Agua, Esmeralda, Privada del Laurel, El Llano, Gasolinera, Loma los Pinos, Agua Blanca, Santa María Tenéxpam. Instalación: $800, primer mes gratis. Resto de Huitzo: antena inalámbrica. Planes fibra: ${fiberPlans}`,
     `Telixtlahuaca (inalámbrico/antena): instalación $800 en el CENTRO/cabecera (${TELIXTLAHUACA_CENTRO_ZONES.join(', ')}); $1,200 en las AGENCIAS/alrededores (${TELIXTLAHUACA_AGENCIAS.join(', ')}). Si el cliente no especifica colonia, pregunta si es en el centro o en una agencia antes de dar el costo. Planes: ${wirelessPlans}`,
     `Suchilquitongo —también llamado "Suchil"— (inalámbrico/antena): instalación a cotizar con técnico. Planes: ${wirelessPlans}`,
-    'IMPORTANTE: León Telecom SOLO ofrece internet. NO ofrece telefonía, TV, cable ni otros servicios.',
+    'IMPORTANTE: León Telecom NO ofrece telefonía, TV ni cable. Sus servicios son: INTERNET, CÁMARAS de seguridad y venta de ACCESORIOS/PRODUCTOS en la oficina.',
     'Las 3 zonas SÍ tienen cobertura. Nunca digas que no hay servicio.',
     '',
     'CÁMARAS DE SEGURIDAD:',
@@ -1120,6 +1120,9 @@ async function callMainAI(chatId, userText) {
     '- Ventaja: video guardado en grabador oculto, monitoreo centralizado de 4-16+ cámaras.',
     '- Para Hikvision se agenda visita técnica gratuita para cotización a medida.',
     'Preguntas clave para recomendar: 1)¿interior o exterior? 2)¿cuántas cámaras? 3)¿hay buena señal Wi-Fi ahí?',
+    '',
+    'ACCESORIOS Y PRODUCTOS (se venden en la oficina): Roku, cables HDMI/USB-C/Lightning, adaptadores USB, memorias USB, TINTA HP para impresora, mouse, base enfriadora, soporte de TV, reflectores solares, tiras LED, luminarios.',
+    'REGLA: si preguntan por un accesorio/producto (tinta, cable, roku, memoria, etc.), NUNCA digas que no lo tenemos; invítalos a escribir "productos" para ver el catálogo con fotos y precios.',
     '',
     clientName ? `Nombre del cliente: ${clientName}` : '',
     clientLocation ? `Zona del cliente: ${clientLocation}` : '',
@@ -1908,7 +1911,7 @@ const PRODUCTS = [
   { name: 'Roku Streaming Stick HD', price: '$680', img: 'RokuStickHD.jpeg', cat: 'Streaming', kw: ['roku hd', 'roku stick'] },
   { name: 'Extensor de rango Wi-Fi TP-Link N300', price: '$450', img: 'extensorderangowifitplink.jpeg', cat: 'Internet', kw: ['extensor', 'repetidor', 'amplificador wifi'] },
   { name: 'Adaptador USB Wi-Fi TP-Link AC600', price: '$220', img: 'adaptadorwifimini.jpeg', cat: 'Internet', kw: ['adaptador wifi', 'antena usb', 'antena wifi', 'usb wifi'] },
-  { name: 'Tinta original HP GT52/GT53 (4 pzas)', price: '$750', img: 'tintaoriginalHP4pz.jpeg', cat: 'Cómputo', kw: ['tinta', 'cartucho'] },
+  { name: 'Tinta original HP GT52/GT53 (4 pzas)', price: '$750', img: 'tintaoriginalHP4pz.jpeg', cat: 'Cómputo', kw: ['tinta', 'tintas', 'cartucho', 'tinta hp', 'impresora'] },
   { name: 'Memoria USB ADATA 32GB (USB 3.2)', price: '$90', img: 'USB adata 32Gb.jpeg', cat: 'Cómputo', kw: ['memoria 32', 'usb 32', '32gb'] },
   { name: 'Memoria USB ADATA 64GB (USB 2.0)', price: '$140', img: 'UBS adata 64 Gb.jpeg', cat: 'Cómputo', kw: ['memoria 64', 'usb 64', '64gb'] },
   { name: 'Mouse inalámbrico UGREEN', price: '$190', img: 'mouseugreen.jpeg', cat: 'Cómputo', kw: ['mouse', 'raton'] },
@@ -1918,7 +1921,7 @@ const PRODUCTS = [
   { name: 'Adaptador UGREEN USB-A a USB-C', price: '$175', img: 'adaptadorUSBAaUSBC.jpeg', cat: 'Cables', kw: ['usb a a usb c', 'adaptador usb a tipo c'] },
   { name: 'Cable UGREEN USB-C a Lightning (iPhone) 20W', price: '$280', img: 'cableligthningacugreen.jpeg', cat: 'Cables', kw: ['cable iphone', 'cable lightning', 'cargador iphone', 'lightning'] },
   { name: 'Cable HDMI Manhattan 4K 1.8m', price: '$80', img: 'cableshdmisuperspeed.jpeg', cat: 'Cables', kw: ['cable hdmi', 'hdmi 4k'] },
-  { name: 'Cable UGREEN USB-C a USB-C 60W', price: '$150', img: 'cabletipocatipocugreen.jpeg', cat: 'Cables', kw: ['cable tipo c', 'cable usb c', 'cable type c'] },
+  { name: 'Cable UGREEN USB-C a USB-C 60W', price: '$150', img: 'cabletipocatipocugreen.jpeg', cat: 'Cables', kw: ['cable tipo c', 'cable usb c', 'cable type c', 'usb c', 'usb-c', 'tipo c', 'type c'] },
   { name: 'Convertidor Steren HDMI a RCA', price: '$320', img: 'convertidordeHDMIaRCAsteren.jpeg', cat: 'Cables', kw: ['convertidor hdmi', 'hdmi a rca', 'hdmi rca'] },
   { name: 'Reflector solar JWL 100W (2 pzas)', price: '$1,300', img: 'reflectorsolar100W.jpeg', cat: 'Iluminación', kw: ['reflector solar 100', 'reflector 100', 'reflector solar', 'reflector'] },
   { name: 'Reflector solar JWL 200W (2 pzas)', price: '$1,500', img: 'reflectorsolar.jpeg', cat: 'Iluminación', kw: ['reflector solar 200', 'reflector 200', 'reflector solar', 'reflector'] },
@@ -2001,32 +2004,21 @@ function buildProductListText() {
   return lines.join('\n');
 }
 
-// Saludo + menú (determinista, sin IA) — respuesta rápida a "hola/buenas".
+// Saludo + menú (determinista, sin IA) — corto: solo el saludo y las opciones.
 async function sendWelcomeMenu(chatId, sendMsg) {
   setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
   const knownName = nameOf(getProfile(chatId));
-  const menuOptions = [
+  const saludo = knownName ? `👋 ¡Hola de nuevo, ${knownName}!` : '👋 ¡Hola! Soy Leo, de León Telecom.';
+  await sendMsg(chatId, [
+    `${saludo} ¿En qué te ayudo?`,
+    '',
     '1️⃣ Ver planes de internet',
     '2️⃣ Cámaras de seguridad',
     '3️⃣ Soporte técnico',
     '4️⃣ Hablar con un asesor',
     '5️⃣ Migrar mi servicio',
     '6️⃣ Productos y accesorios 🛍️'
-  ].join('\n');
-  if (knownName) {
-    await sendMsg(chatId, [`Bienvenido de vuelta, ${knownName}. 👋`, '¿En qué puedo ayudarte hoy?', '', menuOptions].join('\n'));
-  } else {
-    await sendMsg(chatId, [
-      'Hola, soy Leo, el asistente virtual de León Telecom. 👋', '',
-      'Puedo ayudarte con:',
-      '• Planes de internet (fibra óptica e inalámbrico)',
-      '• Cámaras de seguridad (Tapo Wi-Fi e Hikvision profesional)',
-      '• Soporte técnico y reportes de fallas',
-      '• Productos y accesorios (Roku, cables, reflectores, USB…) — escribe "productos"',
-      '• Conectarte con un asesor', '',
-      'Elige una opción o escribe tu consulta:', '', menuOptions
-    ].join('\n'));
-  }
+  ].join('\n'));
 }
 
 // ==================== PROMO POR INACTIVIDAD ====================
@@ -2180,6 +2172,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (isGreetingMessage(text)) {
       await sendWelcomeMenu(chatId, sendMsg);
       return;
+    }
+
+    // Pregunta por productos/accesorios → mostrar FOTO y precio (en cualquier estado,
+    // incluso después del menú). Antes esto se iba a la IA y a veces respondía mal.
+    if (isProductRequest(text)) {
+      await sendMsg(chatId, buildProductListText());
+      return;
+    }
+    {
+      const prodHits = findProducts(text);
+      if (prodHits.length && !isTechnicalIssue(text) && !isAgentRequest(text) && !isMigrationRequest(text) && !isCameraRequest(text) && !isPlanRequest(text) && !wantsInternet(text)) {
+        for (const p of prodHits.slice(0, 3)) {
+          await sendMsg(chatId, `🛍️ *${p.name}* — ${p.price}`, [getProductImageUrl(p)]);
+        }
+        await sendMsg(chatId, '¿Te interesa alguno? Te puedo pasar con un asesor para apartarlo. 😊');
+        return;
+      }
     }
 
     async function sendReplyObject(replyObj) {
