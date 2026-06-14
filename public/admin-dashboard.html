@@ -175,7 +175,10 @@
     <img src="/images/logo.png" alt="León Telecom">
     <div class="title"><b>León Telecom</b><small>Panel de Administración</small></div>
   </div>
-  <button class="logout-btn" onclick="logout()">⎋ Salir</button>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="topUser" style="font-size:.86em;opacity:.92"></span>
+    <button class="logout-btn" onclick="logout()">⎋ Salir</button>
+  </div>
 </div>
 
 <!-- Service Status Banner -->
@@ -199,7 +202,7 @@
 <div class="main">
 
   <!-- Quick Actions -->
-  <div class="card full-width">
+  <div class="card full-width" data-perm="broadcast">
     <div class="card-header"><span class="hico">⚡</span> Avisos Rápidos</div>
     <div class="card-body">
       <div class="quick-btns">
@@ -212,7 +215,7 @@
   </div>
 
   <!-- New Message Form -->
-  <div class="card">
+  <div class="card" data-perm="broadcast">
     <div class="card-header"><span class="hico">📢</span> Nuevo Mensaje</div>
     <div class="card-body">
       <div id="formAlert" class="alert"></div>
@@ -263,7 +266,7 @@
   </div>
 
   <!-- Programados + Historial -->
-  <div class="card">
+  <div class="card" data-perm="broadcast">
     <div class="card-header"><span class="hico">📋</span> Actividad</div>
     <div class="card-body">
       <div class="section-tabs">
@@ -284,7 +287,7 @@
 </div>
 
 <!-- Clients section -->
-<div class="wrap" style="margin-bottom:28px">
+<div class="wrap" style="margin-bottom:28px" data-perm="clients">
   <div class="card">
     <div class="card-header"><span class="hico">👥</span> Base de Clientes <span id="clientTotal" style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
     <div class="card-body">
@@ -300,6 +303,37 @@
       </div>
       <div id="clientAlert" class="alert"></div>
       <div id="clientList" style="max-height:300px;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Users & permissions section (solo permiso "users") -->
+<div class="wrap" style="margin-bottom:28px;display:none" data-perm="users" id="usersSection">
+  <div class="card">
+    <div class="card-header"><span class="hico">🔑</span> Usuarios y permisos</div>
+    <div class="card-body">
+      <div id="userAlert" class="alert"></div>
+      <div style="margin-bottom:14px"><button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="openUserModal()">➕ Nuevo usuario</button></div>
+      <div id="usersList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- User create/edit modal -->
+<div id="userModal" class="modal-bg">
+  <div class="modal-card" style="width:440px">
+    <h3 id="userModalTitle">Nuevo usuario</h3>
+    <input type="hidden" id="uEditUsername">
+    <div class="form-group"><label>Nombre completo</label><input type="text" id="uName" placeholder="ej: Juan Pérez"></div>
+    <div class="form-group" id="uUserRow"><label>Usuario (para iniciar sesión)</label><input type="text" id="uUsername" placeholder="ej: juan"></div>
+    <div class="form-group"><label id="uPassLabel">Contraseña</label><input type="text" id="uPassword" placeholder="contraseña"></div>
+    <div class="form-group">
+      <label>Permisos</label>
+      <div id="uPerms" style="display:flex;flex-direction:column;gap:7px"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn btn-primary" onclick="saveUser()" style="flex:1">Guardar</button>
+      <button class="btn" onclick="closeUserModal()" style="background:#eee;color:var(--muted);flex:1">Cancelar</button>
     </div>
   </div>
 </div>
@@ -331,7 +365,7 @@
   let currentSched = 'once';
   let modSched = 'once';
 
-  function logout() { localStorage.removeItem('adminToken'); location.href = '/admin/login'; }
+  function logout() { ['adminToken','adminName','adminRole','adminPerms'].forEach(k=>localStorage.removeItem(k)); location.href = '/admin/login'; }
 
   // Service status
   const STATUS_MAP = {
@@ -355,7 +389,101 @@
   const savedStatus = localStorage.getItem('serviceStatus');
   if (savedStatus) updateStatusBanner(savedStatus);
 
-  window.onload = () => { loadStats(); loadScheduled(); loadHistory(); loadClients(); loadWisphubStatus(); };
+  // ===== Permisos del usuario logueado =====
+  let MY = { name: localStorage.getItem('adminName')||'', role: localStorage.getItem('adminRole')||'', perms: JSON.parse(localStorage.getItem('adminPerms')||'[]') };
+  let ALL_PERMS = [], PERM_LABELS = {}, USERS = [];
+  function can(p){ return MY.role === 'superadmin' || MY.role === 'admin' || (MY.perms||[]).includes(p); }
+
+  function applyPermissions(){
+    const nm=document.getElementById('topUser');
+    if(nm) nm.textContent = (MY.name||'') + (MY.role==='superadmin' ? ' · Admin' : '');
+    document.querySelectorAll('[data-perm]').forEach(el=>{
+      el.style.display = can(el.getAttribute('data-perm')) ? '' : 'none';
+    });
+  }
+
+  window.onload = init;
+  async function init(){
+    // refrescar permisos reales desde el servidor
+    try { const r=await fetchAuth('/admin/api/me'); const d=await r.json(); if(d.user){ MY={name:d.user.name,role:d.user.role,perms:d.user.perms||[]}; } } catch(e){}
+    applyPermissions();
+    loadStats();
+    if(can('broadcast')){ loadScheduled(); loadHistory(); }
+    if(can('clients')){ loadClients(); }
+    if(can('wisphub')){ loadWisphubStatus(); }
+    if(can('users')){ loadUsers(); }
+  }
+
+  // ===== Usuarios y permisos =====
+  async function loadUsers(){
+    try{
+      const r=await fetchAuth('/admin/api/users'); const d=await r.json();
+      ALL_PERMS=d.allPermissions||[]; PERM_LABELS=d.permLabels||{}; USERS=d.users||[];
+      const el=document.getElementById('usersList');
+      if(!USERS.length){ el.innerHTML='<div class="empty">Sin usuarios.</div>'; return; }
+      el.innerHTML=`<table class="data-table"><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Permisos</th><th></th></tr></thead><tbody>${
+        USERS.map((u,i)=>{
+          const permTxt=u.role==='superadmin'?'Todos':((u.permissions||[]).map(p=>PERM_LABELS[p]||p).join(', ')||'—');
+          const inact=u.active===false?' <span class="badge" style="background:#fdeaea;color:#dc2626">inactivo</span>':'';
+          const del=u.role==='superadmin'?'':` <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.username}')">✕</button>`;
+          return `<tr><td>${u.name}${inact}</td><td class="muted">${u.username}</td><td>${u.role==='superadmin'?'Administrador':'Staff'}</td><td style="font-size:.84em">${permTxt}</td><td style="text-align:right;white-space:nowrap"><button class="btn btn-edit btn-sm" onclick="editUser(${i})">✏️</button>${del}</td></tr>`;
+        }).join('')
+      }</tbody></table>`;
+    }catch(e){}
+  }
+  function permCheckboxes(selected){
+    const sel=new Set(selected||[]);
+    return ALL_PERMS.filter(p=>p!=='users').map(p=>`<label style="display:flex;align-items:center;gap:8px;font-size:.9em;cursor:pointer"><input type="checkbox" value="${p}" ${sel.has(p)?'checked':''}> ${PERM_LABELS[p]||p}</label>`).join('');
+  }
+  function openUserModal(){
+    document.getElementById('userModalTitle').textContent='Nuevo usuario';
+    document.getElementById('uEditUsername').value='';
+    document.getElementById('uName').value='';
+    document.getElementById('uUsername').value='';
+    document.getElementById('uUserRow').style.display='';
+    document.getElementById('uPassword').value='';
+    document.getElementById('uPassLabel').textContent='Contraseña';
+    document.getElementById('uPerms').innerHTML=permCheckboxes([]);
+    document.getElementById('userModal').style.display='flex';
+  }
+  function editUser(i){
+    const u=USERS[i];
+    document.getElementById('userModalTitle').textContent='Editar usuario';
+    document.getElementById('uEditUsername').value=u.username;
+    document.getElementById('uName').value=u.name;
+    document.getElementById('uUsername').value=u.username;
+    document.getElementById('uUserRow').style.display='none';
+    document.getElementById('uPassword').value='';
+    document.getElementById('uPassLabel').textContent='Nueva contraseña (vacío = no cambiar)';
+    document.getElementById('uPerms').innerHTML = u.role==='superadmin' ? '<div class="muted" style="font-size:.85em;color:var(--muted)">El administrador tiene todos los permisos.</div>' : permCheckboxes(u.permissions);
+    document.getElementById('userModal').style.display='flex';
+  }
+  function closeUserModal(){ document.getElementById('userModal').style.display='none'; }
+  async function saveUser(){
+    const editing=document.getElementById('uEditUsername').value;
+    const name=document.getElementById('uName').value.trim();
+    const password=document.getElementById('uPassword').value;
+    const perms=[...document.querySelectorAll('#uPerms input:checked')].map(c=>c.value);
+    if(!name){ showAlert('userAlert','Escribe el nombre','error'); return; }
+    try{
+      if(editing){
+        const body={name,permissions:perms}; if(password) body.password=password;
+        const r=await fetchAuth('/admin/api/users/'+editing,{method:'PATCH',body:JSON.stringify(body)});
+        const d=await r.json(); if(!r.ok) throw new Error(d.error);
+      } else {
+        const username=document.getElementById('uUsername').value.trim();
+        if(!username||!password){ showAlert('userAlert','Usuario y contraseña son obligatorios','error'); return; }
+        const r=await fetchAuth('/admin/api/users',{method:'POST',body:JSON.stringify({username,name,password,permissions:perms})});
+        const d=await r.json(); if(!r.ok) throw new Error(d.error);
+      }
+      closeUserModal(); showAlert('userAlert','✅ Usuario guardado','success'); loadUsers();
+    }catch(e){ showAlert('userAlert','❌ '+e.message,'error'); }
+  }
+  async function deleteUser(username){
+    if(!confirm('¿Eliminar el usuario "'+username+'"?')) return;
+    try{ const r=await fetchAuth('/admin/api/users/'+username,{method:'DELETE'}); const d=await r.json(); if(!r.ok) throw new Error(d.error); loadUsers(); }
+    catch(e){ showAlert('userAlert','❌ '+e.message,'error'); }
+  }
 
   async function loadStats() {
     try {

@@ -1,193 +1,85 @@
-
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login - Panel Admin León Telecom</title>
+  <title>Acceso — Panel León Telecom</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-
-    .login-container {
-      background: white;
-      padding: 40px;
-      border-radius: 10px;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-      width: 100%;
-      max-width: 400px;
-    }
-
-    .login-header {
-      text-align: center;
-      margin-bottom: 40px;
-    }
-
-    .login-header h1 {
-      color: #333;
-      font-size: 2em;
-      margin-bottom: 10px;
-    }
-
-    .login-header p {
-      color: #666;
-      font-size: 0.95em;
-    }
-
-    .form-group {
-      margin-bottom: 20px;
-    }
-
-    label {
-      display: block;
-      margin-bottom: 8px;
-      color: #555;
-      font-weight: 600;
-    }
-
-    input[type="password"] {
-      width: 100%;
-      padding: 12px;
-      border: 2px solid #ddd;
-      border-radius: 5px;
-      font-size: 1em;
-      transition: border-color 0.3s;
-    }
-
-    input[type="password"]:focus {
-      outline: none;
-      border-color: #667eea;
-    }
-
-    button {
-      width: 100%;
-      padding: 12px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      border: none;
-      border-radius: 5px;
-      font-size: 1em;
-      font-weight: 600;
-      cursor: pointer;
-      transition: transform 0.2s, box-shadow 0.2s;
-    }
-
-    button:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-    }
-
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
-    }
-
-    .alert {
-      padding: 12px;
-      border-radius: 5px;
-      margin-bottom: 20px;
-      display: none;
-      font-size: 0.95em;
-    }
-
-    .alert-error {
-      background: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
-    }
-
-    .alert-success {
-      background: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
-    }
+    :root{ --brand:#4a1aa0; --brand-dark:#2c0a6b; --brand-2:#5e23c4; --ink:#1c1930; --muted:#6c6982; --line:#ececf3; }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#eef0f7;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:18px}
+    .card{display:flex;width:100%;max-width:840px;min-height:480px;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 24px 70px rgba(44,10,107,.22)}
+    .side-form{flex:1;padding:46px 42px;display:flex;flex-direction:column;justify-content:center}
+    .side-form h1{font-size:1.7em;color:var(--ink);margin-bottom:6px}
+    .side-form p.sub{color:var(--muted);font-size:.92em;margin-bottom:26px}
+    label{display:block;font-size:.8em;font-weight:600;color:var(--muted);margin:14px 0 6px}
+    .field{display:flex;align-items:center;gap:8px;border:1.6px solid var(--line);border-radius:11px;padding:11px 13px;background:#fafafd;transition:.15s}
+    .field:focus-within{border-color:var(--brand-2);background:#fff;box-shadow:0 0 0 3px rgba(124,58,237,.13)}
+    .field span{font-size:1.05em;opacity:.6}
+    .field input{border:none;outline:none;background:transparent;width:100%;font-size:.95em;color:var(--ink)}
+    .btn{width:100%;margin-top:22px;padding:13px;border:none;border-radius:11px;background:linear-gradient(120deg,#5e23c4,#3a0ca3);color:#fff;font-size:1em;font-weight:700;cursor:pointer;transition:.15s;box-shadow:0 6px 18px rgba(74,26,160,.32)}
+    .btn:hover{transform:translateY(-1px);box-shadow:0 9px 24px rgba(74,26,160,.42)}
+    .btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
+    .alert{display:none;margin-top:16px;padding:11px 14px;border-radius:10px;font-size:.88em;background:#fdeaea;color:#dc2626;font-weight:500}
+    .foot{margin-top:22px;font-size:.78em;color:#a8a6b8;text-align:center}
+    .side-brand{flex:1;background:linear-gradient(150deg,#2c0a6b,#4a1aa0 55%,#7c3aed);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px 32px;position:relative;overflow:hidden}
+    .side-brand::before,.side-brand::after{content:'';position:absolute;border-radius:50%;background:rgba(255,255,255,.08)}
+    .side-brand::before{width:260px;height:260px;top:-90px;right:-70px}
+    .side-brand::after{width:200px;height:200px;bottom:-80px;left:-60px}
+    .brand-logo{width:96px;height:96px;border-radius:24px;background:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:20px;box-shadow:0 10px 30px rgba(0,0,0,.25);position:relative;z-index:1}
+    .brand-logo img{width:74px;height:74px;object-fit:contain}
+    .side-brand h2{font-size:1.5em;font-weight:800;position:relative;z-index:1;letter-spacing:.3px}
+    .side-brand p{opacity:.85;font-size:.92em;margin-top:8px;position:relative;z-index:1;max-width:240px}
+    @media(max-width:680px){ .card{flex-direction:column;max-width:420px} .side-brand{order:-1;min-height:170px;padding:26px} .brand-logo{width:64px;height:64px;border-radius:16px;margin-bottom:10px} .brand-logo img{width:48px;height:48px} .side-brand h2{font-size:1.2em} .side-brand p{display:none} .side-form{padding:34px 28px} }
   </style>
 </head>
 <body>
-  <div class="login-container">
-    <div class="login-header">
-      <h1>🔐 Admin Panel</h1>
-      <p>León Telecom</p>
+  <div class="card">
+    <div class="side-form">
+      <h1>Bienvenido 👋</h1>
+      <p class="sub">Ingresa tus credenciales para entrar al panel.</p>
+      <form onsubmit="handleLogin(event)">
+        <label for="username">Usuario</label>
+        <div class="field"><span>👤</span><input type="text" id="username" placeholder="tu usuario" autocomplete="username" autofocus required></div>
+        <label for="password">Contraseña</label>
+        <div class="field"><span>🔒</span><input type="password" id="password" placeholder="tu contraseña" autocomplete="current-password" required></div>
+        <button type="submit" class="btn" id="loginBtn">Entrar al panel</button>
+        <div id="alert" class="alert"></div>
+      </form>
+      <div class="foot">León Telecom · Panel de administración</div>
     </div>
-
-    <div id="alert" class="alert"></div>
-
-    <form onsubmit="handleLogin(event)">
-      <div class="form-group">
-        <label for="password">Contraseña de Administrador:</label>
-        <input 
-          type="password" 
-          id="password" 
-          placeholder="Ingresa tu contraseña"
-          required
-          autofocus
-        >
-      </div>
-
-      <button type="submit" id="loginBtn">
-        Ingresar al Panel
-      </button>
-    </form>
+    <div class="side-brand">
+      <div class="brand-logo"><img src="/images/logo.png" alt="León Telecom" onerror="this.style.display='none';this.parentElement.textContent='LT';this.parentElement.style.color='#4a1aa0';this.parentElement.style.fontWeight='800';this.parentElement.style.fontSize='1.6em'"></div>
+      <h2>León Telecom</h2>
+      <p>Internet, cámaras y más — administra tu negocio en un solo lugar.</p>
+    </div>
   </div>
 
   <script>
-    function handleLogin(event) {
-      event.preventDefault();
-
-      const password = document.getElementById('password').value;
-      const btn = document.getElementById('loginBtn');
-      const alert = document.getElementById('alert');
-
-      if (!password) {
-        alert.textContent = 'Por favor ingresa la contraseña';
-        alert.className = 'alert alert-error';
-        alert.style.display = 'block';
-        return;
-      }
-
-      btn.disabled = true;
-      btn.textContent = 'Verificando...';
-
-      fetch('/admin/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
-      })
-        .then(r => r.json())
-        .then(data => {
-          if (data.success) {
-            localStorage.setItem('adminToken', data.token);
-            window.location.href = '/admin/dashboard';
+    function handleLogin(e){
+      e.preventDefault();
+      const username=document.getElementById('username').value.trim();
+      const password=document.getElementById('password').value;
+      const btn=document.getElementById('loginBtn'); const alert=document.getElementById('alert');
+      alert.style.display='none';
+      if(!username||!password){ alert.textContent='Escribe usuario y contraseña'; alert.style.display='block'; return; }
+      btn.disabled=true; btn.textContent='Verificando…';
+      fetch('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})})
+        .then(r=>r.json())
+        .then(d=>{
+          if(d.success){
+            localStorage.setItem('adminToken',d.token);
+            localStorage.setItem('adminName',d.name||'');
+            localStorage.setItem('adminRole',d.role||'');
+            localStorage.setItem('adminPerms',JSON.stringify(d.perms||[]));
+            location.href='/admin/dashboard';
           } else {
-            alert.textContent = data.error || 'Contraseña incorrecta';
-            alert.className = 'alert alert-error';
-            alert.style.display = 'block';
-            btn.disabled = false;
-            btn.textContent = 'Ingresar al Panel';
-            document.getElementById('password').value = '';
+            alert.textContent=d.error||'Usuario o contraseña incorrectos';
+            alert.style.display='block'; btn.disabled=false; btn.textContent='Entrar al panel';
+            document.getElementById('password').value='';
           }
         })
-        .catch(e => {
-          alert.textContent = 'Error de conexión: ' + e.message;
-          alert.className = 'alert alert-error';
-          alert.style.display = 'block';
-          btn.disabled = false;
-          btn.textContent = 'Ingresar al Panel';
-        });
+        .catch(err=>{ alert.textContent='Error de conexión: '+err.message; alert.style.display='block'; btn.disabled=false; btn.textContent='Entrar al panel'; });
     }
   </script>
 </body>

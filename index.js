@@ -62,6 +62,42 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET ||
 const ADMIN_TOKEN_TTL_MS = 12 * 3600 * 1000; // los tokens del panel expiran en 12 horas
 const WISPHUB_API_URL = process.env.WISPHUB_API_URL || 'https://api.wisphub.net'; // Optional
 
+// ==================== USUARIOS DEL PANEL (roles y permisos) ====================
+const ADMIN_PERMISSIONS = ['broadcast', 'clients', 'reports', 'status', 'wisphub', 'users'];
+const ADMIN_PERM_LABELS = {
+  broadcast: 'Avisos y mensajes',
+  clients: 'Base de clientes',
+  reports: 'Soporte y reportes',
+  status: 'Estado del servicio',
+  wisphub: 'Sincronizar Wisphub',
+  users: 'Gestionar usuarios'
+};
+const adminUsers = new Map(); // username(min) → { username, name, role, salt, hash, permissions[], active, createdAt }
+
+function hashAdminPassword(password, salt) {
+  salt = salt || crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return { salt, hash };
+}
+function verifyAdminPassword(password, salt, hash) {
+  try {
+    const h = crypto.scryptSync(String(password), salt, 64).toString('hex');
+    const a = Buffer.from(h), b = Buffer.from(hash);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch (e) { return false; }
+}
+function getAdminUser(username) { return adminUsers.get(String(username || '').trim().toLowerCase()) || null; }
+function permsOf(user) { return user.role === 'superadmin' ? ADMIN_PERMISSIONS.slice() : (user.permissions || []); }
+
+// Crea el superadmin la primera vez (usuario "admin" con ADMIN_PASSWORD).
+function ensureSuperAdmin() {
+  if ([...adminUsers.values()].some(u => u.role === 'superadmin')) return;
+  const { salt, hash } = hashAdminPassword(ADMIN_PASSWORD);
+  adminUsers.set('admin', { username: 'admin', name: 'Administrador', role: 'superadmin', salt, hash, permissions: ADMIN_PERMISSIONS.slice(), active: true, createdAt: new Date().toISOString() });
+  console.log('[admin] Superadmin creado (usuario: admin / contraseña: ADMIN_PASSWORD)');
+  schedulePersist();
+}
+
 if (ADMIN_PASSWORD === 'leon123') {
   console.warn('[seguridad] ⚠️ ADMIN_PASSWORD usa el valor por defecto. Define una contraseña fuerte en Render → Environment.');
 }
@@ -534,7 +570,8 @@ function buildStateSnapshot() {
     agentActiveCases: mapToObj(agentActiveCases),
     pendingAgentRequests: Object.fromEntries(
       [...pendingAgentRequests].map(([k, v]) => [k, { ...v, since: v.since instanceof Date ? v.since.toISOString() : v.since }])
-    )
+    ),
+    adminUsers: mapToObj(adminUsers)
   };
 }
 
@@ -547,6 +584,7 @@ function hydrateState(s) {
   fill(scheduledBroadcasts, s.scheduledBroadcasts);
   fill(folios, s.folios);
   fill(agentActiveCases, s.agentActiveCases);
+  fill(adminUsers, s.adminUsers);
   if (Array.isArray(s.broadcastHistory)) { broadcastHistory.length = 0; broadcastHistory.push(...s.broadcastHistory); }
   if (s.pausedChats) for (const [k, v] of Object.entries(s.pausedChats)) pausedChats.set(k, { pausedUntil: new Date(v.pausedUntil) });
   if (s.pendingAgentRequests) for (const [k, v] of Object.entries(s.pendingAgentRequests)) pendingAgentRequests.set(k, { ...v, since: new Date(v.since) });
@@ -3101,29 +3139,28 @@ app.get('/admin/dashboard', (_req, res) => {
 });
 
 // ---- Autenticación del panel: tokens firmados (HMAC) con expiración ----
-function signAdminToken(ttlMs = ADMIN_TOKEN_TTL_MS) {
-  const payload = Buffer.from(JSON.stringify({ role: 'admin', iat: Date.now(), exp: Date.now() + ttlMs })).toString('base64url');
+function signAdminToken(user, ttlMs = ADMIN_TOKEN_TTL_MS) {
+  const payload = Buffer.from(JSON.stringify({
+    u: user.username, n: user.name, role: user.role, perms: permsOf(user),
+    iat: Date.now(), exp: Date.now() + ttlMs
+  })).toString('base64url');
   const sig = crypto.createHmac('sha256', ADMIN_SECRET).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
 
-function verifyAdminTokenValue(token) {
-  if (!token || typeof token !== 'string' || !token.includes('.')) return false;
+// Verifica firma + expiración; devuelve el payload decodificado o null.
+function decodeAdminToken(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return null;
   const [payload, sig] = token.split('.');
-  if (!payload || !sig) return false;
+  if (!payload || !sig) return null;
   const expected = crypto.createHmac('sha256', ADMIN_SECRET).update(payload).digest('base64url');
   const a = Buffer.from(sig), b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-    return data.role === 'admin' && data.exp && Date.now() < data.exp;
-  } catch (e) { return false; }
-}
-
-function constantTimeEqual(a, b) {
-  const ba = Buffer.from(String(a)), bb = Buffer.from(String(b));
-  if (ba.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ba, bb);
+    if (!data.exp || Date.now() >= data.exp) return null;
+    return data;
+  } catch (e) { return null; }
 }
 
 // Límite de intentos de login por IP (anti fuerza bruta)
@@ -3136,7 +3173,7 @@ function clientIp(req) {
   return (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').toString().split(',')[0].trim();
 }
 
-// API: Admin login
+// API: Admin login (usuario + contraseña)
 app.post('/admin/api/login', (req, res) => {
   const ip = clientIp(req);
   const now = Date.now();
@@ -3148,26 +3185,105 @@ app.post('/admin/api/login', (req, res) => {
   }
   if (now - rec.firstAt > LOGIN_WINDOW_MS) { rec.count = 0; rec.firstAt = now; }
 
-  const { password } = req.body || {};
-  if (password && constantTimeEqual(password, ADMIN_PASSWORD)) {
+  const { username, password } = req.body || {};
+  const uname = (username || 'admin').toString().trim().toLowerCase();
+  const user = getAdminUser(uname);
+
+  if (user && user.active !== false && verifyAdminPassword(password, user.salt, user.hash)) {
     loginAttempts.delete(ip);
-    return res.json({ success: true, token: signAdminToken(), expiresInHours: Math.round(ADMIN_TOKEN_TTL_MS / 3600000) });
+    return res.json({
+      success: true, token: signAdminToken(user),
+      name: user.name, role: user.role, perms: permsOf(user),
+      expiresInHours: Math.round(ADMIN_TOKEN_TTL_MS / 3600000)
+    });
   }
 
   rec.count += 1;
   if (rec.count >= LOGIN_MAX_ATTEMPTS) { rec.blockedUntil = now + LOGIN_BLOCK_MS; rec.count = 0; }
   loginAttempts.set(ip, rec);
-  return res.status(401).json({ success: false, error: 'Contraseña incorrecta' });
+  return res.status(401).json({ success: false, error: 'Usuario o contraseña incorrectos' });
 });
 
-// Middleware to verify admin token
+// Middleware: verifica token y pone req.admin = { username, name, role, perms }
 function verifyAdminToken(req, res, next) {
   const authHeader = req.headers.authorization;
   const token = req.body?.token || req.query.token || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : authHeader);
   if (!token) return res.status(401).json({ error: 'Token requerido' });
-  if (verifyAdminTokenValue(token)) return next();
-  return res.status(401).json({ error: 'Sesión expirada o token inválido' });
+  const d = decodeAdminToken(token);
+  if (!d) return res.status(401).json({ error: 'Sesión expirada o token inválido' });
+  if (d.u) {
+    const u = getAdminUser(d.u);
+    if (!u || u.active === false) return res.status(401).json({ error: 'Usuario deshabilitado' });
+  }
+  req.admin = { username: d.u, name: d.n, role: d.role, perms: d.perms || [] };
+  next();
 }
+
+// Middleware: exige un permiso específico (superadmin pasa siempre)
+function requirePermission(perm) {
+  return (req, res, next) => {
+    const a = req.admin;
+    // 'admin' = token legado (antes del sistema de usuarios) → acceso total
+    if (a && (a.role === 'superadmin' || a.role === 'admin' || (a.perms || []).includes(perm))) return next();
+    return res.status(403).json({ error: 'No tienes permiso para esta acción' });
+  };
+}
+
+// API: datos del usuario logueado + catálogo de permisos
+app.get('/admin/api/me', verifyAdminToken, (req, res) => {
+  res.json({ user: req.admin, allPermissions: ADMIN_PERMISSIONS, permLabels: ADMIN_PERM_LABELS });
+});
+
+// ==================== GESTIÓN DE USUARIOS (solo permiso "users") ====================
+app.get('/admin/api/users', verifyAdminToken, requirePermission('users'), (req, res) => {
+  const users = [...adminUsers.values()].map(u => ({
+    username: u.username, name: u.name, role: u.role,
+    permissions: permsOf(u), active: u.active !== false
+  }));
+  res.json({ users, allPermissions: ADMIN_PERMISSIONS, permLabels: ADMIN_PERM_LABELS });
+});
+
+app.post('/admin/api/users', verifyAdminToken, requirePermission('users'), (req, res) => {
+  let { username, name, password, permissions } = req.body || {};
+  username = String(username || '').trim().toLowerCase().replace(/\s+/g, '');
+  name = String(name || '').trim();
+  if (!username || !password || !name) return res.status(400).json({ error: 'Faltan datos: usuario, nombre y contraseña' });
+  if (!/^[a-z0-9._-]{3,20}$/.test(username)) return res.status(400).json({ error: 'Usuario inválido (3-20, solo letras/números)' });
+  if (getAdminUser(username)) return res.status(400).json({ error: 'Ese usuario ya existe' });
+  const perms = Array.isArray(permissions) ? permissions.filter(p => ADMIN_PERMISSIONS.includes(p) && p !== 'users') : [];
+  const { salt, hash } = hashAdminPassword(password);
+  adminUsers.set(username, { username, name, role: 'staff', salt, hash, permissions: perms, active: true, createdAt: new Date().toISOString() });
+  schedulePersist();
+  res.json({ success: true });
+});
+
+app.patch('/admin/api/users/:username', verifyAdminToken, requirePermission('users'), (req, res) => {
+  const u = getAdminUser(req.params.username);
+  if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
+  const { name, password, permissions, active } = req.body || {};
+  if (name) u.name = String(name).trim();
+  if (typeof active === 'boolean') {
+    if (u.role === 'superadmin' && active === false) return res.status(400).json({ error: 'No puedes desactivar al superadmin' });
+    u.active = active;
+  }
+  if (Array.isArray(permissions) && u.role !== 'superadmin') {
+    u.permissions = permissions.filter(p => ADMIN_PERMISSIONS.includes(p) && p !== 'users');
+  }
+  if (password) { const { salt, hash } = hashAdminPassword(password); u.salt = salt; u.hash = hash; }
+  adminUsers.set(u.username, u);
+  schedulePersist();
+  res.json({ success: true });
+});
+
+app.delete('/admin/api/users/:username', verifyAdminToken, requirePermission('users'), (req, res) => {
+  const u = getAdminUser(req.params.username);
+  if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (u.role === 'superadmin') return res.status(400).json({ error: 'No puedes eliminar al superadmin' });
+  if (req.admin.username === u.username) return res.status(400).json({ error: 'No puedes eliminarte a ti mismo' });
+  adminUsers.delete(u.username);
+  schedulePersist();
+  res.json({ success: true });
+});
 
 // API: Get user count
 app.get('/admin/api/user-count', verifyAdminToken, (req, res) => {
@@ -3175,7 +3291,7 @@ app.get('/admin/api/user-count', verifyAdminToken, (req, res) => {
 });
 
 // API: Send broadcast NOW (aviso or promo)
-app.post('/admin/api/broadcast', verifyAdminToken, async (req, res) => {
+app.post('/admin/api/broadcast', verifyAdminToken, requirePermission('broadcast'), async (req, res) => {
   const { type, label, message, imageUrl, scheduleType } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: 'Mensaje vacío' });
 
@@ -3220,7 +3336,7 @@ app.get('/admin/api/broadcasts', verifyAdminToken, (req, res) => {
 });
 
 // API: Cancel a broadcast
-app.delete('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
+app.delete('/admin/api/broadcasts/:id', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
   const bc = scheduledBroadcasts.get(req.params.id);
   if (!bc) return res.status(404).json({ error: 'No encontrado' });
   bc.status = 'cancelled';
@@ -3230,7 +3346,7 @@ app.delete('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
 });
 
 // API: Modify broadcast duration
-app.patch('/admin/api/broadcasts/:id', verifyAdminToken, (req, res) => {
+app.patch('/admin/api/broadcasts/:id', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
   const bc = scheduledBroadcasts.get(req.params.id);
   if (!bc) return res.status(404).json({ error: 'No encontrado' });
   const { scheduleType } = req.body;
@@ -3251,7 +3367,7 @@ app.get('/admin/api/broadcast-history', verifyAdminToken, (req, res) => {
 });
 
 // API: Upload image → comprime, guarda en MongoDB y sirve desde /images/db/:id
-app.post('/admin/api/upload-image', verifyAdminToken, (req, res) => {
+app.post('/admin/api/upload-image', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
   upload.single('image')(req, res, async (err) => {
     // Errores de multer (archivo muy grande, no es imagen) → respuesta JSON clara
     if (err) {
@@ -3300,7 +3416,7 @@ app.get('/admin/api/clients', verifyAdminToken, (req, res) => {
 });
 
 // API: Add manual client
-app.post('/admin/api/clients', verifyAdminToken, (req, res) => {
+app.post('/admin/api/clients', verifyAdminToken, requirePermission('clients'), (req, res) => {
   let { phone, name, notes } = req.body;
   if (!phone) return res.status(400).json({ error: 'Número requerido' });
   // Normalize number
@@ -3313,7 +3429,7 @@ app.post('/admin/api/clients', verifyAdminToken, (req, res) => {
 });
 
 // API: Delete manual client
-app.delete('/admin/api/clients/:phone', verifyAdminToken, (req, res) => {
+app.delete('/admin/api/clients/:phone', verifyAdminToken, requirePermission('clients'), (req, res) => {
   manualClients.delete(req.params.phone);
   schedulePersist();
   res.json({ success: true });
@@ -3332,7 +3448,7 @@ app.get('/admin/api/wisphub-status', verifyAdminToken, (req, res) => {
 });
 
 // API: Trigger Wisphub sync manually
-app.post('/admin/api/wisphub-sync', verifyAdminToken, async (req, res) => {
+app.post('/admin/api/wisphub-sync', verifyAdminToken, requirePermission('wisphub'), async (req, res) => {
   const result = await syncWisphubClients();
   res.json(result);
 });
@@ -3452,6 +3568,7 @@ const port = Number(process.env.PORT || 3000);
   } catch (e) {
     console.error('[persistence] Error al iniciar:', e.message);
   }
+  ensureSuperAdmin(); // crea el usuario superadmin si no existe
 
   // 2) Guardado periódico de seguridad (por si algún cambio no disparó schedulePersist)
   setInterval(() => schedulePersist(), 30000);
