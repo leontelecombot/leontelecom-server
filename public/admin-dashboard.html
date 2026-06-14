@@ -249,14 +249,24 @@
         <textarea id="msgText" placeholder="Escribe el mensaje que recibirán todos los clientes…" rows="4"></textarea>
       </div>
 
-      <div class="form-group" id="scheduleGroup" style="display:none">
-        <label>Duración del envío</label>
+      <div class="form-group">
+        <label>¿Cuándo enviar?</label>
+        <div class="radio-group">
+          <label class="radio-opt selected" id="when-now" onclick="setSendMode('now')">📨 Ahora</label>
+          <label class="radio-opt" id="when-sched" onclick="setSendMode('schedule')">📅 Programar fecha y hora</label>
+        </div>
+        <div id="schedWhen" style="display:none;margin-top:10px">
+          <input type="datetime-local" id="sendAt">
+          <div style="font-size:.78em;color:var(--muted);margin-top:5px">Se enviará automáticamente en esa fecha y hora (zona de Oaxaca).</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>¿Repetir el envío?</label>
         <div class="schedule-opts">
-          <div class="sched-opt selected" data-val="once" onclick="selectSched(this)"><strong>Una vez</strong>Ahora, sin repetir</div>
-          <div class="sched-opt" data-val="hourly_2h" onclick="selectSched(this)"><strong>Cada 2 horas</strong>Durante 2 horas</div>
-          <div class="sched-opt" data-val="hourly_6h" onclick="selectSched(this)"><strong>Cada 6 horas</strong>Durante 6 horas</div>
-          <div class="sched-opt" data-val="daily_3days" onclick="selectSched(this)"><strong>Diario — 3 días</strong>Una vez al día</div>
-          <div class="sched-opt" data-val="daily_7days" onclick="selectSched(this)"><strong>Diario — 1 semana</strong>Una vez al día × 7</div>
+          <div class="sched-opt selected" data-val="once" onclick="selectSched(this)"><strong>No repetir</strong>Un solo envío</div>
+          <div class="sched-opt" data-val="daily_3days" onclick="selectSched(this)"><strong>Diario · 3 días</strong>1 vez al día</div>
+          <div class="sched-opt" data-val="daily_7days" onclick="selectSched(this)"><strong>Diario · 1 semana</strong>1 vez al día × 7</div>
         </div>
       </div>
 
@@ -344,11 +354,9 @@
     <h3>Modificar duración</h3>
     <input type="hidden" id="modBcId">
     <div class="schedule-opts" id="modSchedOpts">
-      <div class="sched-opt selected" data-val="once" onclick="selectModSched(this)"><strong>Una vez</strong>Cancelar repetición</div>
-      <div class="sched-opt" data-val="hourly_2h" onclick="selectModSched(this)"><strong>2 horas</strong>Cada 2h</div>
-      <div class="sched-opt" data-val="hourly_6h" onclick="selectModSched(this)"><strong>6 horas</strong>Cada 6h</div>
-      <div class="sched-opt" data-val="daily_3days" onclick="selectModSched(this)"><strong>3 días</strong>Diario</div>
-      <div class="sched-opt" data-val="daily_7days" onclick="selectModSched(this)"><strong>1 semana</strong>Diario</div>
+      <div class="sched-opt selected" data-val="once" onclick="selectModSched(this)"><strong>No repetir</strong>Cancelar repetición</div>
+      <div class="sched-opt" data-val="daily_3days" onclick="selectModSched(this)"><strong>Diario · 3 días</strong>1 vez al día</div>
+      <div class="sched-opt" data-val="daily_7days" onclick="selectModSched(this)"><strong>Diario · 1 semana</strong>1 vez al día</div>
     </div>
     <div style="display:flex;gap:8px;margin-top:18px">
       <button class="btn btn-primary" onclick="applyModify()" style="flex:1">Guardar</button>
@@ -611,13 +619,28 @@
     document.getElementById('opt-aviso').className = 'radio-opt' + (type==='aviso'?' selected':'');
     document.getElementById('opt-promo').className = 'radio-opt' + (type==='promo'?' selected':'');
     document.getElementById('imageGroup').style.display = type==='promo' ? '' : 'none';
-    document.getElementById('scheduleGroup').style.display = type==='promo' ? '' : 'none';
   }
 
   function selectSched(el) {
     document.querySelectorAll('.schedule-opts .sched-opt').forEach(e => e.classList.remove('selected'));
     el.classList.add('selected');
     currentSched = el.dataset.val;
+  }
+
+  // Ahora vs Programar (calendario)
+  let sendMode = 'now';
+  function setSendMode(mode) {
+    sendMode = mode;
+    document.getElementById('when-now').className = 'radio-opt' + (mode==='now'?' selected':'');
+    document.getElementById('when-sched').className = 'radio-opt' + (mode==='schedule'?' selected':'');
+    document.getElementById('schedWhen').style.display = mode==='schedule' ? '' : 'none';
+    if (mode==='schedule') {
+      const inp = document.getElementById('sendAt');
+      const d = new Date(Date.now() + 60*60*1000); // por defecto: dentro de 1 hora
+      const pad = n => String(n).padStart(2,'0');
+      inp.min = (()=>{ const m=new Date(); return `${m.getFullYear()}-${pad(m.getMonth()+1)}-${pad(m.getDate())}T${pad(m.getHours())}:${pad(m.getMinutes())}`; })();
+      if (!inp.value) inp.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
   }
 
   const QUICK_MSGS = {
@@ -647,21 +670,39 @@
     const label = document.getElementById('msgLabel').value.trim() || message.substring(0,40);
     const imageUrl = document.getElementById('msgImageUrl').value.trim();
     if (!message) { showAlert('formAlert', 'Escribe un mensaje', 'error'); return; }
-    if (!confirm(`¿Enviar a todos los clientes registrados?`)) return;
+
+    // Fecha/hora programada (si aplica)
+    let sendAtIso = null;
+    if (sendMode === 'schedule') {
+      const v = document.getElementById('sendAt').value;
+      if (!v) { showAlert('formAlert', 'Elige la fecha y hora del envío', 'error'); return; }
+      const dt = new Date(v);
+      if (isNaN(dt.getTime()) || dt.getTime() < Date.now() + 30000) { showAlert('formAlert', 'La fecha/hora debe ser en el futuro', 'error'); return; }
+      sendAtIso = dt.toISOString();
+    }
+
+    const cuando = sendAtIso ? `programar para ${new Date(sendAtIso).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'})}` : 'enviar AHORA a todos';
+    if (!confirm(`¿Confirmas ${cuando}?`)) return;
     document.getElementById('loading').style.display = 'block';
     showAlert('formAlert', '', '');
     try {
-      const body = { type: currentType, label, message, imageUrl: imageUrl || null, scheduleType: currentType === 'promo' ? currentSched : 'once' };
+      const body = { type: currentType, label, message, imageUrl: imageUrl || null, scheduleType: currentSched, sendAt: sendAtIso };
       const r = await fetchAuth('/admin/api/broadcast', { method: 'POST', body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error);
-      const schedLabel = currentType === 'promo' && currentSched !== 'once' ? ' (programado)' : '';
-      showAlert('formAlert', `✅ Enviado a ${d.result?.sent || 0} clientes${schedLabel}`, 'success');
+      if (d.scheduled) {
+        showAlert('formAlert', `📅 Programado para ${new Date(d.sendAt).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'})}`, 'success');
+      } else {
+        const rep = currentSched !== 'once' ? ' (se repetirá)' : '';
+        showAlert('formAlert', `✅ Enviado a ${d.result?.sent || 0} clientes${rep}`, 'success');
+      }
       document.getElementById('msgText').value = '';
       document.getElementById('msgLabel').value = '';
       document.getElementById('msgImageUrl').value = '';
       document.getElementById('imgPreview').style.display = 'none';
       document.getElementById('imgFileName').textContent = 'Sin imagen seleccionada';
+      document.getElementById('sendAt').value = '';
+      setSendMode('now');
       loadStats(); loadScheduled(); loadHistory();
     } catch(e) { showAlert('formAlert', '❌ Error: ' + e.message, 'error'); }
     finally { document.getElementById('loading').style.display = 'none'; }

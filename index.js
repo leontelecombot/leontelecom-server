@@ -3290,27 +3290,38 @@ app.get('/admin/api/user-count', verifyAdminToken, (req, res) => {
   res.json({ count: dataManager.getUserCount() });
 });
 
-// API: Send broadcast NOW (aviso or promo)
+// API: Send broadcast — ahora o programado a fecha/hora (aviso o promo)
 app.post('/admin/api/broadcast', verifyAdminToken, requirePermission('broadcast'), async (req, res) => {
-  const { type, label, message, imageUrl, scheduleType } = req.body;
+  const { type, label, message, imageUrl, scheduleType, sendAt } = req.body;
   if (!message?.trim()) return res.status(400).json({ error: 'Mensaje vacío' });
 
   const id = generateBroadcastId();
   const now = new Date();
   const imageUrls = imageUrl ? [imageUrl] : [];
 
-  // Calculate endAt and intervalMs based on scheduleType
-  let intervalMs = null, endAt = null;
-  if (scheduleType === 'daily_3days') { intervalMs = 24*3600000; endAt = new Date(now.getTime() + 3*24*3600000).toISOString(); }
-  else if (scheduleType === 'daily_7days') { intervalMs = 24*3600000; endAt = new Date(now.getTime() + 7*24*3600000).toISOString(); }
-  else if (scheduleType === 'hourly_2h') { intervalMs = 2*3600000; endAt = new Date(now.getTime() + 2*3600000).toISOString(); }
-  else if (scheduleType === 'hourly_6h') { intervalMs = 6*3600000; endAt = new Date(now.getTime() + 6*3600000).toISOString(); }
-  // else 'once': no interval, no endAt
+  // ¿Programado a una fecha/hora futura? (al menos ~20s adelante)
+  const when = sendAt ? new Date(sendAt) : null;
+  const isScheduled = !!(when && !isNaN(when.getTime()) && when.getTime() > Date.now() + 20000);
+  const base = isScheduled ? when : now;
 
-  const bc = { id, type: type || 'aviso', label: label || message.substring(0, 40), message, imageUrls, scheduleType, intervalMs, endAt, status: 'active', sentCount: 0, createdAt: now.toISOString(), nextSendAt: now.toISOString() };
+  // Repetición (endAt/intervalMs) calculada desde la fecha base (ahora o programada)
+  let intervalMs = null, endAt = null;
+  if (scheduleType === 'daily_3days') { intervalMs = 24*3600000; endAt = new Date(base.getTime() + 3*24*3600000).toISOString(); }
+  else if (scheduleType === 'daily_7days') { intervalMs = 24*3600000; endAt = new Date(base.getTime() + 7*24*3600000).toISOString(); }
+  else if (scheduleType === 'hourly_2h') { intervalMs = 2*3600000; endAt = new Date(base.getTime() + 2*3600000).toISOString(); }
+  else if (scheduleType === 'hourly_6h') { intervalMs = 6*3600000; endAt = new Date(base.getTime() + 6*3600000).toISOString(); }
+  // else 'once': sin repetición
+
+  const bc = { id, type: type || 'aviso', label: label || message.substring(0, 40), message, imageUrls, scheduleType, intervalMs, endAt, status: 'active', sentCount: 0, createdAt: now.toISOString(), nextSendAt: base.toISOString() };
   scheduledBroadcasts.set(id, bc);
 
-  // Send immediately (scheduler will pick it up, but also trigger now)
+  // Programado a futuro: NO se envía ahora; el scheduler lo manda a la hora indicada.
+  if (isScheduled) {
+    schedulePersist();
+    return res.json({ success: true, id, scheduled: true, sendAt: bc.nextSendAt });
+  }
+
+  // Envío inmediato (el scheduler también lo tomaría, pero lo disparamos ya)
   try {
     const result = await sendBroadcastSmart(message, imageUrls);
     bc.sentCount = 1;
