@@ -344,7 +344,13 @@ async function syncWisphubClients() {
         if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
         if (phone.length < 12) continue; // teléfono inválido
         const name = [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.razon_social || c.usuario || rawPhone;
-        wisphubClients.set(phone, { name, phone, status: c.estado, wisphubId: c.id_servicio || c.id, source: 'wisphub' });
+        wisphubClients.set(phone, {
+          name, phone, status: c.estado, wisphubId: c.id_servicio || c.id, source: 'wisphub',
+          // Datos de cuenta para la búsqueda/estado de cuenta en el panel:
+          saldo: c.saldo, fechaCorte: c.fecha_corte,
+          plan: (c.plan_internet && c.plan_internet.nombre) || c.plan_internet || '',
+          precioPlan: c.precio_plan, estadoFacturas: c.estado_facturas, usuario: c.usuario
+        });
         synced++;
       }
       offset += items.length;
@@ -573,7 +579,8 @@ function buildStateSnapshot() {
       [...pendingAgentRequests].map(([k, v]) => [k, { ...v, since: v.since instanceof Date ? v.since.toISOString() : v.since }])
     ),
     adminUsers: mapToObj(adminUsers),
-    products: products
+    products: products,
+    stats: stats
   };
 }
 
@@ -591,6 +598,10 @@ function hydrateState(s) {
   if (Array.isArray(s.products) && s.products.length) {
     products.length = 0;
     products.push(...s.products.map(p => ({ showWeb: true, showBot: true, active: true, ...p })));
+  }
+  if (s.stats && typeof s.stats === 'object') {
+    stats.productHits = s.stats.productHits || {};
+    stats.daily = s.stats.daily || {};
   }
   if (Array.isArray(s.broadcastHistory)) { broadcastHistory.length = 0; broadcastHistory.push(...s.broadcastHistory); }
   if (s.pausedChats) for (const [k, v] of Object.entries(s.pausedChats)) pausedChats.set(k, { pausedUntil: new Date(v.pausedUntil) });
@@ -2135,6 +2146,27 @@ async function sendWelcomeMenu(chatId, sendMsg) {
   ].join('\n'));
 }
 
+// ==================== MÉTRICAS LIGERAS ====================
+// Se persisten en state.stats. productHits: cuántas veces se mostró cada producto
+// porque el cliente lo pidió. daily: conversaciones únicas por día (clave YYYY-MM-DD).
+let stats = { productHits: {}, daily: {} };
+function mxDayKey(d) {
+  return (d || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }); // YYYY-MM-DD
+}
+function trackProductHit(id) {
+  if (!id) return;
+  stats.productHits[id] = (stats.productHits[id] || 0) + 1;
+  schedulePersist();
+}
+function trackConversation(chatId) {
+  const day = mxDayKey();
+  const prof = getProfile(chatId);
+  if (prof && prof.lastConvDay === day) return; // ya se contó este chat hoy
+  stats.daily[day] = (stats.daily[day] || 0) + 1;
+  updateProfile(chatId, { lastConvDay: day });
+  schedulePersist();
+}
+
 // ==================== PROMO POR INACTIVIDAD ====================
 // Si el cliente deja de responder unos minutos, le mandamos UN producto destacado
 // (dentro de la ventana de 24h de WhatsApp, así no requiere plantilla).
@@ -2313,6 +2345,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const prodHits = findProducts(text);
       if (prodHits.length && !isTechnicalIssue(text) && !isAgentRequest(text) && !isMigrationRequest(text) && !isCameraRequest(text) && !isPlanRequest(text) && !wantsInternet(text)) {
         for (const p of prodHits.slice(0, 3)) {
+          trackProductHit(p.id);
           await sendMsg(chatId, `🛍️ *${p.name}* — ${p.price}`, [getProductImageUrl(p)]);
         }
         await sendMsg(chatId, '¿Te interesa alguno? Te puedo pasar con un asesor para apartarlo. 😊');
@@ -2920,6 +2953,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const prodMatches = findProducts(text);
     if (prodMatches.length && !isTechnicalIssue(text) && !isAgentRequest(text) && !isPlanRequest(text) && !isMigrationRequest(text) && !isCameraRequest(text)) {
       for (const p of prodMatches.slice(0, 3)) {
+        trackProductHit(p.id);
         await sendMsg(chatId, `🛍️ *${p.name}* — ${p.price}`, [getProductImageUrl(p)]);
       }
       await sendMsg(chatId, '¿Quieres apartar alguno? Te puedo pasar con un asesor. 😊');
@@ -3117,6 +3151,9 @@ app.post('/webhook/whatsapp', async (req, res) => {
   const contactName = value?.contacts?.[0]?.profile?.name || 'Usuario';
 
   console.log(`[WhatsApp] Incoming: type=${msg.type} from=${from} (raw=${rawFrom}) name=${contactName}`);
+
+  // Métrica: cuenta conversaciones únicas por día (no cuenta al asesor).
+  if (!AGENT_WHATSAPP_NUMBER || from !== AGENT_WHATSAPP_NUMBER) { try { trackConversation(from); } catch (_) {} }
 
   // Save WhatsApp profile name if we don't know this client yet
   if (contactName && contactName !== 'Usuario') {
@@ -3410,6 +3447,87 @@ app.get('/api/products', (req, res) => {
     cat: p.cat || 'Otros', img: getProductImageUrl(p), desc: p.desc || ''
   }));
   res.json({ products: list, updatedAt: Date.now() });
+});
+
+// Normaliza un cliente de Wisphub a los campos del estado de cuenta.
+function mapWisphubAccount(c) {
+  let tel = String(c.telefono || c.celular || '').replace(/\D/g, '');
+  if (tel.length === 10) tel = '52' + tel;
+  return {
+    name: [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.razon_social || c.usuario || '',
+    phone: tel,
+    status: c.estado,
+    saldo: c.saldo,
+    fechaCorte: c.fecha_corte,
+    plan: (c.plan_internet && c.plan_internet.nombre) || c.plan_internet || '',
+    precioPlan: c.precio_plan,
+    estadoFacturas: c.estado_facturas
+  };
+}
+
+// API: Buscar cliente + estado de cuenta.
+// Por NÚMERO → consulta Wisphub EN VIVO (datos frescos, incluye suspendidos).
+// Por NOMBRE → busca en lo sincronizado (clientes activos).
+app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ results: [], source: 'none' });
+  const digits = q.replace(/\D/g, '');
+
+  // Teléfono → consulta en vivo a Wisphub por el campo telefono (10 dígitos).
+  if (digits.length >= 7 && WISPHUB_API_KEY) {
+    const tel = digits.slice(-10);
+    try {
+      const r = await fetch(`${WISPHUB_API_URL}/api/clientes/?format=json&limit=10&telefono=${tel}`,
+        { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } });
+      if (r.ok) {
+        const d = await r.json();
+        const items = d.results || (Array.isArray(d) ? d : []);
+        const results = items.map(mapWisphubAccount);
+        return res.json({ results, source: 'wisphub-live', total: results.length });
+      }
+    } catch (e) { /* si falla, cae al respaldo en memoria */ }
+  }
+
+  // Nombre (o respaldo) → busca en los clientes sincronizados.
+  const ql = q.toLowerCase();
+  const out = [];
+  for (const [phone, c] of wisphubClients.entries()) {
+    const byPhone = digits.length >= 3 && phone.includes(digits);
+    const byName = String(c.name || '').toLowerCase().includes(ql);
+    if (byPhone || byName) {
+      out.push({
+        name: c.name, phone, status: c.status, saldo: c.saldo,
+        fechaCorte: c.fechaCorte, plan: c.plan, precioPlan: c.precioPlan,
+        estadoFacturas: c.estadoFacturas
+      });
+      if (out.length >= 20) break;
+    }
+  }
+  res.json({ results: out, source: 'sync', lastSync: lastWisphubSync, total: out.length });
+});
+
+// API: Métricas (productos más solicitados, conversaciones/día, avisos/día)
+app.get('/admin/api/metrics', verifyAdminToken, (req, res) => {
+  const nameById = {};
+  for (const p of products) nameById[p.id] = p.name;
+  const topProducts = Object.entries(stats.productHits)
+    .map(([id, count]) => ({ id, name: nameById[id] || id, count }))
+    .sort((a, b) => b.count - a.count).slice(0, 10);
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    days.push(d.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }));
+  }
+  const conversations = days.map(k => ({ date: k, count: stats.daily[k] || 0 }));
+  const bcByDay = {};
+  for (const h of broadcastHistory) {
+    if (!h.sentAt) continue;
+    const k = new Date(h.sentAt).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const sent = (h.result && typeof h.result.sent === 'number') ? h.result.sent : 0;
+    bcByDay[k] = (bcByDay[k] || 0) + sent;
+  }
+  const broadcasts = days.map(k => ({ date: k, count: bcByDay[k] || 0 }));
+  res.json({ topProducts, conversations, broadcasts });
 });
 
 // API: Get user count

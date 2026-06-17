@@ -196,6 +196,7 @@
   <button class="nav-item" data-page="avisos" data-perm="broadcast" onclick="goTo('avisos')">📢 Avisos y mensajes</button>
   <button class="nav-item" data-page="clientes" data-perm="clients" onclick="goTo('clientes')">👥 Clientes</button>
   <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
+  <button class="nav-item" data-page="metricas" onclick="goTo('metricas')">📊 Métricas</button>
   <button class="nav-item" data-page="usuarios" data-perm="users" onclick="goTo('usuarios')">🔑 Usuarios</button>
 </nav>
 
@@ -332,6 +333,14 @@
   <div class="card">
     <div class="card-header"><span class="hico">👥</span> Base de Clientes <span id="clientTotal" style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
     <div class="card-body">
+      <div class="lookup-box" style="margin-bottom:16px;padding:14px;background:#faf8ff;border:1px solid var(--line);border-radius:12px">
+        <div style="font-weight:600;font-size:.92em;margin-bottom:8px">🔎 Buscar cliente / estado de cuenta</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="lookupQ" placeholder="Número o nombre del cliente…" style="flex:1;min-width:180px" onkeydown="if(event.key==='Enter')lookupClient()">
+          <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="lookupClient()">Buscar</button>
+        </div>
+        <div id="lookupResult" style="margin-top:12px"></div>
+      </div>
       <div class="wisphub-bar" id="wisphubBar">
         <div style="font-size:.84em"><strong>🔗 Wisphub</strong><span id="wisphubStatus" style="margin-left:8px;color:var(--muted)">Verificando...</span></div>
         <button class="btn btn-edit btn-sm" onclick="triggerWisphubSync()" id="wisphubSyncBtn">🔄 Sincronizar ahora</button>
@@ -387,6 +396,24 @@
 </div>
 
 </section><!-- /page-productos -->
+
+<!-- ===== PÁGINA: Métricas ===== -->
+<section class="page" id="page-metricas">
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">📊</span> Métricas <span style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px">últimos 14 días</span></div>
+      <div class="card-body">
+        <h4 style="margin:0 0 8px;font-size:.95em">🛍️ Productos más solicitados</h4>
+        <div id="mTopProducts"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">💬 Conversaciones por día</h4>
+        <div id="mConversations"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">📢 Mensajes enviados por día (avisos/promos)</h4>
+        <div id="mBroadcasts"><div class="empty">Cargando…</div></div>
+        <button class="btn btn-edit btn-sm" style="margin-top:14px;width:auto;padding:9px 16px" onclick="loadMetrics()">🔄 Actualizar</button>
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- ===== Modales (overlays, fuera de las páginas) ===== -->
 <!-- Product create/edit modal -->
@@ -513,7 +540,7 @@
   }
 
   // ===== Navegación por páginas (menú superior) =====
-  const PAGES = ['inicio','avisos','clientes','productos','usuarios'];
+  const PAGES = ['inicio','avisos','clientes','productos','metricas','usuarios'];
   function goTo(page, fromHistory){
     if(!PAGES.includes(page)) page='inicio';
     // Si la página requiere un permiso que no tienes, regresa a Inicio.
@@ -532,6 +559,7 @@
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
+    else if(page==='metricas'){ loadMetrics(); }
     else if(page==='usuarios' && can('users')){ loadUsers(); }
   }
 
@@ -707,6 +735,57 @@
       if(d.url){ document.getElementById('pImg').value=d.url; document.getElementById('pImgName').textContent='✅ '+file.name; }
       else throw new Error(d.error||'Error al subir');
     }catch(e){ document.getElementById('pImgName').textContent='❌ '+e.message; }
+  }
+
+  // ===== Buscar cliente + estado de cuenta =====
+  async function lookupClient(){
+    const q=document.getElementById('lookupQ').value.trim();
+    const box=document.getElementById('lookupResult');
+    if(q.length<2){ box.innerHTML='<div style="font-size:.85em;color:var(--muted)">Escribe al menos 2 caracteres.</div>'; return; }
+    box.innerHTML='<div style="font-size:.85em;color:var(--muted)">Buscando…</div>';
+    try{
+      const r=await fetchAuth('/admin/api/client-lookup?q='+encodeURIComponent(q));
+      const d=await r.json();
+      if(!d.results||!d.results.length){ box.innerHTML='<div class="empty">Sin resultados. (La búsqueda usa los datos del último sync de Wisphub.)</div>'; return; }
+      const sync=d.lastSync?(' · datos al '+new Date(d.lastSync).toLocaleString('es-MX')):'';
+      box.innerHTML=d.results.map(accountCard).join('')+'<div style="font-size:.76em;color:var(--muted);margin-top:4px">'+d.results.length+' resultado(s)'+sync+'</div>';
+    }catch(e){ box.innerHTML='<div class="empty">Error al buscar.</div>'; }
+  }
+  function accountCard(c){
+    const activo = String(c.status)==='1' || /activ/i.test(String(c.status||''));
+    const estadoBadge = activo
+      ? '<span class="badge" style="background:#e7f8ee;color:#1a7f4b">🟢 Activo</span>'
+      : '<span class="badge" style="background:#fdeaea;color:#dc2626">🔴 '+esc(String(c.status||'Inactivo'))+'</span>';
+    const saldo = (c.saldo!=null && c.saldo!=='') ? ('$'+esc(String(c.saldo))) : '—';
+    const fact = (c.estadoFacturas!=null && c.estadoFacturas!=='') ? esc(String(c.estadoFacturas)) : '—';
+    return '<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:8px">'
+      + '<div style="font-weight:600">'+esc(c.name||'—')+' '+estadoBadge+'</div>'
+      + '<div style="font-size:.84em;color:var(--muted);margin:4px 0">📱 '+esc(c.phone||'—')+' · Plan: '+esc(c.plan||'—')+(c.precioPlan?(' ($'+esc(String(c.precioPlan))+')'):'')+'</div>'
+      + '<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:.9em;margin-top:6px">'
+      +   '<div>💰 Saldo: <strong>'+saldo+'</strong></div>'
+      +   '<div>📅 Corte: <strong>'+esc(c.fechaCorte||'—')+'</strong></div>'
+      +   '<div>🧾 Facturas: <strong>'+fact+'</strong></div>'
+      + '</div></div>';
+  }
+
+  // ===== Métricas =====
+  async function loadMetrics(){
+    try{
+      const r=await fetchAuth('/admin/api/metrics'); const d=await r.json();
+      renderBars('mTopProducts', (d.topProducts||[]).map(p=>({label:p.name,value:p.count})));
+      renderBars('mConversations', (d.conversations||[]).map(x=>({label:x.date.slice(5),value:x.count})));
+      renderBars('mBroadcasts', (d.broadcasts||[]).map(x=>({label:x.date.slice(5),value:x.count})));
+    }catch(e){}
+  }
+  function renderBars(id, data){
+    const el=document.getElementById(id); if(!el) return;
+    if(!data.length || data.every(d=>!d.value)){ el.innerHTML='<div class="empty">Sin datos todavía.</div>'; return; }
+    const max=Math.max(1,...data.map(d=>d.value));
+    el.innerHTML=data.map(d=>'<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:.84em">'
+      + '<div style="width:130px;text-align:right;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(d.label)+'">'+esc(d.label)+'</div>'
+      + '<div style="flex:1;background:#f0eef8;border-radius:6px;overflow:hidden">'
+      +   '<div style="width:'+Math.max(d.value/max*100, d.value?4:0)+'%;background:linear-gradient(90deg,#5e23c4,#7c3aed);color:#fff;padding:3px 8px;border-radius:6px;text-align:right;min-width:22px">'+d.value+'</div>'
+      + '</div></div>').join('');
   }
 
   async function loadStats() {
