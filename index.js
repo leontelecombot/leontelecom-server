@@ -3218,13 +3218,22 @@ app.get('/admin', (_req, res) => {
   res.redirect('/admin/login');
 });
 
+// Evita que el navegador cachee el HTML del panel (siempre la última versión).
+function noCacheHtml(res) {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+}
+
 // Admin login page
 app.get('/admin/login', (_req, res) => {
+  noCacheHtml(res);
   res.sendFile(path.join(__dirname, 'public/admin-login.html'));
 });
 
 // Admin dashboard page — auth handled client-side via localStorage token
 app.get('/admin/dashboard', (_req, res) => {
+  noCacheHtml(res);
   res.sendFile(path.join(__dirname, 'public/admin-dashboard.html'));
 });
 
