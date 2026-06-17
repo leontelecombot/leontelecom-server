@@ -114,6 +114,15 @@
     .section-tab.active{background:#fff;color:var(--brand);box-shadow:0 1px 5px rgba(0,0,0,.08)}
     .tab-panel{display:none}
     .tab-panel.active{display:block}
+    /* Menú superior de páginas */
+    .topnav{display:flex;gap:6px;flex-wrap:wrap;background:#fff;padding:10px 16px;border-bottom:1px solid var(--line);box-shadow:0 2px 10px rgba(44,10,107,.06);overflow-x:auto}
+    .nav-item{border:none;background:transparent;color:var(--muted);font-weight:600;font-size:.9em;padding:9px 15px;border-radius:9px;cursor:pointer;transition:.15s;white-space:nowrap}
+    .nav-item:hover{background:#f4f2fb;color:var(--brand)}
+    .nav-item.active{background:linear-gradient(120deg,#5e23c4,#3a0ca3);color:#fff;box-shadow:0 4px 12px rgba(74,26,160,.3)}
+    /* Páginas (una visible a la vez) */
+    .page{display:none;animation:pageIn .22s ease}
+    .page.active{display:block}
+    @keyframes pageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
     /* Tables */
     .data-table{width:100%;border-collapse:collapse;font-size:.85em}
@@ -181,6 +190,18 @@
   </div>
 </div>
 
+<!-- Menú superior de navegación (cada opción = su propia página) -->
+<nav class="topnav" id="topnav">
+  <button class="nav-item active" data-page="inicio" onclick="goTo('inicio')">🏠 Inicio</button>
+  <button class="nav-item" data-page="avisos" data-perm="broadcast" onclick="goTo('avisos')">📢 Avisos y mensajes</button>
+  <button class="nav-item" data-page="clientes" data-perm="clients" onclick="goTo('clientes')">👥 Clientes</button>
+  <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
+  <button class="nav-item" data-page="usuarios" data-perm="users" onclick="goTo('usuarios')">🔑 Usuarios</button>
+</nav>
+
+<!-- ===== PÁGINA: Inicio ===== -->
+<section class="page active" id="page-inicio">
+
 <!-- Service Status Banner -->
 <div class="status-bar online" id="statusBar">
   <div style="display:flex;align-items:center">
@@ -198,6 +219,11 @@
     <div class="kpi"><div class="k-ico g">🟢</div><div><div class="k-num" id="activeNum">0</div><div class="k-lbl">Envíos programados</div></div></div>
   </div>
 </div>
+
+</section><!-- /page-inicio -->
+
+<!-- ===== PÁGINA: Avisos y mensajes ===== -->
+<section class="page" id="page-avisos">
 
 <div class="main">
 
@@ -296,6 +322,11 @@
 
 </div>
 
+</section><!-- /page-avisos -->
+
+<!-- ===== PÁGINA: Clientes ===== -->
+<section class="page" id="page-clientes">
+
 <!-- Clients section -->
 <div class="wrap" style="margin-bottom:28px" data-perm="clients">
   <div class="card">
@@ -317,6 +348,11 @@
   </div>
 </div>
 
+</section><!-- /page-clientes -->
+
+<!-- ===== PÁGINA: Usuarios ===== -->
+<section class="page" id="page-usuarios">
+
 <!-- Users & permissions section (solo permiso "users") -->
 <div class="wrap" style="margin-bottom:28px;display:none" data-perm="users" id="usersSection">
   <div class="card">
@@ -328,6 +364,11 @@
     </div>
   </div>
 </div>
+
+</section><!-- /page-usuarios -->
+
+<!-- ===== PÁGINA: Productos ===== -->
+<section class="page" id="page-productos">
 
 <!-- Products section (permiso "products") -->
 <div class="wrap" style="margin-bottom:28px;display:none" data-perm="products" id="productsSection">
@@ -345,6 +386,9 @@
   </div>
 </div>
 
+</section><!-- /page-productos -->
+
+<!-- ===== Modales (overlays, fuera de las páginas) ===== -->
 <!-- Product create/edit modal -->
 <div id="productModal" class="modal-bg">
   <div class="modal-card" style="width:500px;max-height:92vh;overflow:auto">
@@ -462,12 +506,33 @@
     // refrescar permisos reales desde el servidor
     try { const r=await fetchAuth('/admin/api/me'); const d=await r.json(); if(d.user){ MY={name:d.user.name,role:d.user.role,perms:d.user.perms||[]}; } } catch(e){}
     applyPermissions();
-    loadStats();
-    if(can('broadcast')){ loadScheduled(); loadHistory(); }
-    if(can('clients')){ loadClients(); }
-    if(can('wisphub')){ loadWisphubStatus(); }
-    if(can('products')){ loadProducts(); }
-    if(can('users')){ loadUsers(); }
+    loadStats();                       // KPIs de la página Inicio
+    // Abre la página del #hash (o Inicio) y escucha el botón "atrás" del navegador.
+    goTo((location.hash||'').replace('#','') || 'inicio', true);
+    window.addEventListener('popstate', () => goTo((location.hash||'').replace('#','') || 'inicio', true));
+  }
+
+  // ===== Navegación por páginas (menú superior) =====
+  const PAGES = ['inicio','avisos','clientes','productos','usuarios'];
+  function goTo(page, fromHistory){
+    if(!PAGES.includes(page)) page='inicio';
+    // Si la página requiere un permiso que no tienes, regresa a Inicio.
+    const nav=document.querySelector('.nav-item[data-page="'+page+'"]');
+    const perm=nav?nav.getAttribute('data-perm'):null;
+    if(perm && !can(perm)) page='inicio';
+    document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active', p.id==='page-'+page));
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.getAttribute('data-page')===page));
+    if(!fromHistory){ try{ history.pushState({page}, '', '#'+page); }catch(e){ location.hash=page; } }
+    loadPage(page);
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+  // Carga (refresca) los datos de cada página solo cuando se abre.
+  function loadPage(page){
+    if(page==='inicio'){ loadStats(); }
+    else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); }
+    else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
+    else if(page==='productos' && can('products')){ loadProducts(); }
+    else if(page==='usuarios' && can('users')){ loadUsers(); }
   }
 
   // ===== Usuarios y permisos =====
