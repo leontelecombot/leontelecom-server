@@ -329,6 +329,53 @@
   </div>
 </div>
 
+<!-- Products section (permiso "products") -->
+<div class="wrap" style="margin-bottom:28px;display:none" data-perm="products" id="productsSection">
+  <div class="card">
+    <div class="card-header"><span class="hico">🛍️</span> Productos (web y bot) <span id="prodTotal" style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
+    <div class="card-body">
+      <div id="prodAlert" class="alert"></div>
+      <p style="font-size:.85em;color:var(--muted);margin-bottom:12px">Lo que guardes aquí se actualiza en la <strong>página web</strong> y en el <strong>bot de WhatsApp</strong> al instante. Usa las casillas para elegir dónde aparece cada producto.</p>
+      <div style="margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="openProductModal()">➕ Nuevo producto</button>
+        <button class="btn btn-edit" style="width:auto;padding:11px 14px" onclick="loadProducts()">🔄 Actualizar</button>
+      </div>
+      <div id="productsList" style="overflow-x:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Product create/edit modal -->
+<div id="productModal" class="modal-bg">
+  <div class="modal-card" style="width:500px;max-height:92vh;overflow:auto">
+    <h3 id="productModalTitle">Nuevo producto</h3>
+    <input type="hidden" id="pEditId">
+    <div class="form-group"><label>Nombre</label><input type="text" id="pName" placeholder="ej: Roku Streaming Stick 4K"></div>
+    <div style="display:flex;gap:10px">
+      <div class="form-group" style="flex:1"><label>Precio</label><input type="text" id="pPrice" placeholder="ej: 720"></div>
+      <div class="form-group" style="flex:1"><label>Categoría</label><input type="text" id="pCat" list="catList" placeholder="ej: Streaming"><datalist id="catList"></datalist></div>
+    </div>
+    <div class="form-group"><label>Palabras clave del bot <span style="color:var(--muted);font-weight:400">(separadas por coma — para que el bot lo encuentre)</span></label><input type="text" id="pKw" placeholder="ej: roku, streaming 4k, roku plus"></div>
+    <div class="form-group"><label>Descripción <span style="color:var(--muted);font-weight:400">(opcional)</span></label><input type="text" id="pDesc" placeholder="breve descripción"></div>
+    <div class="form-group">
+      <label>Imagen</label>
+      <input type="file" accept="image/*" id="pImgFile" onchange="handleProductImage(this)">
+      <span id="pImgName" style="font-size:.82em;color:var(--muted);display:block;margin-top:4px"></span>
+      <input type="hidden" id="pImg">
+      <img id="pImgPreview" style="display:none;max-width:130px;margin-top:8px;border-radius:8px;border:1px solid var(--line)">
+    </div>
+    <div class="form-group" style="display:flex;gap:18px;flex-wrap:wrap;background:#faf8ff;padding:11px 13px;border-radius:10px">
+      <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.9em"><input type="checkbox" id="pShowWeb" checked> 🌐 Mostrar en la web</label>
+      <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.9em"><input type="checkbox" id="pShowBot" checked> 🤖 Mostrar en el bot</label>
+      <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.9em"><input type="checkbox" id="pActive" checked> ✅ Activo</label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn btn-primary" onclick="saveProduct()" style="flex:1">Guardar</button>
+      <button class="btn" onclick="closeProductModal()" style="background:#eee;color:var(--muted);flex:1">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <!-- User create/edit modal -->
 <div id="userModal" class="modal-bg">
   <div class="modal-card" style="width:440px">
@@ -419,6 +466,7 @@
     if(can('broadcast')){ loadScheduled(); loadHistory(); }
     if(can('clients')){ loadClients(); }
     if(can('wisphub')){ loadWisphubStatus(); }
+    if(can('products')){ loadProducts(); }
     if(can('users')){ loadUsers(); }
   }
 
@@ -491,6 +539,109 @@
     if(!confirm('¿Eliminar el usuario "'+username+'"?')) return;
     try{ const r=await fetchAuth('/admin/api/users/'+username,{method:'DELETE'}); const d=await r.json(); if(!r.ok) throw new Error(d.error); loadUsers(); }
     catch(e){ showAlert('userAlert','❌ '+e.message,'error'); }
+  }
+
+  // ===== Productos (web y bot) =====
+  let PRODUCTS_DATA = [], PROD_CATS = [];
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  async function loadProducts(){
+    try{
+      const r=await fetchAuth('/admin/api/products'); const d=await r.json();
+      PRODUCTS_DATA=d.products||[]; PROD_CATS=d.categories||[];
+      const dl=document.getElementById('catList'); if(dl) dl.innerHTML=PROD_CATS.map(c=>`<option value="${esc(c)}">`).join('');
+      const tot=document.getElementById('prodTotal'); if(tot) tot.textContent=PRODUCTS_DATA.length+' productos';
+      const el=document.getElementById('productsList');
+      if(!PRODUCTS_DATA.length){ el.innerHTML='<div class="empty">Sin productos. Agrega el primero con “➕ Nuevo producto”.</div>'; return; }
+      el.innerHTML=`<table class="data-table"><thead><tr><th></th><th>Producto</th><th>Precio</th><th>Categoría</th><th title="Visible en la página web">🌐 Web</th><th title="Visible en el bot de WhatsApp">🤖 Bot</th><th></th></tr></thead><tbody>${
+        PRODUCTS_DATA.map((p,i)=>{
+          const inact=p.active===false?' <span class="badge" style="background:#fdeaea;color:#dc2626">inactivo</span>':'';
+          const thumb=p.imgUrl?`<img src="${esc(p.imgUrl)}" alt="" style="width:42px;height:42px;object-fit:cover;border-radius:6px" onerror="this.style.visibility='hidden'">`:'—';
+          const dot=(on,id,field)=>`<span onclick="toggleProduct('${id}','${field}',${!on})" title="Clic para cambiar" style="cursor:pointer;font-size:1.05em">${on?'✅':'⬜'}</span>`;
+          return `<tr style="${p.active===false?'opacity:.55':''}">
+            <td>${thumb}</td>
+            <td>${esc(p.name)}${inact}</td>
+            <td>${esc(p.price||'')}</td>
+            <td><span class="badge">${esc(p.cat||'—')}</span></td>
+            <td style="text-align:center">${dot(p.showWeb!==false,p.id,'showWeb')}</td>
+            <td style="text-align:center">${dot(p.showBot!==false,p.id,'showBot')}</td>
+            <td style="text-align:right;white-space:nowrap"><button class="btn btn-edit btn-sm" onclick="editProduct(${i})">✏️</button> <button class="btn btn-danger btn-sm" onclick="deleteProduct('${p.id}')">✕</button></td>
+          </tr>`;
+        }).join('')
+      }</tbody></table>`;
+    }catch(e){ showAlert('prodAlert','❌ No se pudieron cargar los productos','error'); }
+  }
+  function openProductModal(){
+    document.getElementById('productModalTitle').textContent='Nuevo producto';
+    document.getElementById('pEditId').value='';
+    ['pName','pPrice','pCat','pKw','pDesc','pImg'].forEach(id=>document.getElementById(id).value='');
+    document.getElementById('pImgName').textContent='';
+    const pv=document.getElementById('pImgPreview'); pv.style.display='none'; pv.src='';
+    document.getElementById('pImgFile').value='';
+    document.getElementById('pShowWeb').checked=true;
+    document.getElementById('pShowBot').checked=true;
+    document.getElementById('pActive').checked=true;
+    document.getElementById('productModal').style.display='flex';
+  }
+  function editProduct(i){
+    const p=PRODUCTS_DATA[i]; if(!p) return;
+    document.getElementById('productModalTitle').textContent='Editar producto';
+    document.getElementById('pEditId').value=p.id;
+    document.getElementById('pName').value=p.name||'';
+    document.getElementById('pPrice').value=p.price||'';
+    document.getElementById('pCat').value=p.cat||'';
+    document.getElementById('pKw').value=(p.kw||[]).join(', ');
+    document.getElementById('pDesc').value=p.desc||'';
+    document.getElementById('pImg').value=p.img||'';
+    document.getElementById('pImgName').textContent= p.img ? 'Imagen actual cargada' : '';
+    const pv=document.getElementById('pImgPreview'); if(p.imgUrl){ pv.src=p.imgUrl; pv.style.display='block'; } else { pv.style.display='none'; }
+    document.getElementById('pImgFile').value='';
+    document.getElementById('pShowWeb').checked=p.showWeb!==false;
+    document.getElementById('pShowBot').checked=p.showBot!==false;
+    document.getElementById('pActive').checked=p.active!==false;
+    document.getElementById('productModal').style.display='flex';
+  }
+  function closeProductModal(){ document.getElementById('productModal').style.display='none'; }
+  async function saveProduct(){
+    const id=document.getElementById('pEditId').value;
+    const body={
+      name:document.getElementById('pName').value.trim(),
+      price:document.getElementById('pPrice').value.trim(),
+      cat:document.getElementById('pCat').value.trim(),
+      kw:document.getElementById('pKw').value,
+      desc:document.getElementById('pDesc').value.trim(),
+      img:document.getElementById('pImg').value.trim(),
+      showWeb:document.getElementById('pShowWeb').checked,
+      showBot:document.getElementById('pShowBot').checked,
+      active:document.getElementById('pActive').checked
+    };
+    if(!body.name){ showAlert('prodAlert','Escribe el nombre del producto','error'); return; }
+    try{
+      const url=id?('/admin/api/products/'+id):'/admin/api/products';
+      const r=await fetchAuth(url,{method:id?'PATCH':'POST',body:JSON.stringify(body)});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      closeProductModal(); showAlert('prodAlert','✅ Producto guardado','success'); loadProducts();
+    }catch(e){ showAlert('prodAlert','❌ '+e.message,'error'); }
+  }
+  async function deleteProduct(id){
+    if(!confirm('¿Eliminar este producto? Desaparecerá de la web y del bot.')) return;
+    try{ const r=await fetchAuth('/admin/api/products/'+id,{method:'DELETE'}); const d=await r.json(); if(!r.ok) throw new Error(d.error); showAlert('prodAlert','🗑️ Producto eliminado','success'); loadProducts(); }
+    catch(e){ showAlert('prodAlert','❌ '+e.message,'error'); }
+  }
+  async function toggleProduct(id,field,val){
+    try{ const r=await fetchAuth('/admin/api/products/'+id,{method:'PATCH',body:JSON.stringify({[field]:val})}); const d=await r.json(); if(!r.ok) throw new Error(d.error); loadProducts(); }
+    catch(e){ showAlert('prodAlert','❌ '+e.message,'error'); }
+  }
+  async function handleProductImage(input){
+    const file=input.files[0]; if(!file) return;
+    document.getElementById('pImgName').textContent='Subiendo…';
+    const reader=new FileReader(); reader.onload=e=>{ const img=document.getElementById('pImgPreview'); img.src=e.target.result; img.style.display='block'; }; reader.readAsDataURL(file);
+    const fd=new FormData(); fd.append('image',file);
+    try{
+      const r=await fetchAuth('/admin/api/upload-image',{method:'POST',body:fd});
+      const d=await r.json();
+      if(d.url){ document.getElementById('pImg').value=d.url; document.getElementById('pImgName').textContent='✅ '+file.name; }
+      else throw new Error(d.error||'Error al subir');
+    }catch(e){ document.getElementById('pImgName').textContent='❌ '+e.message; }
   }
 
   async function loadStats() {

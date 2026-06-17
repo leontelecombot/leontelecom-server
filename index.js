@@ -63,13 +63,14 @@ const ADMIN_TOKEN_TTL_MS = 12 * 3600 * 1000; // los tokens del panel expiran en 
 const WISPHUB_API_URL = process.env.WISPHUB_API_URL || 'https://api.wisphub.net'; // Optional
 
 // ==================== USUARIOS DEL PANEL (roles y permisos) ====================
-const ADMIN_PERMISSIONS = ['broadcast', 'clients', 'reports', 'status', 'wisphub', 'users'];
+const ADMIN_PERMISSIONS = ['broadcast', 'clients', 'reports', 'status', 'wisphub', 'products', 'users'];
 const ADMIN_PERM_LABELS = {
   broadcast: 'Avisos y mensajes',
   clients: 'Base de clientes',
   reports: 'Soporte y reportes',
   status: 'Estado del servicio',
   wisphub: 'Sincronizar Wisphub',
+  products: 'Productos (web y bot)',
   users: 'Gestionar usuarios'
 };
 const adminUsers = new Map(); // username(min) → { username, name, role, salt, hash, permissions[], active, createdAt }
@@ -571,7 +572,8 @@ function buildStateSnapshot() {
     pendingAgentRequests: Object.fromEntries(
       [...pendingAgentRequests].map(([k, v]) => [k, { ...v, since: v.since instanceof Date ? v.since.toISOString() : v.since }])
     ),
-    adminUsers: mapToObj(adminUsers)
+    adminUsers: mapToObj(adminUsers),
+    products: products
   };
 }
 
@@ -585,6 +587,11 @@ function hydrateState(s) {
   fill(folios, s.folios);
   fill(agentActiveCases, s.agentActiveCases);
   fill(adminUsers, s.adminUsers);
+  // Productos: si la base ya tiene una lista guardada, reemplaza la semilla.
+  if (Array.isArray(s.products) && s.products.length) {
+    products.length = 0;
+    products.push(...s.products.map(p => ({ showWeb: true, showBot: true, active: true, ...p })));
+  }
   if (Array.isArray(s.broadcastHistory)) { broadcastHistory.length = 0; broadcastHistory.push(...s.broadcastHistory); }
   if (s.pausedChats) for (const [k, v] of Object.entries(s.pausedChats)) pausedChats.set(k, { pausedUntil: new Date(v.pausedUntil) });
   if (s.pendingAgentRequests) for (const [k, v] of Object.entries(s.pendingAgentRequests)) pendingAgentRequests.set(k, { ...v, since: new Date(v.since) });
@@ -1967,7 +1974,7 @@ function getCameraImages(context) {
 // ==================== PRODUCTOS / VITRINA ====================
 // Productos en la vitrina de la oficina. Imágenes en public/images/products/.
 const PRODUCT_IMG_BASE = (SERVER_BASE_URL ? `${SERVER_BASE_URL}` : '') + '/images/products/';
-const PRODUCTS = [
+const DEFAULT_PRODUCTS = [
   { name: 'Roku Streaming Stick Plus 4K', price: '$720', img: 'ROkuplus4K.jpeg', cat: 'Streaming', kw: ['roku 4k', 'roku plus', 'streaming 4k', 'roku'] },
   { name: 'Roku Streaming Stick HD', price: '$680', img: 'RokuStickHD.jpeg', cat: 'Streaming', kw: ['roku hd', 'roku stick'] },
   { name: 'Extensor de rango Wi-Fi TP-Link N300', price: '$450', img: 'extensorderangowifitplink.jpeg', cat: 'Internet', kw: ['extensor', 'repetidor', 'amplificador wifi'] },
@@ -1991,7 +1998,38 @@ const PRODUCTS = [
   { name: 'Espuma limpiadora SILIMEX SILIMPO 454ml', price: '$120', img: 'espumalimpiadoraslimpoo.jpeg', cat: 'Limpieza', kw: ['espuma', 'limpiador espuma'] }
 ];
 
-function getProductImageUrl(p) { return PRODUCT_IMG_BASE + encodeURIComponent(p.img); }
+// Lista VIVA de productos (editable desde el panel y persistida en la base).
+// Arranca con DEFAULT_PRODUCTS como semilla; al hidratar se reemplaza si la base
+// ya tiene productos guardados. La consumen el bot Y la página web (vía /api/products).
+let products = DEFAULT_PRODUCTS.map((p, i) => ({
+  id: 'seed' + (i + 1),
+  showWeb: true, showBot: true, active: true,
+  ...p
+}));
+
+// Normaliza un precio para que siempre muestre "$" al inicio.
+function fmtPrice(p) {
+  const s = String(p == null ? '' : p).trim();
+  if (!s) return '';
+  return s.startsWith('$') ? s : ('$' + s);
+}
+// Convierte palabras clave (array o texto con comas) a array limpio en minúsculas.
+function sanitizeKw(kw) {
+  if (Array.isArray(kw)) return kw.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+  return String(kw || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+function findProductById(id) { return products.find(p => p.id === id) || null; }
+// Productos visibles para el BOT / para la WEB (activos + con su casilla marcada).
+function getBotProducts() { return products.filter(p => p.active !== false && p.showBot !== false); }
+function getWebProducts() { return products.filter(p => p.active !== false && p.showWeb !== false); }
+
+// URL de imagen: si ya es una URL completa (imagen subida), úsala tal cual;
+// si es solo el nombre de archivo (productos semilla), apunta a /images/products/.
+function getProductImageUrl(p) {
+  const img = String(p.img || '');
+  if (/^https?:\/\//i.test(img)) return img;
+  return PRODUCT_IMG_BASE + encodeURIComponent(img);
+}
 
 function isProductRequest(text) {
   const v = normalizeText(text);
@@ -2000,7 +2038,7 @@ function isProductRequest(text) {
 
 function findProducts(text) {
   const v = normalizeText(text);
-  return PRODUCTS.filter(p => p.kw.some(k => v.includes(k)));
+  return getBotProducts().filter(p => (p.kw || []).some(k => v.includes(k)));
 }
 
 // ¿El cliente está cerrando la conversación? (para el destacado de producto)
@@ -2041,7 +2079,9 @@ function wantsInternet(text) {
 
 let _promoIndex = 0;
 function nextPromoProduct() {
-  const p = PRODUCTS[_promoIndex % PRODUCTS.length];
+  const list = getBotProducts();
+  if (!list.length) return null;
+  const p = list[_promoIndex % list.length];
   _promoIndex++;
   return p;
 }
@@ -2049,18 +2089,23 @@ function nextPromoProduct() {
 // Destacado de producto al cerrar el chat (rotando entre el catálogo).
 async function sendProductHighlight(chatId, sendMsg) {
   const p = nextPromoProduct();
+  if (!p) return;
   await sendMsg(chatId,
-    `Por cierto 👀 en nuestra oficina también vendemos:\n🛍️ *${p.name}* — ${p.price}\n¿Te interesa? Escribe *productos* para ver más.`,
+    `Por cierto 👀 en nuestra oficina también vendemos:\n🛍️ *${p.name}* — ${fmtPrice(p.price)}\n¿Te interesa? Escribe *productos* para ver más.`,
     [getProductImageUrl(p)]
   );
 }
 
 function buildProductListText() {
+  const list = getBotProducts();
+  if (!list.length) return '🛍️ Por ahora no tenemos productos en vitrina. Pregúntame por internet o cámaras y con gusto te ayudo. 😊';
   const cats = {};
-  for (const p of PRODUCTS) { (cats[p.cat] = cats[p.cat] || []).push(`• ${p.name} — ${p.price}`); }
-  const order = ['Streaming', 'Internet', 'TV', 'Cables', 'Cómputo', 'Iluminación', 'Limpieza'];
+  for (const p of list) { (cats[p.cat] = cats[p.cat] || []).push(`• ${p.name} — ${fmtPrice(p.price)}`); }
+  // Orden preferido + cualquier categoría nueva al final (para que nada se pierda).
+  const preferred = ['Streaming', 'Internet', 'TV', 'Cables', 'Cómputo', 'Iluminación', 'Limpieza'];
+  const order = [...preferred.filter(c => cats[c]), ...Object.keys(cats).filter(c => !preferred.includes(c))];
   const lines = ['🛍️ *Productos y accesorios en nuestra oficina:*', ''];
-  for (const c of order) { if (cats[c]) { lines.push(`*${c}*`, ...cats[c], ''); } }
+  for (const c of order) { lines.push(`*${c}*`, ...cats[c], ''); }
   lines.push('Escríbeme el nombre del que te interese y te mando foto. 😊');
   return lines.join('\n');
 }
@@ -3229,6 +3274,15 @@ function requirePermission(perm) {
   };
 }
 
+// Permite el acceso si el usuario tiene CUALQUIERA de los permisos indicados.
+function requireAnyPermission(perms) {
+  return (req, res, next) => {
+    const a = req.admin;
+    if (a && (a.role === 'superadmin' || a.role === 'admin' || (a.perms || []).some(p => perms.includes(p)))) return next();
+    return res.status(403).json({ error: 'No tienes permiso para esta acción' });
+  };
+}
+
 // API: datos del usuario logueado + catálogo de permisos
 app.get('/admin/api/me', verifyAdminToken, (req, res) => {
   res.json({ user: req.admin, allPermissions: ADMIN_PERMISSIONS, permLabels: ADMIN_PERM_LABELS });
@@ -3283,6 +3337,71 @@ app.delete('/admin/api/users/:username', verifyAdminToken, requirePermission('us
   adminUsers.delete(u.username);
   schedulePersist();
   res.json({ success: true });
+});
+
+// ==================== GESTIÓN DE PRODUCTOS (permiso "products") ====================
+// Una sola fuente de verdad: el bot la lee directo y la web la consume por /api/products.
+app.get('/admin/api/products', verifyAdminToken, requirePermission('products'), (req, res) => {
+  const list = products.map(p => ({ ...p, imgUrl: getProductImageUrl(p) }));
+  const categories = [...new Set(products.map(p => p.cat).filter(Boolean))];
+  res.json({ products: list, categories });
+});
+
+app.post('/admin/api/products', verifyAdminToken, requirePermission('products'), (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Falta el nombre del producto' });
+  const p = {
+    id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name,
+    price: fmtPrice(b.price),
+    cat: String(b.cat || 'Otros').trim() || 'Otros',
+    img: String(b.img || '').trim(),
+    kw: sanitizeKw(b.kw),
+    desc: String(b.desc || '').trim(),
+    showWeb: b.showWeb !== false,
+    showBot: b.showBot !== false,
+    active: b.active !== false
+  };
+  products.push(p);
+  schedulePersist();
+  res.json({ success: true, product: p });
+});
+
+app.patch('/admin/api/products/:id', verifyAdminToken, requirePermission('products'), (req, res) => {
+  const p = findProductById(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Producto no encontrado' });
+  const b = req.body || {};
+  if (b.name !== undefined) p.name = String(b.name).trim() || p.name;
+  if (b.price !== undefined) p.price = fmtPrice(b.price);
+  if (b.cat !== undefined) p.cat = String(b.cat).trim() || p.cat;
+  if (b.img !== undefined) p.img = String(b.img).trim();
+  if (b.kw !== undefined) p.kw = sanitizeKw(b.kw);
+  if (b.desc !== undefined) p.desc = String(b.desc).trim();
+  if (typeof b.showWeb === 'boolean') p.showWeb = b.showWeb;
+  if (typeof b.showBot === 'boolean') p.showBot = b.showBot;
+  if (typeof b.active === 'boolean') p.active = b.active;
+  schedulePersist();
+  res.json({ success: true, product: p });
+});
+
+app.delete('/admin/api/products/:id', verifyAdminToken, requirePermission('products'), (req, res) => {
+  const i = products.findIndex(p => p.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Producto no encontrado' });
+  const [removed] = products.splice(i, 1);
+  schedulePersist();
+  res.json({ success: true, removed });
+});
+
+// API pública (la consume la página web) — lista de productos visibles en la web.
+app.get('/api/products', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'public, max-age=60');
+  const list = getWebProducts().map(p => ({
+    id: p.id, name: p.name, price: fmtPrice(p.price),
+    cat: p.cat || 'Otros', img: getProductImageUrl(p), desc: p.desc || ''
+  }));
+  res.json({ products: list, updatedAt: Date.now() });
 });
 
 // API: Get user count
@@ -3378,7 +3497,7 @@ app.get('/admin/api/broadcast-history', verifyAdminToken, (req, res) => {
 });
 
 // API: Upload image → comprime, guarda en MongoDB y sirve desde /images/db/:id
-app.post('/admin/api/upload-image', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
+app.post('/admin/api/upload-image', verifyAdminToken, requireAnyPermission(['broadcast', 'products']), (req, res) => {
   upload.single('image')(req, res, async (err) => {
     // Errores de multer (archivo muy grande, no es imagen) → respuesta JSON clara
     if (err) {
