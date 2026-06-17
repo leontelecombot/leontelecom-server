@@ -711,9 +711,10 @@
 
   async function loadStats() {
     try {
-      const r = await fetchAuth('/admin/api/user-count');
+      // "Clientes registrados" = la misma base que muestra la página de Clientes (bot + manuales + Wisphub).
+      const r = await fetchAuth('/admin/api/clients');
       const d = await r.json();
-      document.getElementById('userCount').textContent = d.count;
+      document.getElementById('userCount').textContent = (d.total != null ? d.total : (d.clients || []).length).toLocaleString('es-MX');
     } catch(e) {}
     try {
       const r = await fetchAuth('/admin/api/broadcasts');
