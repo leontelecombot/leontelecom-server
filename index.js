@@ -2077,13 +2077,21 @@ function wantsInternet(text) {
   return isPlanRequest(text);
 }
 
-let _promoIndex = 0;
+// Producto destacado AL AZAR, evitando repetir el último que se mostró.
+// (Antes usaba un contador que se reiniciaba a 0 en cada reinicio del server,
+//  por lo que siempre salía el primer producto. El azar garantiza variedad.)
+let _lastPromoId = null;
 function nextPromoProduct() {
   const list = getBotProducts();
   if (!list.length) return null;
-  const p = list[_promoIndex % list.length];
-  _promoIndex++;
-  return p;
+  if (list.length === 1) { _lastPromoId = list[0].id; return list[0]; }
+  let pick, guard = 0;
+  do {
+    pick = list[Math.floor(Math.random() * list.length)];
+    guard++;
+  } while (pick.id === _lastPromoId && guard < 12);
+  _lastPromoId = pick.id;
+  return pick;
 }
 
 // Destacado de producto al cerrar el chat (rotando entre el catálogo).
