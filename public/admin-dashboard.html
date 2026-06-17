@@ -196,7 +196,6 @@
   <button class="nav-item" data-page="avisos" data-perm="broadcast" onclick="goTo('avisos')">📢 Avisos y mensajes</button>
   <button class="nav-item" data-page="clientes" data-perm="clients" onclick="goTo('clientes')">👥 Clientes</button>
   <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
-  <button class="nav-item" data-page="metricas" onclick="goTo('metricas')">📊 Métricas</button>
   <button class="nav-item" data-page="usuarios" data-perm="users" onclick="goTo('usuarios')">🔑 Usuarios</button>
 </nav>
 
@@ -220,6 +219,22 @@
     <div class="kpi"><div class="k-ico g">🟢</div><div><div class="k-num" id="activeNum">0</div><div class="k-lbl">Envíos programados</div></div></div>
   </div>
 </div>
+
+  <!-- Métricas (debajo de los KPIs, para que Inicio no se vea vacío) -->
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">📊</span> Métricas <span style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px">últimos 14 días</span></div>
+      <div class="card-body">
+        <h4 style="margin:0 0 8px;font-size:.95em">🛍️ Productos más solicitados</h4>
+        <div id="mTopProducts"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">💬 Conversaciones por día</h4>
+        <div id="mConversations"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">📢 Mensajes enviados por día (avisos/promos)</h4>
+        <div id="mBroadcasts"><div class="empty">Cargando…</div></div>
+        <button class="btn btn-edit btn-sm" style="margin-top:14px;width:auto;padding:9px 16px" onclick="loadMetrics()">🔄 Actualizar</button>
+      </div>
+    </div>
+  </div>
 
 </section><!-- /page-inicio -->
 
@@ -397,24 +412,6 @@
 
 </section><!-- /page-productos -->
 
-<!-- ===== PÁGINA: Métricas ===== -->
-<section class="page" id="page-metricas">
-  <div class="wrap" style="margin-bottom:28px">
-    <div class="card">
-      <div class="card-header"><span class="hico">📊</span> Métricas <span style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px">últimos 14 días</span></div>
-      <div class="card-body">
-        <h4 style="margin:0 0 8px;font-size:.95em">🛍️ Productos más solicitados</h4>
-        <div id="mTopProducts"><div class="empty">Cargando…</div></div>
-        <h4 style="margin:20px 0 8px;font-size:.95em">💬 Conversaciones por día</h4>
-        <div id="mConversations"><div class="empty">Cargando…</div></div>
-        <h4 style="margin:20px 0 8px;font-size:.95em">📢 Mensajes enviados por día (avisos/promos)</h4>
-        <div id="mBroadcasts"><div class="empty">Cargando…</div></div>
-        <button class="btn btn-edit btn-sm" style="margin-top:14px;width:auto;padding:9px 16px" onclick="loadMetrics()">🔄 Actualizar</button>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- ===== Modales (overlays, fuera de las páginas) ===== -->
 <!-- Product create/edit modal -->
 <div id="productModal" class="modal-bg">
@@ -540,7 +537,7 @@
   }
 
   // ===== Navegación por páginas (menú superior) =====
-  const PAGES = ['inicio','avisos','clientes','productos','metricas','usuarios'];
+  const PAGES = ['inicio','avisos','clientes','productos','usuarios'];
   function goTo(page, fromHistory){
     if(!PAGES.includes(page)) page='inicio';
     // Si la página requiere un permiso que no tienes, regresa a Inicio.
@@ -555,11 +552,10 @@
   }
   // Carga (refresca) los datos de cada página solo cuando se abre.
   function loadPage(page){
-    if(page==='inicio'){ loadStats(); }
+    if(page==='inicio'){ loadStats(); loadMetrics(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
-    else if(page==='metricas'){ loadMetrics(); }
     else if(page==='usuarios' && can('users')){ loadUsers(); }
   }
 
