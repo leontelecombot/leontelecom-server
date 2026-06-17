@@ -231,7 +231,7 @@
         <div id="mConversations"><div class="empty">Cargando…</div></div>
         <h4 style="margin:20px 0 8px;font-size:.95em">📢 Mensajes enviados por día (avisos/promos)</h4>
         <div id="mBroadcasts"><div class="empty">Cargando…</div></div>
-        <button class="btn btn-edit btn-sm" style="margin-top:14px;width:auto;padding:9px 16px" onclick="loadMetrics()">🔄 Actualizar</button>
+        <button class="btn btn-edit btn-sm" style="margin-top:14px;width:auto;padding:9px 16px" onclick="refreshMetrics(this)">🔄 Actualizar</button>
       </div>
     </div>
   </div>
@@ -765,23 +765,53 @@
   }
 
   // ===== Métricas =====
+  const emptyHint = 'Sin datos todavía. Se irá llenando con el uso. 📈';
   async function loadMetrics(){
     try{
       const r=await fetchAuth('/admin/api/metrics'); const d=await r.json();
-      renderBars('mTopProducts', (d.topProducts||[]).map(p=>({label:p.name,value:p.count})));
-      renderBars('mConversations', (d.conversations||[]).map(x=>({label:x.date.slice(5),value:x.count})));
-      renderBars('mBroadcasts', (d.broadcasts||[]).map(x=>({label:x.date.slice(5),value:x.count})));
+      renderRankBars('mTopProducts', (d.topProducts||[]).map(p=>({label:p.name,value:p.count})));
+      renderDayColumns('mConversations', d.conversations||[], '#7c3aed');
+      renderDayColumns('mBroadcasts', d.broadcasts||[], '#2bb673');
     }catch(e){}
   }
-  function renderBars(id, data){
+  // Botón Actualizar con feedback visible
+  async function refreshMetrics(btn){
+    const orig = btn ? btn.innerHTML : '';
+    if(btn){ btn.disabled=true; btn.innerHTML='⏳ Actualizando…'; }
+    await loadMetrics();
+    if(btn){ btn.innerHTML='✅ Actualizado'; setTimeout(()=>{ btn.innerHTML=orig||'🔄 Actualizar'; btn.disabled=false; }, 1300); }
+  }
+  // Ranking horizontal (productos): nombre · barra · número alineado al final.
+  function renderRankBars(id, data){
     const el=document.getElementById(id); if(!el) return;
-    if(!data.length || data.every(d=>!d.value)){ el.innerHTML='<div class="empty">Sin datos todavía.</div>'; return; }
+    if(!data.length || data.every(d=>!d.value)){ el.innerHTML='<div style="padding:12px;text-align:center;color:var(--muted);font-size:.85em">'+emptyHint+'</div>'; return; }
     const max=Math.max(1,...data.map(d=>d.value));
-    el.innerHTML=data.map(d=>'<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:.84em">'
-      + '<div style="width:130px;text-align:right;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(d.label)+'">'+esc(d.label)+'</div>'
-      + '<div style="flex:1;background:#f0eef8;border-radius:6px;overflow:hidden">'
-      +   '<div style="width:'+Math.max(d.value/max*100, d.value?4:0)+'%;background:linear-gradient(90deg,#5e23c4,#7c3aed);color:#fff;padding:3px 8px;border-radius:6px;text-align:right;min-width:22px">'+d.value+'</div>'
-      + '</div></div>').join('');
+    el.innerHTML=data.map(d=>
+      '<div style="display:flex;align-items:center;gap:10px;margin:7px 0;font-size:.86em">'
+      + '<div style="width:170px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(d.label)+'">'+esc(d.label)+'</div>'
+      + '<div style="flex:1;background:#f0eef8;border-radius:7px;height:20px"><div style="width:'+Math.max(d.value/max*100, d.value?3:0)+'%;height:100%;background:linear-gradient(90deg,#7c3aed,#5e23c4);border-radius:7px"></div></div>'
+      + '<div style="width:36px;text-align:left;font-weight:800;color:var(--brand)">'+d.value+'</div>'
+      + '</div>'
+    ).join('');
+  }
+  // Columnas verticales por día (conversaciones / mensajes) — tipo gráfica de barras.
+  function renderDayColumns(id, series, color){
+    const el=document.getElementById(id); if(!el) return;
+    const total=series.reduce((s,x)=>s+(x.count||0),0);
+    if(!total){ el.innerHTML='<div style="padding:12px;text-align:center;color:var(--muted);font-size:.85em">'+emptyHint+'</div>'; return; }
+    const max=Math.max(1,...series.map(x=>x.count||0));
+    const cols=series.map(x=>{
+      const dd=String(x.date).slice(8);            // día (DD)
+      const h=x.count? Math.max(Math.round(x.count/max*100),8) : 2;
+      const bg=x.count? ('linear-gradient(180deg,'+color+',#5e23c4)') : '#ece9f6';
+      return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%" title="'+esc(x.date)+': '+(x.count||0)+'">'
+        + '<div style="font-size:.72em;font-weight:700;color:'+(x.count?'var(--brand)':'transparent')+';margin-bottom:3px">'+(x.count||0)+'</div>'
+        + '<div style="width:80%;max-width:24px;height:'+h+'%;background:'+bg+';border-radius:5px 5px 0 0"></div>'
+        + '<div style="font-size:.66em;color:var(--muted);margin-top:5px">'+dd+'</div>'
+        + '</div>';
+    }).join('');
+    el.innerHTML='<div style="display:flex;align-items:flex-end;gap:5px;height:130px;padding:6px 2px 0">'+cols+'</div>'
+      + '<div style="font-size:.78em;color:var(--muted);margin-top:8px;text-align:right">Total (14 días): <strong style="color:var(--ink)">'+total+'</strong></div>';
   }
 
   async function loadStats() {
