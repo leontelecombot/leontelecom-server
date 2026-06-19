@@ -28,6 +28,15 @@ app.set('trust proxy', true); // Render está detrás de proxy → req.ip = IP r
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
+// ── BLINDAJE: la red de seguridad para que el bot NUNCA se caiga ──
+// Un error no manejado (en cualquier parte) se registra pero NO tumba el proceso.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err && err.stack ? err.stack : err);
+});
+
 const SYSTEM_PROMPT = [
   'Eres Leo, asistente virtual de León Telecom.',
   'León Telecom SOLO ofrece servicio de internet. NO ofrece telefonía, televisión, cable ni otros servicios.',
@@ -3855,6 +3864,13 @@ app.post('/admin/api/reports/:reportId/contact', verifyAdminToken, (req, res) =>
   } else {
     res.status(404).json({ success: false, error: 'Reporte no encontrado' });
   }
+});
+
+// Middleware de errores: cualquier fallo en una ruta responde limpio (sin tumbar nada).
+app.use((err, req, res, next) => {
+  console.error('[express error]', req.method, req.path, '-', err && err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Ocurrió un error procesando la solicitud.' });
 });
 
 const port = Number(process.env.PORT || 3000);
