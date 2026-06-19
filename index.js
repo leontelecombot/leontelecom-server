@@ -24,6 +24,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 }});
 
 const app = express();
+app.set('trust proxy', true); // Render está detrás de proxy → req.ip = IP real del cliente
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
@@ -3262,14 +3263,17 @@ function decodeAdminToken(token) {
   } catch (e) { return null; }
 }
 
-// Límite de intentos de login por IP (anti fuerza bruta)
+// Límite de intentos de login por IP (anti fuerza bruta). Solo cuenta los FALLOS;
+// una contraseña CORRECTA siempre entra y limpia el contador (nunca deja afuera al dueño).
 const loginAttempts = new Map(); // ip → { count, firstAt, blockedUntil }
-const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_MAX_ATTEMPTS = 8;
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
-const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const LOGIN_BLOCK_MS = 10 * 60 * 1000;
 
 function clientIp(req) {
-  return (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').toString().split(',')[0].trim();
+  // Con trust proxy, req.ip = IP real del cliente (no la del proxy de Render).
+  return (req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown')
+    .toString().split(',')[0].trim();
 }
 
 // API: Admin login (usuario + contraseña)
@@ -3277,18 +3281,15 @@ app.post('/admin/api/login', (req, res) => {
   const ip = clientIp(req);
   const now = Date.now();
   const rec = loginAttempts.get(ip) || { count: 0, firstAt: now, blockedUntil: 0 };
-
-  if (rec.blockedUntil > now) {
-    const mins = Math.ceil((rec.blockedUntil - now) / 60000);
-    return res.status(429).json({ success: false, error: `Demasiados intentos. Intenta de nuevo en ${mins} min.` });
-  }
-  if (now - rec.firstAt > LOGIN_WINDOW_MS) { rec.count = 0; rec.firstAt = now; }
+  if (now - rec.firstAt > LOGIN_WINDOW_MS) { rec.count = 0; rec.firstAt = now; rec.blockedUntil = 0; }
 
   const { username, password } = req.body || {};
   const uname = (username || 'admin').toString().trim().toLowerCase();
   const user = getAdminUser(uname);
+  const ok = user && user.active !== false && verifyAdminPassword(password, user.salt, user.hash);
 
-  if (user && user.active !== false && verifyAdminPassword(password, user.salt, user.hash)) {
+  // Credenciales CORRECTAS → entra siempre (aunque hubiera intentos previos) y limpia el contador.
+  if (ok) {
     loginAttempts.delete(ip);
     return res.json({
       success: true, token: signAdminToken(user),
@@ -3297,9 +3298,19 @@ app.post('/admin/api/login', (req, res) => {
     });
   }
 
+  // Credenciales incorrectas: si esta IP ya está bloqueada, rechaza; si no, cuenta y quizá bloquea.
+  if (rec.blockedUntil > now) {
+    const mins = Math.ceil((rec.blockedUntil - now) / 60000);
+    loginAttempts.set(ip, rec);
+    return res.status(429).json({ success: false, error: `Demasiados intentos fallidos. Intenta de nuevo en ${mins} min.` });
+  }
   rec.count += 1;
-  if (rec.count >= LOGIN_MAX_ATTEMPTS) { rec.blockedUntil = now + LOGIN_BLOCK_MS; rec.count = 0; }
+  let blocked = false;
+  if (rec.count >= LOGIN_MAX_ATTEMPTS) { rec.blockedUntil = now + LOGIN_BLOCK_MS; rec.count = 0; blocked = true; }
   loginAttempts.set(ip, rec);
+  if (blocked) {
+    return res.status(429).json({ success: false, error: `Demasiados intentos fallidos. Intenta de nuevo en ${Math.ceil(LOGIN_BLOCK_MS / 60000)} min.` });
+  }
   return res.status(401).json({ success: false, error: 'Usuario o contraseña incorrectos' });
 });
 
