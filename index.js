@@ -1818,6 +1818,28 @@ async function handleAgentCommand(agentNumber, text) {
   const atenderMatch = v.match(/^ATENDER\s+(\d+)/);
   if (atenderMatch) {
     const clientId = normalizeClientNumber(atenderMatch[1]);
+
+    // Si ya tiene un caso activo (distinto), no deja tomar otro: hay que cerrarlo primero.
+    const current = agentActiveCases.get(agentNumber);
+    if (current && current !== clientId) {
+      const curName = nameOf(getProfile(current), current);
+      await sendWhatsAppMessage(agentNumber, [
+        `⚠️ Ya tienes un caso activo con *${curName}* (${current}).`,
+        '',
+        'Debes *cerrarlo* antes de tomar otro.',
+        `Cierra con *LIBERAR ${current}* o con el botón de abajo. 👇`
+      ].join('\n'), [], { buttons: [{ id: `LIBERAR ${current}`, title: 'Cerrar caso actual' }] });
+      return;
+    }
+    // Si ya está atendiendo justamente a ese cliente, solo lo reconfirma.
+    if (current && current === clientId) {
+      const cName = nameOf(getProfile(clientId), clientId);
+      await sendWhatsAppMessage(agentNumber,
+        `ℹ️ Ya tienes este caso activo: *${cName}* (${clientId}). Lo que escribas se le reenvía.`,
+        [], { buttons: [{ id: `LIBERAR ${clientId}`, title: 'Cerrar caso' }] });
+      return;
+    }
+
     pauseChat(clientId, 4);
     agentActiveCases.set(agentNumber, clientId);
     pendingAgentRequests.delete(clientId); // ya lo está atendiendo un asesor
@@ -1896,6 +1918,7 @@ async function handleAgentCommand(agentNumber, text) {
     'LIBERAR [número] → Cerrar caso y devolver al bot',
     'PAUSADOS → Ver casos activos',
     '',
+    'Solo puedes tener UN caso a la vez: ciérralo (LIBERAR) antes de tomar otro.',
     'Mientras tienes un caso activo, todo lo que escribas se reenvía al cliente.'
   ].join('\n'));
 }
