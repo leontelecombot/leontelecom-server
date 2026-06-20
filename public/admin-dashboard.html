@@ -841,7 +841,26 @@
       +   '<div>💰 Saldo: <strong>'+saldo+'</strong></div>'
       +   '<div>📅 Corte: <strong>'+esc(c.fechaCorte||'—')+'</strong></div>'
       +   '<div>🧾 Facturas: <strong>'+fact+'</strong></div>'
-      + '</div></div>';
+      + '</div>'
+      + (c.id ? '<button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="loadInvoices(\''+esc(String(c.id))+'\',this)">📄 Ver facturas</button><div class="inv-box"></div>' : '')
+      + '</div>';
+  }
+  async function loadInvoices(id, btn){
+    const box = btn.nextElementSibling; // .inv-box
+    box.innerHTML = '<div style="font-size:.82em;color:var(--muted);padding:6px">Cargando facturas…</div>';
+    try{
+      const r = await fetchAuth('/admin/api/client-invoices?id='+encodeURIComponent(id));
+      const d = await r.json();
+      if(!d.invoices || !d.invoices.length){ box.innerHTML='<div style="font-size:.82em;color:var(--muted);padding:6px">Sin facturas registradas para este cliente.</div>'; return; }
+      box.innerHTML = '<table class="data-table" style="margin-top:8px"><thead><tr><th>Folio</th><th>Emisión</th><th>Vence</th><th>Total</th><th>Estado</th><th>Forma</th></tr></thead><tbody>'+
+        d.invoices.map(f=>{
+          const pagada=/pagad/i.test(f.estado||'');
+          const badge = pagada
+            ? '<span class="badge" style="background:#e7f8ee;color:#1a7f4b">'+esc(f.estado)+'</span>'
+            : '<span class="badge" style="background:#fdeaea;color:#dc2626">'+esc(f.estado||'—')+'</span>';
+          return '<tr><td class="muted" style="font-size:.8em">'+esc(f.folio)+'</td><td style="font-size:.82em">'+esc(f.emision||'—')+'</td><td style="font-size:.82em">'+esc(f.vencimiento||'—')+'</td><td>$'+esc(String(f.total==null?'0':f.total))+'</td><td>'+badge+'</td><td style="font-size:.8em">'+esc(f.formaPago||'—')+'</td></tr>';
+        }).join('') + '</tbody></table>' + (d.total>d.invoices.length?('<div style="font-size:.76em;color:var(--muted);margin-top:4px">Mostrando las '+d.invoices.length+' más recientes de '+d.total+'.</div>'):'');
+    }catch(e){ box.innerHTML='<div style="font-size:.82em;color:#dc2626;padding:6px">Error al cargar facturas.</div>'; }
   }
 
   // ===== Métricas =====

@@ -3531,7 +3531,8 @@ function mapWisphubAccount(c) {
     fechaCorte: c.fecha_corte,
     plan: (c.plan_internet && c.plan_internet.nombre) || c.plan_internet || '',
     precioPlan: c.precio_plan,
-    estadoFacturas: c.estado_facturas
+    estadoFacturas: c.estado_facturas,
+    id: c.id_servicio || c.id
   };
 }
 
@@ -3568,7 +3569,7 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
       out.push({
         name: c.name, phone, status: c.status, saldo: c.saldo,
         fechaCorte: c.fechaCorte, plan: c.plan, precioPlan: c.precioPlan,
-        estadoFacturas: c.estadoFacturas
+        estadoFacturas: c.estadoFacturas, id: c.wisphubId
       });
       if (out.length >= 20) break;
     }
@@ -3888,6 +3889,53 @@ app.get('/admin/api/ejecutivo', verifyAdminToken, requirePermission('clients'), 
     const ciudades = Object.entries(ingCiudad).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v).slice(0, 12);
     const planes = Object.entries(ingPlan).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v).slice(0, 12);
     res.json({ activos, ingresoMensual: ingreso, altasMes, bajasMes, proyeccionAltas: Math.round(last3), ciudades, planes, generatedAt: _allClientsCache.at });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Facturas de Wisphub indexadas por cliente (id_servicio), con caché de 10 min.
+let _invoicesCache = { at: 0, byId: null };
+async function getInvoicesByClientCached(maxAgeMs = 10 * 60 * 1000) {
+  if (_invoicesCache.byId && (Date.now() - _invoicesCache.at) < maxAgeMs) return _invoicesCache.byId;
+  if (!WISPHUB_API_KEY) return {};
+  const byId = {};
+  let offset = 0, count = null, pages = 0;
+  while (pages < 40) {
+    const r = await fetch(`${WISPHUB_API_URL}/api/facturas/?format=json&limit=500&offset=${offset}`,
+      { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } });
+    if (!r.ok) break;
+    const d = await r.json();
+    if (count === null) count = d.count;
+    const items = d.results || [];
+    if (!items.length) break;
+    for (const f of items) {
+      const usu = String((f.cliente && f.cliente.usuario) || '');
+      const m = usu.match(/^(\d+)/);
+      if (!m) continue;
+      (byId[m[1]] = byId[m[1]] || []).push(f);
+    }
+    offset += items.length; pages++;
+    if (count && offset >= count) break;
+  }
+  if (Object.keys(byId).length) _invoicesCache = { at: Date.now(), byId };
+  return byId;
+}
+
+// API: Facturas de un cliente (por id_servicio)
+app.get('/admin/api/client-invoices', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  const id = String(req.query.id || '').replace(/\D/g, '');
+  if (!id) return res.json({ invoices: [], total: 0 });
+  try {
+    const byId = await getInvoicesByClientCached();
+    const raw = byId[id] || [];
+    const invoices = raw.map(f => ({
+      folio: f.folio || ('#' + f.id_factura),
+      emision: f.fecha_emision, vencimiento: f.fecha_vencimiento, pago: f.fecha_pago,
+      estado: f.estado, total: f.total, saldo: f.saldo,
+      formaPago: (f.forma_pago && f.forma_pago.nombre) || ''
+    })).sort((a, b) => new Date(b.emision || 0) - new Date(a.emision || 0)).slice(0, 15);
+    res.json({ invoices, total: raw.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
