@@ -199,6 +199,7 @@
   <button class="nav-item active" data-page="inicio" onclick="goTo('inicio')">🏠 Inicio</button>
   <button class="nav-item" data-page="avisos" data-perm="broadcast" onclick="goTo('avisos')">📢 Avisos y mensajes</button>
   <button class="nav-item" data-page="clientes" data-perm="clients" onclick="goTo('clientes')">👥 Clientes</button>
+  <button class="nav-item" data-page="cobranza" data-perm="clients" onclick="goTo('cobranza')">💰 Cobranza</button>
   <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
   <button class="nav-item" data-page="usuarios" data-perm="users" onclick="goTo('usuarios')">🔑 Usuarios</button>
 </nav>
@@ -372,12 +373,41 @@
         <button class="btn btn-edit" onclick="loadClients()" style="width:auto;padding:11px 14px">🔄</button>
       </div>
       <div id="clientAlert" class="alert"></div>
-      <div id="clientList" style="max-height:300px;overflow-y:auto"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+        <input type="text" id="clFilter" placeholder="🔎 Buscar nombre o número…" style="flex:1;min-width:160px" oninput="renderClients()">
+        <select id="clPlan" onchange="renderClients()" style="min-width:140px"><option value="">Todos los planes</option></select>
+        <select id="clCiclo" onchange="renderClients()" style="min-width:130px"><option value="">Todos los cortes</option></select>
+        <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 12px" onclick="exportClientsCSV()">📊 Excel</button>
+        <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 12px" onclick="exportClientsPDF()">📄 PDF</button>
+      </div>
+      <div id="clientList" style="max-height:460px;overflow-y:auto"></div>
     </div>
   </div>
 </div>
 
 </section><!-- /page-clientes -->
+
+<!-- ===== PÁGINA: Cobranza ===== -->
+<section class="page" id="page-cobranza">
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">💰</span> Cobranza <span id="cobAge" style="font-size:.76em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
+      <div class="card-body">
+        <div id="cobAlert" class="alert"></div>
+        <div class="kpis" id="cobKpis" style="margin-bottom:6px"></div>
+        <h4 style="margin:18px 0 8px;font-size:.95em">📅 Próximos cortes (clientes por fecha)</h4>
+        <div id="cobCiclos"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">🔴 Con adeudo / suspendidos <span style="font-weight:400;color:var(--muted)">(top 200 por saldo)</span></h4>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+          <input type="text" id="cobFilter" placeholder="🔎 Filtrar nombre o número…" style="flex:1;min-width:170px" oninput="renderMorosos()">
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 14px" onclick="loadCobranza()">🔄 Actualizar</button>
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 14px" onclick="exportMorososCSV()">📊 Excel</button>
+        </div>
+        <div id="cobMorosos" style="max-height:460px;overflow:auto"></div>
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- ===== PÁGINA: Usuarios ===== -->
 <section class="page" id="page-usuarios">
@@ -542,7 +572,7 @@
   }
 
   // ===== Navegación por páginas (menú superior) =====
-  const PAGES = ['inicio','avisos','clientes','productos','usuarios'];
+  const PAGES = ['inicio','avisos','clientes','cobranza','productos','usuarios'];
   function goTo(page, fromHistory){
     if(!PAGES.includes(page)) page='inicio';
     // Si la página requiere un permiso que no tienes, regresa a Inicio.
@@ -560,6 +590,7 @@
     if(page==='inicio'){ loadStats(); loadMetrics(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
+    else if(page==='cobranza' && can('clients')){ loadCobranza(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='usuarios' && can('users')){ loadUsers(); }
   }
@@ -868,26 +899,124 @@
     } catch(e) { document.getElementById('imgFileName').textContent = '❌ Error al subir'; }
   }
 
-  // Client management
+  // ===== Base de clientes (con filtros y exportación) =====
+  let CLIENTS_DATA = [];
   async function loadClients() {
     try {
       const r = await fetchAuth('/admin/api/clients');
       const d = await r.json();
-      document.getElementById('clientTotal').textContent = `(${d.total} registrados)`;
       document.getElementById('userCount').textContent = d.total;
-      const el = document.getElementById('clientList');
-      if (!d.clients?.length) { el.innerHTML = '<div class="empty">Sin clientes aún.<br>Agrega números manualmente o los clientes que chatean con el bot aparecen automáticamente.</div>'; return; }
-      el.innerHTML = `<table class="data-table">
-        <thead><tr><th>Nombre</th><th>Número</th><th>Origen</th><th></th></tr></thead>
-        <tbody>${d.clients.map(c => `
-          <tr>
-            <td>${c.name||'—'}</td>
-            <td class="muted">${c.chatId}</td>
-            <td><span class="badge badge-src-${c.source||'bot'}">${c.source==='wisphub'?'Wisphub':c.source==='manual'?'Manual':'Bot'}</span></td>
-            <td style="text-align:right">${c.source==='manual'?`<button class="btn btn-danger btn-sm" onclick="deleteClient('${c.chatId}')">✕</button>`:''}</td>
-          </tr>`).join('')}
-        </tbody></table>`;
+      CLIENTS_DATA = d.clients || [];
+      // Poblar filtros (planes y ciclos de corte disponibles)
+      const plans = [...new Set(CLIENTS_DATA.map(c => c.plan).filter(Boolean))].sort();
+      const ciclos = [...new Set(CLIENTS_DATA.map(c => c.fechaCorte).filter(Boolean))];
+      const selP = document.getElementById('clPlan'), selC = document.getElementById('clCiclo');
+      if (selP) selP.innerHTML = '<option value="">Todos los planes</option>' + plans.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+      if (selC) selC.innerHTML = '<option value="">Todos los cortes</option>' + ciclos.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+      renderClients();
     } catch(e) {}
+  }
+  function filteredClients() {
+    const q = (document.getElementById('clFilter')?.value || '').toLowerCase();
+    const plan = document.getElementById('clPlan')?.value || '';
+    const ciclo = document.getElementById('clCiclo')?.value || '';
+    return CLIENTS_DATA.filter(c => {
+      if (q && !(c.name||'').toLowerCase().includes(q) && !(c.chatId||'').includes(q)) return false;
+      if (plan && c.plan !== plan) return false;
+      if (ciclo && c.fechaCorte !== ciclo) return false;
+      return true;
+    });
+  }
+  function renderClients() {
+    const el = document.getElementById('clientList');
+    const list = filteredClients();
+    const tot = document.getElementById('clientTotal');
+    if (tot) tot.textContent = `(${list.length} de ${CLIENTS_DATA.length})`;
+    if (!list.length) { el.innerHTML = '<div class="empty">Sin resultados con esos filtros.</div>'; return; }
+    el.innerHTML = `<table class="data-table">
+      <thead><tr><th>Nombre</th><th>Número</th><th>Plan</th><th>Estado</th><th>Corte</th><th>Origen</th><th></th></tr></thead>
+      <tbody>${list.map(c => `
+        <tr>
+          <td>${esc(c.name||'—')}</td>
+          <td class="muted">${esc(c.chatId)}</td>
+          <td style="font-size:.82em">${esc(c.plan||'—')}</td>
+          <td>${c.estado?('<span class="badge">'+esc(c.estado)+'</span>'):'—'}</td>
+          <td>${esc(c.fechaCorte||'—')}</td>
+          <td><span class="badge badge-src-${c.source||'bot'}">${c.source==='wisphub'?'Wisphub':c.source==='manual'?'Manual':'Bot'}</span></td>
+          <td style="text-align:right">${c.source==='manual'?`<button class="btn btn-danger btn-sm" onclick="deleteClient('${c.chatId}')">✕</button>`:''}</td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  }
+  function exportClientsCSV() {
+    const rows = [['Nombre','Numero','Plan','Estado','Corte','Saldo','Origen'],
+      ...filteredClients().map(c => [c.name, c.chatId, c.plan, c.estado, c.fechaCorte, c.saldo, c.source])];
+    downloadCSV(rows, 'clientes_leontelecom.csv');
+  }
+  function exportClientsPDF() {
+    printTable('Clientes — León Telecom', ['Nombre','Número','Plan','Estado','Corte','Origen'],
+      filteredClients().map(c => [c.name, c.chatId, c.plan, c.estado, c.fechaCorte, c.source]));
+  }
+
+  // ===== Cobranza =====
+  let COB_DATA = null;
+  function cobKpi(ico, num, lbl, color) {
+    return `<div class="kpi"><div class="k-ico ${color}">${ico}</div><div><div class="k-num">${esc(String(num==null?'—':num))}</div><div class="k-lbl">${esc(lbl)}</div></div></div>`;
+  }
+  async function loadCobranza() {
+    const mor = document.getElementById('cobMorosos');
+    try {
+      const r = await fetchAuth('/admin/api/cobranza'); const d = await r.json();
+      if (d.error) { document.getElementById('cobKpis').innerHTML=''; document.getElementById('cobCiclos').innerHTML=''; mor.innerHTML='<div class="empty">'+esc(d.error)+'</div>'; return; }
+      COB_DATA = d;
+      const t = d.totals || {};
+      const mx = n => '$' + Number(n||0).toLocaleString('es-MX', { maximumFractionDigits: 0 });
+      document.getElementById('cobAge').textContent = d.generatedAt ? '· datos al ' + new Date(d.generatedAt).toLocaleString('es-MX') : '';
+      document.getElementById('cobKpis').innerHTML =
+        cobKpi('🟢', t.activos, 'Activos', 'g') +
+        cobKpi('🔴', t.suspendidos, 'Suspendidos', 'p') +
+        cobKpi('⚠️', d.conAdeudo, 'Con adeudo', 'b') +
+        cobKpi('💵', mx(d.ingresoMensual), 'Ingreso mensual', 'g') +
+        cobKpi('🧾', mx(d.saldoPendiente), 'Saldo pendiente', 'b');
+      renderRankBars('cobCiclos', (d.ciclos||[]).map(c => ({ label: c.fecha, value: c.n })));
+      renderMorosos();
+    } catch(e) { mor.innerHTML = '<div class="empty">Error al cargar cobranza.</div>'; }
+  }
+  function renderMorosos() {
+    if (!COB_DATA) return;
+    const q = (document.getElementById('cobFilter')?.value || '').toLowerCase();
+    const list = (COB_DATA.morosos||[]).filter(m => !q || (m.name||'').toLowerCase().includes(q) || (m.phone||'').includes(q));
+    const el = document.getElementById('cobMorosos');
+    if (!list.length) { el.innerHTML = '<div class="empty">Sin clientes con adeudo. 🎉</div>'; return; }
+    el.innerHTML = `<table class="data-table"><thead><tr><th>Cliente</th><th>Número</th><th>Estado</th><th>Saldo</th><th>Corte</th><th>Plan</th><th></th></tr></thead><tbody>${
+      list.map(m => {
+        const susp = /suspend/i.test(m.estado||'');
+        const badge = susp ? '<span class="badge" style="background:#fdeaea;color:#dc2626">Suspendido</span>' : '<span class="badge" style="background:#fef3da;color:#b7791f">'+esc(m.estado||'')+'</span>';
+        const wa = m.phone ? `<a class="btn btn-edit btn-sm" href="https://wa.me/${esc(m.phone)}?text=${encodeURIComponent('Hola '+(m.name||'')+', le recordamos su pago de León Telecom para no suspender su servicio. ¡Gracias!')}" target="_blank" title="Recordar por WhatsApp">💬</a>` : '';
+        return `<tr><td>${esc(m.name||'—')}</td><td class="muted">${esc(m.phone||'—')}</td><td>${badge}</td><td>$${esc(String(m.saldo||'0'))}</td><td>${esc(m.fechaCorte||'—')}</td><td style="font-size:.82em">${esc(m.plan||'—')}</td><td style="text-align:right">${wa}</td></tr>`;
+      }).join('')
+    }</tbody></table>`;
+  }
+  function exportMorososCSV() {
+    if (!COB_DATA) return;
+    const rows = [['Cliente','Numero','Estado','Saldo','Corte','Plan'],
+      ...(COB_DATA.morosos||[]).map(m => [m.name, m.phone, m.estado, m.saldo, m.fechaCorte, m.plan])];
+    downloadCSV(rows, 'cobranza_morosos.csv');
+  }
+
+  // ===== Utilidades de exportación =====
+  function downloadCSV(rows, filename) {
+    const csv = rows.map(r => r.map(v => { v = String(v==null?'':v); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }).join(',')).join('\n');
+    const blob = new Blob(['﻿'+csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  function printTable(title, headers, rows) {
+    const e = s => String(s==null?'':s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    const w = window.open('', '_blank');
+    if (!w) { alert('Permite las ventanas emergentes para exportar a PDF.'); return; }
+    const style = 'body{font-family:Arial,sans-serif;padding:24px;color:#1c1930}h1{color:#4a1aa0;font-size:18px;margin:0}table{width:100%;border-collapse:collapse;font-size:11px;margin-top:12px}th,td{border:1px solid #ddd;padding:5px 7px;text-align:left}th{background:#4a1aa0;color:#fff}tr:nth-child(even){background:#f6f4fb}';
+    w.document.write(`<html><head><title>${e(title)}</title><style>${style}</style></head><body><h1>${e(title)}</h1><div style="font-size:11px;color:#666;margin-top:4px">${new Date().toLocaleString('es-MX')} · ${rows.length} registros</div><table><thead><tr>${headers.map(h=>'<th>'+e(h)+'</th>').join('')}</tr></thead><tbody>${rows.map(r=>'<tr>'+r.map(v=>'<td>'+e(v)+'</td>').join('')+'</tr>').join('')}</tbody></table></body></html>`);
+    w.document.close(); w.focus(); setTimeout(() => w.print(), 350);
   }
 
   async function addClient() {

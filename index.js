@@ -3720,7 +3720,88 @@ app.get('/images/db/:id', async (req, res) => {
 // API: List all clients (bot + manual)
 app.get('/admin/api/clients', verifyAdminToken, (req, res) => {
   const recipients = getAllBroadcastRecipients();
-  res.json({ clients: recipients, total: recipients.length });
+  // Enriquece con datos de cuenta (plan, estado, corte, saldo) para filtros y exportación.
+  const clients = recipients.map(r => {
+    const w = wisphubClients.get(r.chatId);
+    return {
+      ...r,
+      plan: (w && w.plan) || '',
+      estado: (w && w.status) || '',
+      fechaCorte: (w && w.fechaCorte) || '',
+      saldo: (w && w.saldo != null) ? w.saldo : '',
+      precioPlan: (w && w.precioPlan) || ''
+    };
+  });
+  res.json({ clients, total: clients.length });
+});
+
+// Trae TODOS los clientes de Wisphub (todos los estados) con caché de 10 min.
+let _allClientsCache = { at: 0, data: null };
+async function getAllWisphubClientsCached(maxAgeMs = 10 * 60 * 1000) {
+  if (_allClientsCache.data && (Date.now() - _allClientsCache.at) < maxAgeMs) return _allClientsCache.data;
+  if (!WISPHUB_API_KEY) return [];
+  const out = [];
+  let offset = 0, count = null, pages = 0;
+  while (pages < 30) {
+    const r = await fetch(`${WISPHUB_API_URL}/api/clientes/?format=json&limit=500&offset=${offset}`,
+      { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } });
+    if (!r.ok) break;
+    const d = await r.json();
+    if (count === null) count = d.count;
+    const items = d.results || (Array.isArray(d) ? d : []);
+    if (!items.length) break;
+    out.push(...items);
+    offset += items.length; pages++;
+    if (count && offset >= count) break;
+  }
+  if (out.length) _allClientsCache = { at: Date.now(), data: out };
+  return out;
+}
+
+// API: Resumen de cobranza (activos/suspendidos/adeudo/ingreso/próximos cortes/morosos)
+app.get('/admin/api/cobranza', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  try {
+    const all = await getAllWisphubClientsCached();
+    if (!all.length) return res.json({ error: 'Sin datos de Wisphub (configura WISPHUB_API_KEY o sincroniza).', totals: {} });
+    const low = s => String(s || '').toLowerCase();
+    let activos = 0, suspendidos = 0, gratis = 0, otros = 0, ingreso = 0, conAdeudo = 0, saldoPend = 0;
+    const ciclo = {}; const morosos = [];
+    for (const c of all) {
+      const est = String(c.estado || '');
+      const e = low(est);
+      const saldo = parseFloat(c.saldo || 0) || 0;
+      const fact = String(c.estado_facturas || '');
+      const activo = e.includes('activ');
+      if (activo) activos++;
+      else if (e.includes('suspend')) suspendidos++;
+      else if (e.includes('gratis')) gratis++;
+      else otros++;
+      if (activo) ingreso += parseFloat(c.precio_plan || 0) || 0;
+      const debe = e.includes('suspend') || saldo > 0 || (fact && !low(fact).includes('pagad'));
+      if (debe) { conAdeudo++; if (saldo > 0) saldoPend += saldo; }
+      if (activo && c.fecha_corte) ciclo[c.fecha_corte] = (ciclo[c.fecha_corte] || 0) + 1;
+      if (e.includes('suspend') || saldo > 0) {
+        let tel = String(c.telefono || c.celular || '').replace(/\D/g, ''); if (tel.length === 10) tel = '52' + tel;
+        morosos.push({
+          name: [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.razon_social || c.usuario || '',
+          phone: tel, estado: est, saldo: c.saldo, fechaCorte: c.fecha_corte,
+          plan: (c.plan_internet && c.plan_internet.nombre) || c.plan_internet || ''
+        });
+      }
+    }
+    const parseF = f => { const m = String(f).split('/'); return m.length === 3 ? new Date(+m[2], +m[1] - 1, +m[0]).getTime() : 0; };
+    const ciclos = Object.entries(ciclo).map(([fecha, n]) => ({ fecha, n, ts: parseF(fecha) }))
+      .sort((a, b) => a.ts - b.ts).map(({ fecha, n }) => ({ fecha, n }));
+    morosos.sort((a, b) => (parseFloat(b.saldo || 0) || 0) - (parseFloat(a.saldo || 0) || 0));
+    res.json({
+      generatedAt: _allClientsCache.at,
+      totals: { todos: all.length, activos, suspendidos, gratis, otros },
+      ingresoMensual: ingreso, conAdeudo, saldoPendiente: saldoPend,
+      ciclos, morosos: morosos.slice(0, 200)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // API: Add manual client
