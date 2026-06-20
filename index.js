@@ -551,6 +551,19 @@ function clearSession(chatId) {
 // Structure: folios[folio] = { chatId, type, location, createdAt }
 const folios = new Map();
 
+// ==================== TICKETS DE SOPORTE ====================
+// Cada falla reportada por un cliente genera un ticket. Persistido en state.tickets.
+const tickets = new Map(); // id → { id, folio, chatId, name, problema, ubicacion, estado, tecnico, nota, createdAt, updatedAt }
+function createTicket(chatId, name, problema, ubicacion) {
+  const id = 'tk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const folio = 'SOP-' + Date.now().toString(36).toUpperCase().slice(-5) + Math.random().toString(36).slice(2, 4).toUpperCase();
+  const now = new Date().toISOString();
+  const t = { id, folio, chatId: String(chatId), name: name || '', problema: problema || '', ubicacion: ubicacion || '', estado: 'abierto', tecnico: '', nota: '', createdAt: now, updatedAt: now };
+  tickets.set(id, t);
+  schedulePersist();
+  return t;
+}
+
 function storeFolio(folio, chatId, type, location) {
   folios.set(folio, {
     chatId: String(chatId),
@@ -590,7 +603,8 @@ function buildStateSnapshot() {
     ),
     adminUsers: mapToObj(adminUsers),
     products: products,
-    stats: stats
+    stats: stats,
+    tickets: mapToObj(tickets)
   };
 }
 
@@ -602,6 +616,7 @@ function hydrateState(s) {
   fill(manualClients, s.manualClients);
   fill(scheduledBroadcasts, s.scheduledBroadcasts);
   fill(folios, s.folios);
+  fill(tickets, s.tickets);
   fill(agentActiveCases, s.agentActiveCases);
   fill(adminUsers, s.adminUsers);
   // Productos: si la base ya tiene una lista guardada, reemplaza la semilla.
@@ -2806,6 +2821,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
             `Problema: ${d.problemDescription}`,
             `Ubicación: ${d.detectedNeighborhood}, ${d.detectedZone}`
           ].join('\n'), d.detectedZone).catch(() => false);
+          try { createTicket(chatId, knownName, d.problemDescription, `${d.detectedNeighborhood}, ${d.detectedZone}`); } catch (_) {}
           clearSession(chatId);
           await sendMsg(chatId, notified
             ? `Listo, ${knownName}. Ya le avisamos a un técnico con la ubicación (${d.detectedNeighborhood}). Te contactarán pronto. 🔧`
@@ -2872,6 +2888,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           `Problema: ${d.problemDescription}`,
           `Ubicación: ${locationLine}`
         ].join('\n'), nbhd?.zone || '').catch(() => {});
+        try { createTicket(chatId, d.knownName, d.problemDescription, locationLine); } catch (_) {}
         clearSession(chatId);
         await sendMsg(chatId, `Listo, ${d.knownName}. Registramos tu reporte en ${locationLine}. Un técnico te contactará pronto. 🔧`);
       } else {
@@ -2898,6 +2915,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         `Problema: ${d.problemDescription}`,
         locationLine ? `Ubicación: ${locationLine}` : ''
       ].filter(Boolean).join('\n'), nbhd?.zone || '').catch(() => false);
+      try { createTicket(chatId, text, d.problemDescription, locationLine); } catch (_) {}
       clearSession(chatId);
       await sendMsg(chatId, notified
         ? `Listo, ${text}. Ya le avisamos a un técnico, te contactarán pronto. 🔧`
@@ -3799,6 +3817,77 @@ app.get('/admin/api/cobranza', verifyAdminToken, requirePermission('clients'), a
       ingresoMensual: ingreso, conAdeudo, saldoPendiente: saldoPend,
       ciclos, morosos: morosos.slice(0, 200)
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== TICKETS DE SOPORTE (permiso "reports") ====================
+app.get('/admin/api/tickets', verifyAdminToken, requirePermission('reports'), (req, res) => {
+  const order = { abierto: 0, en_proceso: 1, resuelto: 2 };
+  const list = [...tickets.values()].sort((a, b) =>
+    (order[a.estado] ?? 0) - (order[b.estado] ?? 0) || new Date(b.createdAt) - new Date(a.createdAt));
+  const tecnicos = [...adminUsers.values()].map(u => u.name).filter(Boolean);
+  res.json({ tickets: list, tecnicos });
+});
+
+app.patch('/admin/api/tickets/:id', verifyAdminToken, requirePermission('reports'), (req, res) => {
+  const t = tickets.get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket no encontrado' });
+  const b = req.body || {};
+  if (b.estado && ['abierto', 'en_proceso', 'resuelto'].includes(b.estado)) t.estado = b.estado;
+  if (b.tecnico !== undefined) t.tecnico = String(b.tecnico).trim();
+  if (b.nota !== undefined) t.nota = String(b.nota).trim();
+  t.updatedAt = new Date().toISOString();
+  tickets.set(t.id, t);
+  schedulePersist();
+  res.json({ success: true, ticket: t });
+});
+
+app.delete('/admin/api/tickets/:id', verifyAdminToken, requirePermission('reports'), (req, res) => {
+  if (!tickets.delete(req.params.id)) return res.status(404).json({ error: 'Ticket no encontrado' });
+  schedulePersist();
+  res.json({ success: true });
+});
+
+// Avisar al cliente por WhatsApp sobre su ticket
+app.post('/admin/api/tickets/:id/notify', verifyAdminToken, requirePermission('reports'), async (req, res) => {
+  const t = tickets.get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Ticket no encontrado' });
+  const custom = String((req.body && req.body.message) || '').trim();
+  const msg = custom || `Hola${t.name ? ' ' + t.name : ''}, sobre tu reporte (folio ${t.folio}): nuestro equipo técnico ya lo está atendiendo. Te mantendremos al tanto. — León Telecom 🔧`;
+  try { await sendWhatsAppMessage(t.chatId, msg); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ error: 'No se pudo enviar: ' + e.message }); }
+});
+
+// ==================== DASHBOARD EJECUTIVO (permiso "clients") ====================
+app.get('/admin/api/ejecutivo', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  try {
+    const all = await getAllWisphubClientsCached();
+    if (!all.length) return res.json({ error: 'Sin datos de Wisphub.' });
+    const ym = s => { const p = String(s || '').split(' ')[0].split('/'); return p.length === 3 ? p[2] + '-' + String(p[1]).padStart(2, '0') : null; };
+    const altas = {}, bajas = {}, ingCiudad = {}, ingPlan = {};
+    let ingreso = 0, activos = 0;
+    for (const c of all) {
+      const fi = ym(c.fecha_instalacion); if (fi) altas[fi] = (altas[fi] || 0) + 1;
+      if (c.fecha_cancelacion) { const fc = ym(c.fecha_cancelacion); if (fc) bajas[fc] = (bajas[fc] || 0) + 1; }
+      if (String(c.estado || '').toLowerCase().includes('activ')) {
+        activos++;
+        const p = parseFloat(c.precio_plan || 0) || 0; ingreso += p;
+        const ciudad = (String(c.ciudad || '').trim()) || '(sin ciudad)';
+        ingCiudad[ciudad] = (ingCiudad[ciudad] || 0) + p;
+        const plan = (c.plan_internet && c.plan_internet.nombre) || c.plan_internet || '(sin plan)';
+        ingPlan[plan] = (ingPlan[plan] || 0) + p;
+      }
+    }
+    const months = []; const now = new Date();
+    for (let i = 11; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')); }
+    const altasMes = months.map(m => ({ mes: m, n: altas[m] || 0 }));
+    const bajasMes = months.map(m => ({ mes: m, n: bajas[m] || 0 }));
+    const last3 = altasMes.slice(-3).reduce((s, x) => s + x.n, 0) / 3;
+    const ciudades = Object.entries(ingCiudad).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v).slice(0, 12);
+    const planes = Object.entries(ingPlan).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v).slice(0, 12);
+    res.json({ activos, ingresoMensual: ingreso, altasMes, bajasMes, proyeccionAltas: Math.round(last3), ciudades, planes, generatedAt: _allClientsCache.at });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

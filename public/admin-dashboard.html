@@ -197,9 +197,11 @@
 <!-- Menú superior de navegación (cada opción = su propia página) -->
 <nav class="topnav" id="topnav">
   <button class="nav-item active" data-page="inicio" onclick="goTo('inicio')">🏠 Inicio</button>
+  <button class="nav-item" data-page="ejecutivo" data-perm="clients" onclick="goTo('ejecutivo')">📊 Ejecutivo</button>
   <button class="nav-item" data-page="avisos" data-perm="broadcast" onclick="goTo('avisos')">📢 Avisos y mensajes</button>
   <button class="nav-item" data-page="clientes" data-perm="clients" onclick="goTo('clientes')">👥 Clientes</button>
   <button class="nav-item" data-page="cobranza" data-perm="clients" onclick="goTo('cobranza')">💰 Cobranza</button>
+  <button class="nav-item" data-page="soporte" data-perm="reports" onclick="goTo('soporte')">🛠️ Soporte</button>
   <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
   <button class="nav-item" data-page="usuarios" data-perm="users" onclick="goTo('usuarios')">🔑 Usuarios</button>
 </nav>
@@ -243,6 +245,27 @@
   </div>
 
 </section><!-- /page-inicio -->
+
+<!-- ===== PÁGINA: Ejecutivo ===== -->
+<section class="page" id="page-ejecutivo">
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">📊</span> Dashboard Ejecutivo <span id="ejecAge" style="font-size:.76em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
+      <div class="card-body">
+        <div class="kpis" id="ejecKpis" style="margin-bottom:6px"></div>
+        <h4 style="margin:18px 0 8px;font-size:.95em">📈 Altas (nuevos clientes) por mes</h4>
+        <div id="ejecAltas"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">📉 Bajas por mes</h4>
+        <div id="ejecBajas"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">🏙️ Ingreso por zona / ciudad</h4>
+        <div id="ejecCiudades"><div class="empty">Cargando…</div></div>
+        <h4 style="margin:20px 0 8px;font-size:.95em">📶 Ingreso por plan</h4>
+        <div id="ejecPlanes"><div class="empty">Cargando…</div></div>
+        <button class="btn btn-edit btn-sm" style="margin-top:14px;width:auto;padding:9px 16px" onclick="loadEjecutivo()">🔄 Actualizar</button>
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- ===== PÁGINA: Avisos y mensajes ===== -->
 <section class="page" id="page-avisos">
@@ -404,6 +427,25 @@
           <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 14px" onclick="exportMorososCSV()">📊 Excel</button>
         </div>
         <div id="cobMorosos" style="max-height:460px;overflow:auto"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PÁGINA: Soporte / Tickets ===== -->
+<section class="page" id="page-soporte">
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">🛠️</span> Soporte / Tickets <span id="tkCount" style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
+      <div class="card-body">
+        <div id="tkAlert" class="alert"></div>
+        <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">Cada falla que un cliente reporta por el bot genera un ticket con folio. Asigna técnico, cambia el estado y avísale al cliente.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+          <input type="text" id="tkFilter" placeholder="🔎 Buscar folio, cliente o problema…" style="flex:1;min-width:170px" oninput="renderTickets()">
+          <select id="tkEstadoF" onchange="renderTickets()" style="min-width:130px"><option value="">Todos los estados</option><option value="abierto">🔴 Abiertos</option><option value="en_proceso">🟡 En proceso</option><option value="resuelto">🟢 Resueltos</option></select>
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 14px" onclick="loadTickets()">🔄 Actualizar</button>
+        </div>
+        <div id="ticketsList" style="overflow-x:auto"></div>
       </div>
     </div>
   </div>
@@ -572,7 +614,7 @@
   }
 
   // ===== Navegación por páginas (menú superior) =====
-  const PAGES = ['inicio','avisos','clientes','cobranza','productos','usuarios'];
+  const PAGES = ['inicio','ejecutivo','avisos','clientes','cobranza','soporte','productos','usuarios'];
   function goTo(page, fromHistory){
     if(!PAGES.includes(page)) page='inicio';
     // Si la página requiere un permiso que no tienes, regresa a Inicio.
@@ -588,6 +630,8 @@
   // Carga (refresca) los datos de cada página solo cuando se abre.
   function loadPage(page){
     if(page==='inicio'){ loadStats(); loadMetrics(); }
+    else if(page==='ejecutivo' && can('clients')){ loadEjecutivo(); }
+    else if(page==='soporte' && can('reports')){ loadTickets(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
     else if(page==='cobranza' && can('clients')){ loadCobranza(); }
@@ -1017,6 +1061,80 @@
     const style = 'body{font-family:Arial,sans-serif;padding:24px;color:#1c1930}h1{color:#4a1aa0;font-size:18px;margin:0}table{width:100%;border-collapse:collapse;font-size:11px;margin-top:12px}th,td{border:1px solid #ddd;padding:5px 7px;text-align:left}th{background:#4a1aa0;color:#fff}tr:nth-child(even){background:#f6f4fb}';
     w.document.write(`<html><head><title>${e(title)}</title><style>${style}</style></head><body><h1>${e(title)}</h1><div style="font-size:11px;color:#666;margin-top:4px">${new Date().toLocaleString('es-MX')} · ${rows.length} registros</div><table><thead><tr>${headers.map(h=>'<th>'+e(h)+'</th>').join('')}</tr></thead><tbody>${rows.map(r=>'<tr>'+r.map(v=>'<td>'+e(v)+'</td>').join('')+'</tr>').join('')}</tbody></table></body></html>`);
     w.document.close(); w.focus(); setTimeout(() => w.print(), 350);
+  }
+
+  // ===== Dashboard Ejecutivo =====
+  async function loadEjecutivo() {
+    try {
+      const r = await fetchAuth('/admin/api/ejecutivo'); const d = await r.json();
+      if (d.error) { document.getElementById('ejecKpis').innerHTML = '<div class="empty">'+esc(d.error)+'</div>'; return; }
+      const mx = n => '$' + Number(n||0).toLocaleString('es-MX', { maximumFractionDigits: 0 });
+      document.getElementById('ejecAge').textContent = d.generatedAt ? '· datos al ' + new Date(d.generatedAt).toLocaleString('es-MX') : '';
+      document.getElementById('ejecKpis').innerHTML =
+        cobKpi('👥', Number(d.activos||0).toLocaleString('es-MX'), 'Clientes activos', 'g') +
+        cobKpi('💵', mx(d.ingresoMensual), 'Ingreso mensual', 'g') +
+        cobKpi('📈', '+' + (d.proyeccionAltas||0), 'Altas proyectadas/mes', 'b');
+      const M = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+      const moLabel = m => { const p = String(m).split('-'); return (M[+p[1]]||p[1]) + ' ' + p[0].slice(2); };
+      renderRankBars('ejecAltas', (d.altasMes||[]).map(x => ({ label: moLabel(x.mes), value: x.n })));
+      renderRankBars('ejecBajas', (d.bajasMes||[]).map(x => ({ label: moLabel(x.mes), value: x.n })));
+      renderRankBars('ejecCiudades', (d.ciudades||[]).map(x => ({ label: x.k, value: Math.round(x.v) })));
+      renderRankBars('ejecPlanes', (d.planes||[]).map(x => ({ label: x.k, value: Math.round(x.v) })));
+    } catch(e) {}
+  }
+
+  // ===== Soporte / Tickets =====
+  let TK_DATA = [], TK_TECS = [];
+  async function loadTickets() {
+    try {
+      const r = await fetchAuth('/admin/api/tickets'); const d = await r.json();
+      TK_DATA = d.tickets || []; TK_TECS = d.tecnicos || [];
+      document.getElementById('tkCount').textContent = '(' + TK_DATA.length + ')';
+      renderTickets();
+    } catch(e) {}
+  }
+  function renderTickets() {
+    const q = (document.getElementById('tkFilter')?.value || '').toLowerCase();
+    const ef = document.getElementById('tkEstadoF')?.value || '';
+    const list = TK_DATA.filter(t => (!ef || t.estado === ef) &&
+      (!q || (t.name||'').toLowerCase().includes(q) || (t.chatId||'').includes(q) || (t.folio||'').toLowerCase().includes(q) || (t.problema||'').toLowerCase().includes(q)));
+    const el = document.getElementById('ticketsList');
+    if (!list.length) { el.innerHTML = '<div class="empty">Sin tickets. Aparecerán aquí cuando un cliente reporte una falla por el bot.</div>'; return; }
+    const estLbl = { abierto: '🔴 Abierto', en_proceso: '🟡 En proceso', resuelto: '🟢 Resuelto' };
+    const estOpts = t => ['abierto','en_proceso','resuelto'].map(s => `<option value="${s}" ${t.estado===s?'selected':''}>${estLbl[s]}</option>`).join('');
+    const tecOpts = t => '<option value="">— sin asignar —</option>' + TK_TECS.map(n => `<option ${t.tecnico===n?'selected':''}>${esc(n)}</option>`).join('');
+    el.innerHTML = `<table class="data-table"><thead><tr><th>Folio / Fecha</th><th>Cliente</th><th>Problema</th><th>Ubicación</th><th>Estado</th><th>Técnico</th><th></th></tr></thead><tbody>${
+      list.map(t => `<tr style="${t.estado==='resuelto'?'opacity:.6':''}">
+        <td class="muted" style="font-size:.78em">${esc(t.folio)}<br>${new Date(t.createdAt).toLocaleDateString('es-MX')}</td>
+        <td>${esc(t.name||'—')}<br><span class="muted" style="font-size:.8em">${esc(t.chatId)}</span></td>
+        <td style="font-size:.84em;max-width:220px">${esc(t.problema||'—')}</td>
+        <td style="font-size:.82em">${esc(t.ubicacion||'—')}</td>
+        <td><select onchange="updateTicket('${t.id}','estado',this.value)" style="font-size:.82em;padding:4px">${estOpts(t)}</select></td>
+        <td><select onchange="updateTicket('${t.id}','tecnico',this.value)" style="font-size:.82em;padding:4px">${tecOpts(t)}</select></td>
+        <td style="white-space:nowrap;text-align:right"><button class="btn btn-edit btn-sm" onclick="notifyTicket('${t.id}')" title="Avisar al cliente">📩</button> <button class="btn btn-danger btn-sm" onclick="deleteTicket('${t.id}')" title="Eliminar">✕</button></td>
+      </tr>`).join('')
+    }</tbody></table>`;
+  }
+  async function updateTicket(id, field, val) {
+    try {
+      const r = await fetchAuth('/admin/api/tickets/'+id, { method:'PATCH', body: JSON.stringify({ [field]: val }) });
+      const d = await r.json(); if (!r.ok) throw new Error(d.error);
+      const t = TK_DATA.find(x => x.id === id); if (t && d.ticket) Object.assign(t, d.ticket);
+      renderTickets(); showAlert('tkAlert','✅ Ticket actualizado','success');
+    } catch(e) { showAlert('tkAlert','❌ '+e.message,'error'); }
+  }
+  async function notifyTicket(id) {
+    if (!confirm('¿Enviar aviso al cliente sobre su ticket por WhatsApp?')) return;
+    try {
+      const r = await fetchAuth('/admin/api/tickets/'+id+'/notify', { method:'POST', body: JSON.stringify({}) });
+      const d = await r.json(); if (!r.ok) throw new Error(d.error);
+      showAlert('tkAlert','📩 Aviso enviado al cliente','success');
+    } catch(e) { showAlert('tkAlert','❌ '+e.message,'error'); }
+  }
+  async function deleteTicket(id) {
+    if (!confirm('¿Eliminar este ticket?')) return;
+    try { const r = await fetchAuth('/admin/api/tickets/'+id, { method:'DELETE' }); const d = await r.json(); if (!r.ok) throw new Error(d.error); loadTickets(); }
+    catch(e) { showAlert('tkAlert','❌ '+e.message,'error'); }
   }
 
   async function addClient() {
