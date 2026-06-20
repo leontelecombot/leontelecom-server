@@ -377,33 +377,44 @@
   <div class="card">
     <div class="card-header"><span class="hico">👥</span> Base de Clientes <span id="clientTotal" style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
     <div class="card-body">
+      <!-- 1) Buscar un cliente / estado de cuenta (busca conforme escribes) -->
       <div class="lookup-box" style="margin-bottom:16px;padding:14px;background:#faf8ff;border:1px solid var(--line);border-radius:12px">
         <div style="font-weight:600;font-size:.92em;margin-bottom:8px">🔎 Buscar cliente / estado de cuenta</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <input type="text" id="lookupQ" placeholder="Número o nombre del cliente…" style="flex:1;min-width:180px" onkeydown="if(event.key==='Enter')lookupClient()">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="lookupQ" placeholder="Escribe nombre o número… (busca solo)" style="flex:1;min-width:200px;width:auto" oninput="lookupDebounced()" onkeydown="if(event.key==='Enter')lookupClient()">
           <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="lookupClient()">Buscar</button>
         </div>
         <div id="lookupResult" style="margin-top:12px"></div>
       </div>
+
+      <!-- 2) Estado de Wisphub -->
       <div class="wisphub-bar" id="wisphubBar">
         <div style="font-size:.84em"><strong>🔗 Wisphub</strong><span id="wisphubStatus" style="margin-left:8px;color:var(--muted)">Verificando...</span></div>
         <button class="btn btn-edit btn-sm" onclick="triggerWisphubSync()" id="wisphubSyncBtn">🔄 Sincronizar ahora</button>
       </div>
-      <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-        <input type="text" id="newPhone" placeholder="Número manual (ej: 9511234567)" style="flex:1;min-width:160px">
-        <input type="text" id="newName" placeholder="Nombre (opcional)" style="flex:1;min-width:140px">
-        <button class="btn btn-primary" onclick="addClient()" style="width:auto;padding:11px 18px">➕ Agregar</button>
-        <button class="btn btn-edit" onclick="loadClients()" style="width:auto;padding:11px 14px">🔄</button>
-      </div>
+
+      <!-- 3) Lista de clientes + filtros (una sola fila) -->
+      <div style="font-weight:600;font-size:.92em;margin:20px 0 8px">📋 Lista de clientes</div>
       <div id="clientAlert" class="alert"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
-        <input type="text" id="clFilter" placeholder="🔎 Buscar nombre o número…" style="flex:1;min-width:160px" oninput="renderClients()">
-        <select id="clPlan" onchange="renderClients()" style="min-width:140px"><option value="">Todos los planes</option></select>
-        <select id="clCiclo" onchange="renderClients()" style="min-width:130px"><option value="">Todos los cortes</option></select>
+        <input type="text" id="clFilter" placeholder="🔎 Filtrar nombre o número…" style="flex:1;min-width:170px;width:auto" oninput="renderClients()">
+        <select id="clPlan" onchange="renderClients()" style="flex:0 1 170px;width:auto"><option value="">Todos los planes</option></select>
+        <select id="clCiclo" onchange="renderClients()" style="flex:0 1 150px;width:auto"><option value="">Todos los cortes</option></select>
+        <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 12px" onclick="loadClients()" title="Recargar">🔄</button>
         <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 12px" onclick="exportClientsCSV()">📊 Excel</button>
         <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 12px" onclick="exportClientsPDF()">📄 PDF</button>
       </div>
       <div id="clientList" style="max-height:460px;overflow-y:auto"></div>
+
+      <!-- 4) Agregar cliente manual (utilidad, plegable) -->
+      <details style="margin-top:16px">
+        <summary style="cursor:pointer;font-size:.88em;color:var(--muted);user-select:none">➕ Agregar un cliente manualmente</summary>
+        <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="newPhone" placeholder="Número (ej: 9511234567)" style="flex:1;min-width:160px;width:auto">
+          <input type="text" id="newName" placeholder="Nombre (opcional)" style="flex:1;min-width:140px;width:auto">
+          <button class="btn btn-primary" onclick="addClient()" style="width:auto;padding:11px 18px">➕ Agregar</button>
+        </div>
+      </details>
     </div>
   </div>
 </div>
@@ -814,6 +825,15 @@
   }
 
   // ===== Buscar cliente + estado de cuenta =====
+  // Búsqueda en vivo (mientras escribes) con retardo para no saturar.
+  let _lkTimer=null;
+  function lookupDebounced(){
+    clearTimeout(_lkTimer);
+    const q=(document.getElementById('lookupQ').value||'').trim();
+    const box=document.getElementById('lookupResult');
+    if(q.length<2){ box.innerHTML=''; return; }
+    _lkTimer=setTimeout(lookupClient, 350);
+  }
   async function lookupClient(){
     const q=document.getElementById('lookupQ').value.trim();
     const box=document.getElementById('lookupResult');
