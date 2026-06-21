@@ -604,7 +604,8 @@ function buildStateSnapshot() {
     adminUsers: mapToObj(adminUsers),
     products: products,
     stats: stats,
-    tickets: mapToObj(tickets)
+    tickets: mapToObj(tickets),
+    promoBanner: promoBanner
   };
 }
 
@@ -617,6 +618,7 @@ function hydrateState(s) {
   fill(scheduledBroadcasts, s.scheduledBroadcasts);
   fill(folios, s.folios);
   fill(tickets, s.tickets);
+  if (s.promoBanner && typeof s.promoBanner === 'object') Object.assign(promoBanner, s.promoBanner);
   fill(agentActiveCases, s.agentActiveCases);
   fill(adminUsers, s.adminUsers);
   // Productos: si la base ya tiene una lista guardada, reemplaza la semilla.
@@ -2180,8 +2182,18 @@ function buildProductListText() {
 // Saludo + menú (determinista, sin IA) — corto: solo el saludo y las opciones.
 async function sendWelcomeMenu(chatId, sendMsg) {
   setSession(chatId, { state: 'awaiting_menu_choice', data: {} });
-  const knownName = nameOf(getProfile(chatId));
-  const saludo = knownName ? `👋 ¡Hola de nuevo, ${knownName}!` : '👋 ¡Hola! Soy Leo, de León Telecom.';
+  // Reconoce al cliente por su número en Wisphub → saludo con su nombre y plan.
+  const w = wisphubClients.get(String(chatId));
+  let saludo;
+  if (w && w.name) {
+    const first = w.name.trim().split(/\s+/)[0] || '';
+    const nombre = first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : '';
+    const planClean = w.plan ? String(w.plan).replace(/^PLAN\s+/i, '').trim() : '';
+    saludo = `👋 ¡Hola de nuevo, ${nombre}!` + (planClean ? ` 📶 Tu plan: ${planClean}.` : '');
+  } else {
+    const knownName = nameOf(getProfile(chatId));
+    saludo = knownName ? `👋 ¡Hola de nuevo, ${knownName}!` : '👋 ¡Hola! Soy Leo, de León Telecom.';
+  }
   await sendMsg(chatId, [
     `${saludo} ¿En qué te ayudo?`,
     '',
@@ -2198,6 +2210,8 @@ async function sendWelcomeMenu(chatId, sendMsg) {
 // Se persisten en state.stats. productHits: cuántas veces se mostró cada producto
 // porque el cliente lo pidió. daily: conversaciones únicas por día (clave YYYY-MM-DD).
 let stats = { productHits: {}, daily: {} };
+// Banner de promoción editable que se muestra en la página web (vía /api/promo).
+let promoBanner = { active: false, text: '', link: '' };
 function mxDayKey(d) {
   return (d || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }); // YYYY-MM-DD
 }
@@ -3506,6 +3520,27 @@ app.delete('/admin/api/products/:id', verifyAdminToken, requirePermission('produ
   const [removed] = products.splice(i, 1);
   schedulePersist();
   res.json({ success: true, removed });
+});
+
+// Banner de promoción para la web (editable desde el panel)
+app.get('/admin/api/promo-banner', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
+  res.json(promoBanner);
+});
+app.post('/admin/api/promo-banner', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
+  const b = req.body || {};
+  promoBanner = {
+    active: b.active === true || b.active === 'true',
+    text: String(b.text || '').trim().slice(0, 200),
+    link: String(b.link || '').trim().slice(0, 300)
+  };
+  schedulePersist();
+  res.json({ success: true, promoBanner });
+});
+// API pública (la consume la web) — banner de promoción
+app.get('/api/promo', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'public, max-age=60');
+  res.json({ active: !!promoBanner.active, text: promoBanner.text || '', link: promoBanner.link || '' });
 });
 
 // API pública (la consume la página web) — lista de productos visibles en la web.

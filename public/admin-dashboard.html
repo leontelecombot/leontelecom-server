@@ -273,6 +273,19 @@
 <div class="main">
 
   <!-- Quick Actions -->
+  <!-- Banner de promoción para la página web -->
+  <div class="card full-width" data-perm="broadcast">
+    <div class="card-header"><span class="hico">🪧</span> Banner de promoción (página web)</div>
+    <div class="card-body">
+      <div id="pbAlert" class="alert"></div>
+      <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">Muestra una barra de promoción en la parte de arriba de tu página web. Actívala, escribe el texto y (opcional) un enlace.</p>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.92em;margin-bottom:10px"><input type="checkbox" id="pbActive" style="width:auto"> Mostrar el banner en la web</label>
+      <div class="form-group"><label>Texto de la promoción</label><input type="text" id="pbText" maxlength="200" placeholder="ej: 🎉 ¡Instalación GRATIS este mes en fibra óptica!"></div>
+      <div class="form-group"><label>Enlace (opcional)</label><input type="text" id="pbLink" maxlength="300" placeholder="ej: https://wa.me/529511697346"></div>
+      <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="savePromoBanner()">💾 Guardar banner</button>
+    </div>
+  </div>
+
   <div class="card full-width" data-perm="broadcast">
     <div class="card-header"><span class="hico">⚡</span> Avisos Rápidos</div>
     <div class="card-body">
@@ -643,7 +656,7 @@
     if(page==='inicio'){ loadStats(); loadMetrics(); }
     else if(page==='ejecutivo' && can('clients')){ loadEjecutivo(); }
     else if(page==='soporte' && can('reports')){ loadTickets(); }
-    else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); }
+    else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); loadPromoBanner(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
     else if(page==='cobranza' && can('clients')){ loadCobranza(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
@@ -1393,6 +1406,24 @@
     document.querySelectorAll('.section-tab').forEach((t,i) => t.classList.toggle('active', ['scheduled','history'][i]===tab));
     document.querySelectorAll('.tab-panel').forEach((p,i) => p.classList.toggle('active', ['tab-scheduled','tab-history'][i]==='tab-'+tab));
     if (tab==='scheduled') loadScheduled(); else loadHistory();
+  }
+
+  // ===== Banner de promoción (web) =====
+  async function loadPromoBanner(){
+    try{
+      const r=await fetchAuth('/admin/api/promo-banner'); const d=await r.json();
+      document.getElementById('pbActive').checked = !!d.active;
+      document.getElementById('pbText').value = d.text||'';
+      document.getElementById('pbLink').value = d.link||'';
+    }catch(e){}
+  }
+  async function savePromoBanner(){
+    const body={ active:document.getElementById('pbActive').checked, text:document.getElementById('pbText').value.trim(), link:document.getElementById('pbLink').value.trim() };
+    try{
+      const r=await fetchAuth('/admin/api/promo-banner',{method:'POST',body:JSON.stringify(body)});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      showAlert('pbAlert', body.active?'✅ Banner guardado y activo en la web':'✅ Guardado (banner oculto)','success');
+    }catch(e){ showAlert('pbAlert','❌ '+e.message,'error'); }
   }
 
   function showAlert(id, msg, type) {
