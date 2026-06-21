@@ -273,16 +273,18 @@
 <div class="main">
 
   <!-- Quick Actions -->
-  <!-- Banner de promoción para la página web -->
+  <!-- Banners de promoción para la página web -->
   <div class="card full-width" data-perm="broadcast">
-    <div class="card-header"><span class="hico">🪧</span> Banner de promoción (página web)</div>
+    <div class="card-header"><span class="hico">🪧</span> Banners de promoción (página web)</div>
     <div class="card-body">
       <div id="pbAlert" class="alert"></div>
-      <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">Muestra una barra de promoción en la parte de arriba de tu página web. Actívala, escribe el texto y (opcional) un enlace.</p>
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.92em;margin-bottom:10px"><input type="checkbox" id="pbActive" style="width:auto"> Mostrar el banner en la web</label>
-      <div class="form-group"><label>Texto de la promoción</label><input type="text" id="pbText" maxlength="200" placeholder="ej: 🎉 ¡Instalación GRATIS este mes en fibra óptica!"></div>
-      <div class="form-group"><label>Enlace (opcional)</label><input type="text" id="pbLink" maxlength="300" placeholder="ej: https://wa.me/529511697346"></div>
-      <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="savePromoBanner()">💾 Guardar banner</button>
+      <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">Barra de promoción en la parte de arriba de tu web. Puedes tener varios guardados; <strong>solo el que marques como activo (✅) se muestra</strong>. Desactiva o elimina para quitarlo.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <input type="text" id="pbText" maxlength="200" placeholder="Texto del banner (ej: 🎉 ¡Instalación GRATIS este mes!)" style="flex:1;min-width:220px;width:auto">
+        <input type="text" id="pbLink" maxlength="300" placeholder="Enlace (opcional)" style="flex:0 1 220px;width:auto">
+        <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="addPromoBanner()">➕ Agregar</button>
+      </div>
+      <div id="pbList" style="overflow-x:auto"></div>
     </div>
   </div>
 
@@ -1408,22 +1410,40 @@
     if (tab==='scheduled') loadScheduled(); else loadHistory();
   }
 
-  // ===== Banner de promoción (web) =====
+  // ===== Banners de promoción (web) =====
   async function loadPromoBanner(){
-    try{
-      const r=await fetchAuth('/admin/api/promo-banner'); const d=await r.json();
-      document.getElementById('pbActive').checked = !!d.active;
-      document.getElementById('pbText').value = d.text||'';
-      document.getElementById('pbLink').value = d.link||'';
-    }catch(e){}
+    try{ const r=await fetchAuth('/admin/api/promo-banner'); const d=await r.json(); renderPromoBanners(d.banners||[]); }catch(e){}
   }
-  async function savePromoBanner(){
-    const body={ active:document.getElementById('pbActive').checked, text:document.getElementById('pbText').value.trim(), link:document.getElementById('pbLink').value.trim() };
+  function renderPromoBanners(list){
+    const el=document.getElementById('pbList'); if(!el) return;
+    if(!list.length){ el.innerHTML='<div class="empty">Sin banners. Agrega uno arriba.</div>'; return; }
+    el.innerHTML='<table class="data-table"><thead><tr><th>Texto</th><th>Enlace</th><th>Activo</th><th></th></tr></thead><tbody>'+
+      list.map(b=>`<tr style="${b.active?'background:#f3eeff':''}">
+        <td>${esc(b.text)}</td>
+        <td class="muted" style="font-size:.8em;max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(b.link||'—')}</td>
+        <td style="text-align:center"><span onclick="togglePromoBanner('${b.id}',${!b.active})" title="Clic para activar/desactivar" style="cursor:pointer;font-size:1.1em">${b.active?'✅':'⬜'}</span></td>
+        <td style="text-align:right"><button class="btn btn-danger btn-sm" onclick="deletePromoBanner('${b.id}')">✕</button></td>
+      </tr>`).join('')+'</tbody></table>';
+  }
+  async function addPromoBanner(){
+    const text=document.getElementById('pbText').value.trim(); const link=document.getElementById('pbLink').value.trim();
+    if(!text){ showAlert('pbAlert','Escribe el texto del banner','error'); return; }
     try{
-      const r=await fetchAuth('/admin/api/promo-banner',{method:'POST',body:JSON.stringify(body)});
+      const r=await fetchAuth('/admin/api/promo-banner',{method:'POST',body:JSON.stringify({text,link,active:true})});
       const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
-      showAlert('pbAlert', body.active?'✅ Banner guardado y activo en la web':'✅ Guardado (banner oculto)','success');
+      document.getElementById('pbText').value=''; document.getElementById('pbLink').value='';
+      renderPromoBanners(d.banners||[]); showAlert('pbAlert','✅ Banner agregado y activo en la web','success');
     }catch(e){ showAlert('pbAlert','❌ '+e.message,'error'); }
+  }
+  async function togglePromoBanner(id,active){
+    try{ const r=await fetchAuth('/admin/api/promo-banner/'+id,{method:'PATCH',body:JSON.stringify({active})}); const d=await r.json(); if(!r.ok) throw new Error(d.error);
+      renderPromoBanners(d.banners||[]); showAlert('pbAlert', active?'✅ Banner activado en la web':'⬜ Banner desactivado','success'); }
+    catch(e){ showAlert('pbAlert','❌ '+e.message,'error'); }
+  }
+  async function deletePromoBanner(id){
+    if(!confirm('¿Eliminar este banner?')) return;
+    try{ const r=await fetchAuth('/admin/api/promo-banner/'+id,{method:'DELETE'}); const d=await r.json(); if(!r.ok) throw new Error(d.error); renderPromoBanners(d.banners||[]); }
+    catch(e){ showAlert('pbAlert','❌ '+e.message,'error'); }
   }
 
   function showAlert(id, msg, type) {

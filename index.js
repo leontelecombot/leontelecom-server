@@ -605,7 +605,7 @@ function buildStateSnapshot() {
     products: products,
     stats: stats,
     tickets: mapToObj(tickets),
-    promoBanner: promoBanner
+    promoBanners: promoBanners
   };
 }
 
@@ -618,7 +618,8 @@ function hydrateState(s) {
   fill(scheduledBroadcasts, s.scheduledBroadcasts);
   fill(folios, s.folios);
   fill(tickets, s.tickets);
-  if (s.promoBanner && typeof s.promoBanner === 'object') Object.assign(promoBanner, s.promoBanner);
+  if (Array.isArray(s.promoBanners)) promoBanners = s.promoBanners;
+  else if (s.promoBanner && s.promoBanner.text) promoBanners = [{ id: 'pb-legacy', text: s.promoBanner.text, link: s.promoBanner.link || '', active: !!s.promoBanner.active, createdAt: new Date().toISOString() }];
   fill(agentActiveCases, s.agentActiveCases);
   fill(adminUsers, s.adminUsers);
   // Productos: si la base ya tiene una lista guardada, reemplaza la semilla.
@@ -2210,8 +2211,10 @@ async function sendWelcomeMenu(chatId, sendMsg) {
 // Se persisten en state.stats. productHits: cuántas veces se mostró cada producto
 // porque el cliente lo pidió. daily: conversaciones únicas por día (clave YYYY-MM-DD).
 let stats = { productHits: {}, daily: {} };
-// Banner de promoción editable que se muestra en la página web (vía /api/promo).
-let promoBanner = { active: false, text: '', link: '' };
+// Banners de promoción editables que se muestran en la web (vía /api/promo).
+// Lista; solo uno puede estar activo a la vez (es el que ve la web).
+let promoBanners = [];
+function activePromo() { return promoBanners.find(b => b.active) || null; }
 function mxDayKey(d) {
   return (d || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }); // YYYY-MM-DD
 }
@@ -3522,25 +3525,50 @@ app.delete('/admin/api/products/:id', verifyAdminToken, requirePermission('produ
   res.json({ success: true, removed });
 });
 
-// Banner de promoción para la web (editable desde el panel)
+// Banners de promoción para la web (lista editable desde el panel)
 app.get('/admin/api/promo-banner', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
-  res.json(promoBanner);
+  res.json({ banners: promoBanners });
 });
 app.post('/admin/api/promo-banner', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
   const b = req.body || {};
-  promoBanner = {
-    active: b.active === true || b.active === 'true',
-    text: String(b.text || '').trim().slice(0, 200),
-    link: String(b.link || '').trim().slice(0, 300)
+  const text = String(b.text || '').trim().slice(0, 200);
+  if (!text) return res.status(400).json({ error: 'Escribe el texto del banner' });
+  const banner = {
+    id: 'pb' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    text, link: String(b.link || '').trim().slice(0, 300),
+    active: b.active !== false, createdAt: new Date().toISOString()
   };
+  if (banner.active) promoBanners.forEach(x => x.active = false); // solo uno activo
+  promoBanners.unshift(banner);
   schedulePersist();
-  res.json({ success: true, promoBanner });
+  res.json({ success: true, banners: promoBanners });
 });
-// API pública (la consume la web) — banner de promoción
+app.patch('/admin/api/promo-banner/:id', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
+  const b = promoBanners.find(x => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Banner no encontrado' });
+  const body = req.body || {};
+  if (body.text !== undefined) b.text = String(body.text).trim().slice(0, 200);
+  if (body.link !== undefined) b.link = String(body.link).trim().slice(0, 300);
+  if (typeof body.active === 'boolean') {
+    b.active = body.active;
+    if (body.active) promoBanners.forEach(x => { if (x.id !== b.id) x.active = false; });
+  }
+  schedulePersist();
+  res.json({ success: true, banners: promoBanners });
+});
+app.delete('/admin/api/promo-banner/:id', verifyAdminToken, requirePermission('broadcast'), (req, res) => {
+  const i = promoBanners.findIndex(x => x.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Banner no encontrado' });
+  promoBanners.splice(i, 1);
+  schedulePersist();
+  res.json({ success: true, banners: promoBanners });
+});
+// API pública (la consume la web) — banner activo (sin caché para que se actualice al instante)
 app.get('/api/promo', (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Cache-Control', 'public, max-age=60');
-  res.json({ active: !!promoBanner.active, text: promoBanner.text || '', link: promoBanner.link || '' });
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  const a = activePromo();
+  res.json({ active: !!a, text: a ? a.text : '', link: a ? a.link : '' });
 });
 
 // API pública (la consume la página web) — lista de productos visibles en la web.
