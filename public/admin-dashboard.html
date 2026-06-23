@@ -202,6 +202,7 @@
   <button class="nav-item" data-page="clientes" data-perm="clients" onclick="goTo('clientes')">👥 Clientes</button>
   <button class="nav-item" data-page="cobranza" data-perm="clients" onclick="goTo('cobranza')">💰 Cobranza</button>
   <button class="nav-item" data-page="soporte" data-perm="reports" onclick="goTo('soporte')">🛠️ Soporte</button>
+  <button class="nav-item" data-page="planes" data-perm="products" onclick="goTo('planes')">📶 Planes</button>
   <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
   <button class="nav-item" data-page="usuarios" data-perm="users" onclick="goTo('usuarios')">🔑 Usuarios</button>
 </nav>
@@ -515,6 +516,24 @@
 
 </section><!-- /page-productos -->
 
+<!-- ===== PÁGINA: Planes ===== -->
+<section class="page" id="page-planes">
+<div class="wrap" style="margin-bottom:28px" data-perm="products">
+  <div class="card">
+    <div class="card-header"><span class="hico">📶</span> Planes de internet (web) <span id="planTotal" style="font-size:.8em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
+    <div class="card-body">
+      <div id="planAlert" class="alert"></div>
+      <p style="font-size:.85em;color:var(--muted);margin-bottom:12px">Lo que edites aquí se actualiza en la <strong>página web</strong> (sección Internet para Hogares) al instante. Puedes agregar planes nuevos y se acomodan solos, sin romper el diseño.</p>
+      <div style="margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="openPlanModal()">➕ Nuevo plan</button>
+        <button class="btn btn-edit" style="width:auto;padding:11px 14px" onclick="loadPlans()">🔄 Actualizar</button>
+      </div>
+      <div id="plansList" style="overflow-x:auto"></div>
+    </div>
+  </div>
+</div>
+</section><!-- /page-planes -->
+
 <!-- ===== Modales (overlays, fuera de las páginas) ===== -->
 <!-- Product create/edit modal -->
 <div id="productModal" class="modal-bg">
@@ -543,6 +562,35 @@
     <div style="display:flex;gap:8px;margin-top:6px">
       <button class="btn btn-primary" onclick="saveProduct()" style="flex:1">Guardar</button>
       <button class="btn" onclick="closeProductModal()" style="background:#eee;color:var(--muted);flex:1">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Plan create/edit modal -->
+<div id="planModal" class="modal-bg">
+  <div class="modal-card" style="width:500px;max-height:92vh;overflow:auto">
+    <h3 id="planModalTitle">Nuevo plan</h3>
+    <input type="hidden" id="plEditId">
+    <div style="display:flex;gap:10px">
+      <div class="form-group" style="flex:1"><label>Tipo</label><select id="plTipo"><option value="fibra">Fibra Óptica</option><option value="inalambrico">Inalámbrico</option></select></div>
+      <div class="form-group" style="flex:1"><label>Segmento</label><select id="plSegmento"><option value="hogar">Hogar</option><option value="negocio">Negocio</option></select></div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <div class="form-group" style="flex:1"><label>Velocidad (Mbps)</label><input type="text" id="plMbps" placeholder="ej: 100"></div>
+      <div class="form-group" style="flex:1"><label>Precio</label><input type="text" id="plPrice" placeholder="ej: 350"></div>
+    </div>
+    <div class="form-group"><label>Etiqueta <span style="color:var(--muted);font-weight:400">(ej: LITE, BÁSICO; en inalámbrico se muestra "Internet Inalámbrico")</span></label><input type="text" id="plLabel" placeholder="ej: BÁSICO"></div>
+    <div class="form-group"><label>Características <span style="color:var(--muted);font-weight:400">(una por línea)</span></label><textarea id="plFeatures" rows="4" placeholder="Fibra Óptica Dedicada&#10;Velocidad hasta 100 Mbps&#10;Router Premium&#10;Soporte 24/7"></textarea></div>
+    <div style="display:flex;gap:10px">
+      <div class="form-group" style="flex:1"><label>Insignia <span style="color:var(--muted);font-weight:400">(opcional)</span></label><input type="text" id="plBadge" placeholder="ej: Recomendado"></div>
+      <div class="form-group" style="width:110px"><label>Orden</label><input type="number" id="plOrder" placeholder="0"></div>
+    </div>
+    <div class="form-group" style="background:#faf8ff;padding:11px 13px;border-radius:10px;margin-top:2px">
+      <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.9em"><input type="checkbox" id="plActive" checked style="width:auto"> ✅ Activo (visible en la web)</label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn btn-primary" onclick="savePlan()" style="flex:1">Guardar</button>
+      <button class="btn" onclick="closePlanModal()" style="background:#eee;color:var(--muted);flex:1">Cancelar</button>
     </div>
   </div>
 </div>
@@ -662,6 +710,7 @@
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
     else if(page==='cobranza' && can('clients')){ loadCobranza(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
+    else if(page==='planes' && can('products')){ loadPlans(); }
     else if(page==='usuarios' && can('users')){ loadUsers(); }
   }
 
@@ -837,6 +886,90 @@
       if(d.url){ document.getElementById('pImg').value=d.url; document.getElementById('pImgName').textContent='✅ '+file.name; }
       else throw new Error(d.error||'Error al subir');
     }catch(e){ document.getElementById('pImgName').textContent='❌ '+e.message; }
+  }
+
+  // ===== Planes de internet (web) =====
+  let PLANS_DATA=[];
+  async function loadPlans(){
+    try{
+      const r=await fetchAuth('/admin/api/plans'); const d=await r.json();
+      PLANS_DATA=d.plans||[];
+      const tot=document.getElementById('planTotal'); if(tot) tot.textContent=PLANS_DATA.length+' planes';
+      const el=document.getElementById('plansList');
+      if(!PLANS_DATA.length){ el.innerHTML='<div class="empty">Sin planes. Agrega el primero con “➕ Nuevo plan”.</div>'; return; }
+      const tipoLbl=t=>t==='inalambrico'?'📡 Inalámbrico':'⚡ Fibra';
+      el.innerHTML=`<table class="data-table"><thead><tr><th>Tipo</th><th>Segmento</th><th>Mbps</th><th>Etiqueta</th><th>Precio</th><th>Insignia</th><th title="Visible en la web">🌐</th><th></th></tr></thead><tbody>${
+        PLANS_DATA.map((p,i)=>{
+          const dot=(on)=>`<span onclick="togglePlan('${p.id}',${!on})" title="Clic para mostrar/ocultar en la web" style="cursor:pointer;font-size:1.05em">${on?'✅':'⬜'}</span>`;
+          return `<tr style="${p.active===false?'opacity:.5':''}">
+            <td>${tipoLbl(p.tipo)}</td>
+            <td><span class="badge">${p.segmento==='negocio'?'Negocio':'Hogar'}</span></td>
+            <td><strong>${esc(p.mbps)}</strong></td>
+            <td>${esc(p.label||'—')}</td>
+            <td>${esc(p.price||'')}</td>
+            <td>${p.badge?`<span class="badge" style="background:#e8f6ff;color:#0a6">${esc(p.badge)}</span>`:'—'}</td>
+            <td style="text-align:center">${dot(p.active!==false)}</td>
+            <td style="text-align:right;white-space:nowrap"><button class="btn btn-edit btn-sm" onclick="editPlan(${i})">✏️</button> <button class="btn btn-danger btn-sm" onclick="deletePlan('${p.id}')">✕</button></td>
+          </tr>`;
+        }).join('')
+      }</tbody></table>`;
+    }catch(e){ showAlert('planAlert','❌ No se pudieron cargar los planes','error'); }
+  }
+  function openPlanModal(){
+    document.getElementById('planModalTitle').textContent='Nuevo plan';
+    document.getElementById('plEditId').value='';
+    document.getElementById('plTipo').value='fibra';
+    document.getElementById('plSegmento').value='hogar';
+    ['plMbps','plPrice','plLabel','plFeatures','plBadge','plOrder'].forEach(id=>document.getElementById(id).value='');
+    document.getElementById('plActive').checked=true;
+    document.getElementById('planModal').style.display='flex';
+  }
+  function editPlan(i){
+    const p=PLANS_DATA[i]; if(!p) return;
+    document.getElementById('planModalTitle').textContent='Editar plan';
+    document.getElementById('plEditId').value=p.id;
+    document.getElementById('plTipo').value=p.tipo||'fibra';
+    document.getElementById('plSegmento').value=p.segmento||'hogar';
+    document.getElementById('plMbps').value=p.mbps||'';
+    document.getElementById('plPrice').value=p.price||'';
+    document.getElementById('plLabel').value=p.label||'';
+    document.getElementById('plFeatures').value=(p.features||[]).join('\n');
+    document.getElementById('plBadge').value=p.badge||'';
+    document.getElementById('plOrder').value=(p.order!=null?p.order:'');
+    document.getElementById('plActive').checked=p.active!==false;
+    document.getElementById('planModal').style.display='flex';
+  }
+  function closePlanModal(){ document.getElementById('planModal').style.display='none'; }
+  async function savePlan(){
+    const id=document.getElementById('plEditId').value;
+    const body={
+      tipo:document.getElementById('plTipo').value,
+      segmento:document.getElementById('plSegmento').value,
+      mbps:document.getElementById('plMbps').value.trim(),
+      price:document.getElementById('plPrice').value.trim(),
+      label:document.getElementById('plLabel').value.trim(),
+      features:document.getElementById('plFeatures').value,
+      badge:document.getElementById('plBadge').value.trim(),
+      active:document.getElementById('plActive').checked
+    };
+    const ord=document.getElementById('plOrder').value.trim();
+    if(ord!=='') body.order=Number(ord);
+    if(!body.mbps){ showAlert('planAlert','Escribe la velocidad (Mbps)','error'); return; }
+    try{
+      const url=id?('/admin/api/plans/'+id):'/admin/api/plans';
+      const r=await fetchAuth(url,{method:id?'PATCH':'POST',body:JSON.stringify(body)});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      closePlanModal(); showAlert('planAlert','✅ Plan guardado','success'); loadPlans();
+    }catch(e){ showAlert('planAlert','❌ '+e.message,'error'); }
+  }
+  async function deletePlan(id){
+    if(!confirm('¿Eliminar este plan? Desaparecerá de la página web.')) return;
+    try{ const r=await fetchAuth('/admin/api/plans/'+id,{method:'DELETE'}); const d=await r.json(); if(!r.ok) throw new Error(d.error); showAlert('planAlert','🗑️ Plan eliminado','success'); loadPlans(); }
+    catch(e){ showAlert('planAlert','❌ '+e.message,'error'); }
+  }
+  async function togglePlan(id,val){
+    try{ const r=await fetchAuth('/admin/api/plans/'+id,{method:'PATCH',body:JSON.stringify({active:val})}); const d=await r.json(); if(!r.ok) throw new Error(d.error); loadPlans(); }
+    catch(e){ showAlert('planAlert','❌ '+e.message,'error'); }
   }
 
   // ===== Buscar cliente + estado de cuenta =====

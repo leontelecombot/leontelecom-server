@@ -603,6 +603,7 @@ function buildStateSnapshot() {
     ),
     adminUsers: mapToObj(adminUsers),
     products: products,
+    plans: plans,
     stats: stats,
     tickets: mapToObj(tickets),
     promoBanners: promoBanners
@@ -626,6 +627,11 @@ function hydrateState(s) {
   if (Array.isArray(s.products) && s.products.length) {
     products.length = 0;
     products.push(...s.products.map(p => ({ showWeb: true, showBot: true, active: true, ...p })));
+  }
+  // Planes: si la base ya tiene una lista guardada, reemplaza la semilla.
+  if (Array.isArray(s.plans) && s.plans.length) {
+    plans.length = 0;
+    plans.push(...s.plans.map((p, i) => ({ active: true, order: i, period: '/mes', ...p })));
   }
   if (s.stats && typeof s.stats === 'object') {
     stats.productHits = s.stats.productHits || {};
@@ -2084,6 +2090,38 @@ function findProductById(id) { return products.find(p => p.id === id) || null; }
 // Productos visibles para el BOT / para la WEB (activos + con su casilla marcada).
 function getBotProducts() { return products.filter(p => p.active !== false && p.showBot !== false); }
 function getWebProducts() { return products.filter(p => p.active !== false && p.showWeb !== false); }
+
+// ====================================================================
+// PLANES de internet (editables desde el panel, los pinta la web vía /api/plans)
+// ====================================================================
+const DEFAULT_PLANS = [
+  // Fibra óptica · hogar
+  { tipo: 'fibra', segmento: 'hogar', mbps: '30',  label: 'LITE',     price: '$289', features: ['Fibra Óptica Dedicada', 'Velocidad hasta 30 Mbps', 'Router Incluido', 'Soporte 24/7'], badge: '' },
+  { tipo: 'fibra', segmento: 'hogar', mbps: '80',  label: 'BÁSICO',   price: '$320', features: ['Fibra Óptica Dedicada', 'Velocidad hasta 80 Mbps', 'Router Premium', 'Soporte Prioritario'], badge: '' },
+  { tipo: 'fibra', segmento: 'hogar', mbps: '150', label: 'MEDIO',    price: '$440', features: ['Fibra Óptica Dedicada', 'Velocidad hasta 150 Mbps', 'Router Premium', 'Soporte VIP'], badge: 'Recomendado' },
+  { tipo: 'fibra', segmento: 'hogar', mbps: '200', label: 'AVANZADO', price: '$560', features: ['Fibra Óptica Dedicada', 'Velocidad hasta 200 Mbps', 'Router Premium', 'Soporte Premium'], badge: '' },
+  { tipo: 'fibra', segmento: 'hogar', mbps: '300', label: 'ULTRA',    price: '$680', features: ['Fibra Óptica Dedicada', 'Velocidad hasta 300 Mbps', 'Router Premium', 'Soporte Dedicado'], badge: 'Ultra' },
+  // Inalámbrico · hogar
+  { tipo: 'inalambrico', segmento: 'hogar', mbps: '15', label: 'Internet Inalámbrico', price: '$290', features: ['Internet Ilimitado', 'Con Antena', 'Velocidad hasta 15 Mbps', 'Soporte 24/7'], badge: '' },
+  { tipo: 'inalambrico', segmento: 'hogar', mbps: '20', label: 'Internet Inalámbrico', price: '$340', features: ['Internet Ilimitado', 'Con Antena', 'Velocidad hasta 20 Mbps', 'Soporte Prioritario'], badge: 'Popular' },
+  { tipo: 'inalambrico', segmento: 'hogar', mbps: '30', label: 'Internet Inalámbrico', price: '$440', features: ['Internet Ilimitado', 'Con Antena', 'Velocidad hasta 30 Mbps', 'Soporte VIP'], badge: '' }
+];
+// Lista VIVA de planes (semilla DEFAULT_PLANS; se reemplaza al hidratar si la base ya tiene).
+let plans = DEFAULT_PLANS.map((p, i) => ({ id: 'planseed' + (i + 1), active: true, order: i, period: '/mes', ...p }));
+function findPlanById(id) { return plans.find(p => p.id === id) || null; }
+function getWebPlans() { return plans.filter(p => p.active !== false).slice().sort((a, b) => (a.order || 0) - (b.order || 0)); }
+function sanitizeFeatures(f) {
+  const arr = Array.isArray(f) ? f : String(f || '').split('\n');
+  return arr.map(s => String(s).trim()).filter(Boolean).slice(0, 8);
+}
+// Arma el link de WhatsApp para contratar un plan (igual estilo que la web).
+function planWaLink(p) {
+  const tipoTxt = p.tipo === 'inalambrico'
+    ? 'Internet Inalámbrico'
+    : ('Fibra Óptica' + (p.label && p.label !== 'Internet Inalámbrico' ? ' ' + p.label : ''));
+  const msg = `Hola 👋, vi el plan ${tipoTxt} de ${p.mbps} Mbps (${fmtPrice(p.price)}/mes) en su página web y me gustaría contratarlo. ¿Me ayudan?`;
+  return 'https://wa.me/529511697346?text=' + encodeURIComponent(msg);
+}
 
 // URL de imagen: si ya es una URL completa (imagen subida), úsala tal cual;
 // si es solo el nombre de archivo (productos semilla), apunta a /images/products/.
@@ -3580,6 +3618,62 @@ app.get('/api/products', (req, res) => {
     cat: p.cat || 'Otros', img: getProductImageUrl(p), desc: p.desc || ''
   }));
   res.json({ products: list, updatedAt: Date.now() });
+});
+
+// ---------- PLANES de internet (CRUD desde el panel + API pública para la web) ----------
+app.get('/admin/api/plans', verifyAdminToken, requirePermission('products'), (req, res) => {
+  res.json({ plans: plans.slice().sort((a, b) => (a.order || 0) - (b.order || 0)) });
+});
+app.post('/admin/api/plans', verifyAdminToken, requirePermission('products'), (req, res) => {
+  const b = req.body || {};
+  const mbps = String(b.mbps || '').trim();
+  if (!mbps) return res.status(400).json({ error: 'Falta la velocidad (Mbps)' });
+  const tipo = b.tipo === 'inalambrico' ? 'inalambrico' : 'fibra';
+  const p = {
+    id: 'plan' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    tipo, segmento: b.segmento === 'negocio' ? 'negocio' : 'hogar',
+    mbps, label: String(b.label || '').trim() || (tipo === 'inalambrico' ? 'Internet Inalámbrico' : ''),
+    price: fmtPrice(b.price), period: '/mes',
+    features: sanitizeFeatures(b.features), badge: String(b.badge || '').trim().slice(0, 20),
+    active: b.active !== false, order: Number.isFinite(+b.order) ? +b.order : plans.length
+  };
+  plans.push(p);
+  schedulePersist();
+  res.json({ success: true, plan: p });
+});
+app.patch('/admin/api/plans/:id', verifyAdminToken, requirePermission('products'), (req, res) => {
+  const p = findPlanById(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Plan no encontrado' });
+  const b = req.body || {};
+  if (b.tipo !== undefined) p.tipo = b.tipo === 'inalambrico' ? 'inalambrico' : 'fibra';
+  if (b.segmento !== undefined) p.segmento = b.segmento === 'negocio' ? 'negocio' : 'hogar';
+  if (b.mbps !== undefined) p.mbps = String(b.mbps).trim() || p.mbps;
+  if (b.label !== undefined) p.label = String(b.label).trim();
+  if (b.price !== undefined) p.price = fmtPrice(b.price);
+  if (b.features !== undefined) p.features = sanitizeFeatures(b.features);
+  if (b.badge !== undefined) p.badge = String(b.badge).trim().slice(0, 20);
+  if (typeof b.active === 'boolean') p.active = b.active;
+  if (b.order !== undefined && Number.isFinite(+b.order)) p.order = +b.order;
+  schedulePersist();
+  res.json({ success: true, plan: p });
+});
+app.delete('/admin/api/plans/:id', verifyAdminToken, requirePermission('products'), (req, res) => {
+  const i = plans.findIndex(p => p.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Plan no encontrado' });
+  const [removed] = plans.splice(i, 1);
+  schedulePersist();
+  res.json({ success: true, removed });
+});
+// API pública (la consume la página web) — planes visibles, ordenados.
+app.get('/api/plans', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'public, max-age=60');
+  const list = getWebPlans().map(p => ({
+    id: p.id, tipo: p.tipo, segmento: p.segmento || 'hogar', mbps: p.mbps,
+    label: p.label || '', price: fmtPrice(p.price), period: p.period || '/mes',
+    features: p.features || [], badge: p.badge || '', wa: planWaLink(p)
+  }));
+  res.json({ plans: list, updatedAt: Date.now() });
 });
 
 // Normaliza un cliente de Wisphub a los campos del estado de cuenta.
