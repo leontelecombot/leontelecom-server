@@ -498,38 +498,44 @@ async function sendBroadcastSmart(message, imageUrls = []) {
 }
 
 // Scheduler — checks every 60s if any broadcast needs to be sent
+let _schedulerBusy = false;
 setInterval(async () => {
-  const now = new Date();
-  for (const [id, bc] of scheduledBroadcasts.entries()) {
-    if (bc.status !== 'active') continue;
-    if (bc.endAt && now > new Date(bc.endAt)) {
-      bc.status = 'completed';
-      scheduledBroadcasts.set(id, bc);
-      continue;
-    }
-    if (now >= new Date(bc.nextSendAt)) {
-      try {
-        const result = await sendBroadcastSmart(bc.message, bc.imageUrls || []);
-        bc.sentCount = (bc.sentCount || 0) + 1;
-        bc.lastSentAt = now.toISOString();
-        broadcastHistory.unshift({ id, type: bc.type, label: bc.label, message: bc.message, sentAt: now.toISOString(), result });
-        if (broadcastHistory.length > 100) broadcastHistory.pop();
-
+  if (_schedulerBusy) return; // evita pasadas concurrentes: un envío largo NO se re-dispara
+  _schedulerBusy = true;
+  try {
+    const now = new Date();
+    for (const [id, bc] of scheduledBroadcasts.entries()) {
+      if (bc.status !== 'active') continue;
+      if (bc.endAt && now > new Date(bc.endAt)) {
+        bc.status = 'completed';
+        scheduledBroadcasts.set(id, bc);
+        continue;
+      }
+      if (now >= new Date(bc.nextSendAt)) {
+        // RESERVAR el próximo envío ANTES de mandar. Así, aunque el envío masivo
+        // tarde varios minutos, el siguiente tick ya NO lo ve "pendiente" y no se
+        // vuelve a disparar (ESTE era el bug del bucle).
         if (bc.intervalMs) {
           const next = new Date(now.getTime() + bc.intervalMs);
-          if (!bc.endAt || next <= new Date(bc.endAt)) {
-            bc.nextSendAt = next.toISOString();
-          } else {
-            bc.status = 'completed';
-          }
+          if (!bc.endAt || next <= new Date(bc.endAt)) bc.nextSendAt = next.toISOString();
+          else bc.status = 'completed';
         } else {
           bc.status = 'completed';
         }
         scheduledBroadcasts.set(id, bc);
         schedulePersist();
-      } catch (e) { console.error('[Broadcast scheduler error]', e.message); }
+        try {
+          const result = await sendBroadcastSmart(bc.message, bc.imageUrls || []);
+          bc.sentCount = (bc.sentCount || 0) + 1;
+          bc.lastSentAt = now.toISOString();
+          broadcastHistory.unshift({ id, type: bc.type, label: bc.label, message: bc.message, sentAt: now.toISOString(), result });
+          if (broadcastHistory.length > 100) broadcastHistory.pop();
+          scheduledBroadcasts.set(id, bc);
+          schedulePersist();
+        } catch (e) { console.error('[Broadcast scheduler error]', e.message); }
+      }
     }
-  }
+  } finally { _schedulerBusy = false; }
 }, 60000);
 
 // Simple in-memory session store keyed by chatId. Keeps short conversational state.
@@ -617,6 +623,14 @@ function hydrateState(s) {
   fill(clientProfiles, s.clientProfiles);
   fill(manualClients, s.manualClients);
   fill(scheduledBroadcasts, s.scheduledBroadcasts);
+  // Limpieza anti-bucle: avisos de "una sola vez" que quedaron activos y vencidos
+  // (por el bug anterior) se marcan completados para que NO se reenvíen al arrancar.
+  for (const [id, bc] of scheduledBroadcasts) {
+    if (bc.status === 'active' && !bc.intervalMs && bc.nextSendAt && new Date(bc.nextSendAt) < new Date()) {
+      bc.status = 'completed';
+      scheduledBroadcasts.set(id, bc);
+    }
+  }
   fill(folios, s.folios);
   fill(tickets, s.tickets);
   if (Array.isArray(s.promoBanners)) promoBanners = s.promoBanners;
@@ -3794,13 +3808,17 @@ app.post('/admin/api/broadcast', verifyAdminToken, requirePermission('broadcast'
     return res.json({ success: true, id, scheduled: true, sendAt: bc.nextSendAt });
   }
 
-  // Envío inmediato (el scheduler también lo tomaría, pero lo disparamos ya)
+  // RESERVAR el slot ANTES de enviar: el envío masivo puede tardar minutos y el
+  // scheduler corre cada 60s; si no reservamos, lo re-dispararía en bucle.
+  bc.nextSendAt = intervalMs ? new Date(now.getTime() + intervalMs).toISOString() : null;
+  if (!intervalMs) bc.status = 'completed';
+  scheduledBroadcasts.set(id, bc);
+  schedulePersist();
+  // Envío inmediato
   try {
     const result = await sendBroadcastSmart(message, imageUrls);
     bc.sentCount = 1;
     bc.lastSentAt = now.toISOString();
-    bc.nextSendAt = intervalMs ? new Date(now.getTime() + intervalMs).toISOString() : null;
-    if (!intervalMs) bc.status = 'completed';
     scheduledBroadcasts.set(id, bc);
     broadcastHistory.unshift({ id, type: bc.type, label: bc.label, message, sentAt: now.toISOString(), result });
     schedulePersist();
