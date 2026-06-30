@@ -2201,7 +2201,11 @@ function wantsInternet(text) {
   if (isTechnicalIssue(text)) return false;
   if (/\b(no tengo|sin internet|se cayo|se fue|no hay|no sirve|no funciona|no jala|no agarra|lento|lenta)\b/.test(v)) return false;
   if (/\b(quiero|necesito|me interesa|contratar|instalar|dar de alta|poner|adquirir|info de|informacion de)\b/.test(v) &&
-      /\b(internet|servicio|wifi|plan|planes|paquete|fibra|inalambric|megas)\b/.test(v)) return true;
+      /\b(internet|servicio|wifi|plan|planes|paquete|fibra|inalambric|megas|promo|promocion)\b/.test(v)) return true;
+  // Interés "a secas" (p. ej. responder "me interesa" a una promo de internet) → lo tomamos como interés en internet.
+  if (/^(s[ií]\s+|claro\s+|simon\s+|sip?\s+)?(me\s+)?interesa(\s+la\s+promo(cion)?)?[\s.!]*$/.test(v.trim()) ||
+      /^interesad[oa][\s.!]*$/.test(v.trim()) ||
+      /^(mas|quiero)\s+info(rmacion)?[\s.!]*$/.test(v.trim())) return true;
   return isPlanRequest(text);
 }
 
