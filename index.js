@@ -25,7 +25,21 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 
 const app = express();
 app.set('trust proxy', true); // Render está detrás de proxy → req.ip = IP real del cliente
-app.use(express.json({ limit: '50mb' }));
+app.disable('x-powered-by'); // no revelar que es Express
+
+// Cabeceras de seguridad en todas las respuestas (sin CSP estricta para no romper el panel/CDNs)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), payment=()');
+  res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  next();
+});
+
+// Guarda el cuerpo crudo (para verificar la firma del webhook de Meta) y baja el límite de 50mb→10mb
+app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.static('public'));
 
 // ── BLINDAJE: la red de seguridad para que el bot NUNCA se caiga ──
@@ -3253,6 +3267,19 @@ app.get('/webhook/whatsapp', (req, res) => {
 
 // POST: Incoming WhatsApp messages
 app.post('/webhook/whatsapp', async (req, res) => {
+  // Verificación de firma de Meta (X-Hub-Signature-256). Opcional: solo se exige
+  // si defines META_APP_SECRET (o WHATSAPP_APP_SECRET) en Render. Sin esa variable,
+  // el comportamiento es igual que antes (no rompe el bot en producción).
+  const APP_SECRET = process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET || '';
+  if (APP_SECRET) {
+    const sig = req.get('x-hub-signature-256') || '';
+    const expected = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(req.rawBody || Buffer.from('')).digest('hex');
+    const a = Buffer.from(sig), b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn('[WhatsApp] Webhook con firma inválida — rechazado');
+      return res.sendStatus(403);
+    }
+  }
   res.sendStatus(200);
 
   const body = req.body;
