@@ -302,6 +302,7 @@ const agentActiveCases = new Map(); // Map<agentNumber, clientId>
 // Clientes que pidieron un asesor y siguen esperando — para enviar recordatorio
 // si nadie los atiende en cierto tiempo. clientId → { since, name, type, stage }
 const pendingAgentRequests = new Map();
+const pendingImage = new Map(); // confirmación de comprobante: chatId -> { url, analysis, userName, ts }
 
 function isPaused(chatId) {
   const p = pausedChats.get(String(chatId));
@@ -1816,37 +1817,77 @@ async function downloadWhatsAppMedia(mediaId) {
 
 // ==================== SHARED MESSAGE HANDLERS ====================
 
+// Guarda la imagen del cliente en Mongo y devuelve una URL pública (para reenviarla al asesor).
+async function storeIncomingImage(imageBase64) {
+  try {
+    if (!SERVER_BASE_URL) return '';
+    let buffer = Buffer.from(imageBase64, 'base64');
+    const sharp = getSharp();
+    if (sharp) {
+      try { buffer = await sharp(buffer).rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer(); } catch (_) {}
+    }
+    const id = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+    const ok = await persistence.saveImage(id, 'image/jpeg', buffer);
+    return ok ? `${SERVER_BASE_URL}/images/db/${id}` : '';
+  } catch (e) { console.error('[img] store error:', e.message); return ''; }
+}
+
+// Avisa al asesor (Telegram y/o WhatsApp) con el texto y, si hay, la foto.
+async function notifyAgentWithImage(chatId, userName, headline, bodyLines, imageUrl) {
+  const num = String(chatId).replace(/\D/g, '');
+  const msg = [headline, `👤 Cliente: ${userName || 'Sin nombre'}`, `📱 WhatsApp: ${num}`, '', ...(bodyLines || [])].join('\n');
+  const media = imageUrl ? [imageUrl] : [];
+  if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) { try { await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, msg, media); } catch (e) { console.error('[notify tg]', e.message); } }
+  if (AGENT_WHATSAPP_NUMBER) { try { await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, msg, media); } catch (e) { console.error('[notify wa]', e.message); } }
+}
+
 async function handleIncomingImage(chatId, userName, imageBase64, platform, sendMsg) {
   try {
     dataManager.registerUser(chatId, { name: userName, platform });
-    await sendMsg(chatId, '⏳ Analizando tu comprobante de pago...');
-    const analysis = await analyzePaymentReceipt(imageBase64);
-    dataManager.createReport(chatId, analysis, imageBase64);
+    await sendMsg(chatId, '⏳ Analizando tu imagen…');
+    const a = (await analyzePaymentReceipt(imageBase64)) || {};
+    try { dataManager.createReport(chatId, a, imageBase64); } catch (_) {}
+    const url = await storeIncomingImage(imageBase64);
+    const tipo = a.tipo || (a.valido ? 'comprobante' : 'otro');
 
-    try {
-      await notifyAgentPaymentReceipt(chatId, userName, analysis);
-    } catch (notifyError) {
-      console.error('Agent notification error:', notifyError.message);
+    // ---- COMPROBANTE: extrae nombre + monto y pide confirmación con botones ----
+    if (tipo === 'comprobante') {
+      const nombre = String(a.nombre || '').trim();
+      const monto = String(a.monto || '').trim();
+      pendingImage.set(String(chatId), { url, analysis: a, userName, ts: Date.now() });
+      let det = '📄 Recibí tu comprobante de pago. Detecté estos datos:\n\n';
+      det += '👤 Nombre: ' + (nombre || '_no lo pude leer bien_') + '\n';
+      det += '💵 Monto: ' + (monto || '_no lo pude leer bien_');
+      if (a.fecha) det += '\n📅 Fecha: ' + a.fecha;
+      det += '\n\n¿Los datos son correctos?';
+      if (platform === 'whatsapp') {
+        await sendMsg(chatId, det, [], { buttons: [
+          { id: 'comprobante_si', title: '✅ Sí, correcto' },
+          { id: 'comprobante_no', title: '❌ No / corregir' }
+        ] });
+      } else {
+        await sendMsg(chatId, det + '\n\nResponde *SÍ* o *NO*.');
+      }
+      return;
     }
 
-    if (analysis.valido) {
-      await sendMsg(chatId,
-        '✅ Perfecto, tu comprobante de pago ha sido analizado.\n\n' +
-        'Un asesor se pondrá en contacto contigo para procesar tu solicitud.\n\n' +
-        '¿Hay algo más en lo que pueda ayudarte?'
-      );
+    // ---- EQUIPO / EMERGENCIA / OTRO: la IA lo describe y se pasa al asesor con la foto ----
+    const desc = String(a.descripcion || '').trim();
+    if (tipo === 'emergencia') {
+      await notifyAgentWithImage(chatId, userName, '🚨 POSIBLE EMERGENCIA (imagen del cliente)', [desc || 'El cliente envió una imagen que parece urgente.'], url);
+      await sendMsg(chatId, '🚨 Recibí tu imagen y parece algo urgente. Ya avisé a un asesor para atenderte lo antes posible. Si es una emergencia grave, por favor llama también. 🙏');
+    } else if (tipo === 'equipo') {
+      await notifyAgentWithImage(chatId, userName, '🔧 Imagen de equipo / posible falla', [desc || 'El cliente envió una foto de un equipo.'], url);
+      await sendMsg(chatId, '✅ Recibí la foto de tu equipo. Un asesor la está revisando y te contactará pronto para ayudarte. 🔧');
     } else {
-      await sendMsg(chatId,
-        `⚠️ No parece ser un comprobante de pago válido.\n\nRazón: ${analysis.razon}\n\n¿Quieres intentar enviar otra imagen?`
-      );
+      await notifyAgentWithImage(chatId, userName, '🖼️ Imagen del cliente', [desc || 'El cliente envió una imagen.'], url);
+      await sendMsg(chatId, '✅ Recibí tu imagen. Un asesor la revisará y se pondrá en contacto contigo. 😊');
     }
+    pendingAgentRequests.set(String(chatId), { since: new Date(), name: userName, type: 'imagen', stage: 0 });
+    if (typeof schedulePersist === 'function') schedulePersist();
   } catch (error) {
     console.error('Image handling error:', error.message);
-    try {
-      await sendMsg(chatId, '❌ Error al procesar la imagen. Intenta de nuevo.');
-    } catch (sendError) {
-      console.error('Fallback send error:', sendError.message);
-    }
+    try { await sendMsg(chatId, '❌ Tuve un problema al procesar la imagen. ¿Puedes reenviarla, por favor?'); } catch (_) {}
   }
 }
 
@@ -2420,6 +2461,38 @@ async function startReportFlow(chatId, text, sendMsg) {
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
+    // ---- Confirmación de comprobante (botón Sí/No o texto) ----
+    const _pend = pendingImage.get(String(chatId));
+    if (_pend) {
+      if (Date.now() - (_pend.ts || 0) > 10 * 60 * 1000) {
+        pendingImage.delete(String(chatId));
+      } else {
+        const t = String(text || '').toLowerCase().trim();
+        const yes = t === 'comprobante_si' || /^(s[ií]\b|si,|correcto|es correcto|sip|simon|asi es|así es|👍|✅)/.test(t);
+        const no = t === 'comprobante_no' || /^(no\b|corregir|incorrecto|esta mal|está mal|❌|👎)/.test(t);
+        if (yes || no) {
+          pendingImage.delete(String(chatId));
+          if (yes) {
+            const a = _pend.analysis || {};
+            const lines = [
+              '💳 Datos del comprobante (confirmados por el cliente):',
+              '👤 Nombre: ' + (String(a.nombre || '').trim() || 'no especificado'),
+              '💵 Monto: ' + (String(a.monto || '').trim() || 'no especificado')
+            ];
+            if (a.banco) lines.push('🏦 Banco/Operador: ' + a.banco);
+            if (a.fecha) lines.push('📅 Fecha: ' + a.fecha);
+            await notifyAgentWithImage(chatId, _pend.userName, '💳 COMPROBANTE DE PAGO', lines, _pend.url);
+            pendingAgentRequests.set(String(chatId), { since: new Date(), name: _pend.userName, type: 'pago', stage: 0 });
+            if (typeof schedulePersist === 'function') schedulePersist();
+            await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+          } else {
+            await sendMsg(chatId, 'De acuerdo 🙏. Por favor mándame de nuevo una *foto clara* del comprobante, o escríbeme el *nombre* y el *monto* correctos y con gusto lo registro.');
+          }
+          return;
+        }
+      }
+    }
+
     // If agent has taken over this chat, relay client message to agent
     if (isPaused(chatId)) {
       if (AGENT_WHATSAPP_NUMBER) {
@@ -3322,6 +3395,16 @@ app.post('/webhook/whatsapp', async (req, res) => {
       console.error('[WhatsApp] Image handling error:', error.message);
       try { await sendWhatsAppMessage(from, '❌ Error al procesar la imagen. Intenta de nuevo.'); } catch (_) {}
     }
+    return;
+  }
+
+  if (msg.type === 'document') {
+    const fname = msg.document?.filename || 'tu archivo';
+    try {
+      await sendWhatsAppMessage(from,
+        `📄 Recibí *${fname}*.\n\n¿Es tu *comprobante de pago*? Si es así, dime *a nombre de quién* viene y de *qué monto*. 🙌\n\nO mejor mándame una *foto / captura de pantalla* del comprobante y lo proceso al instante. 📸`);
+      await notifyAgentWithImage(from, contactName, '📄 El cliente envió un documento (PDF)', ['Archivo: ' + fname, 'El bot le pidió que confirme si es comprobante y de parte de quién.'], '');
+    } catch (e) { console.error('[WhatsApp] Document handling error:', e.message); }
     return;
   }
 
