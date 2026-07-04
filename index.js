@@ -2231,7 +2231,7 @@ async function sendProductHighlight(chatId, sendMsg) {
   const p = nextPromoProduct();
   if (!p) return;
   await sendMsg(chatId,
-    `Por cierto 👀 en nuestra oficina también vendemos:\n🛍️ *${p.name}* — ${fmtPrice(p.price)}\n¿Te interesa? Escribe *productos* para ver más.`,
+    `Por cierto 👀 en nuestra oficina también vendemos:\n🛍️ *${p.name}*\n¿Te interesa? Escribe *productos* para ver más.`,
     [getProductImageUrl(p)]
   );
 }
