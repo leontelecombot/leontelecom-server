@@ -1811,7 +1811,7 @@ async function downloadWhatsAppMedia(mediaId) {
   });
   if (!mediaResponse.ok) throw new Error(`WhatsApp media download failed: ${mediaResponse.status}`);
 
-  const buffer = await mediaResponse.buffer();
+  const buffer = Buffer.from(await mediaResponse.arrayBuffer());
   return buffer.toString('base64');
 }
 
@@ -3314,7 +3314,7 @@ app.post('/webhook', async (req, res) => {
       const fileData = await fileResponse.json();
       if (!fileData.ok) { await sendTelegramMessage(chatId, '❌ No pude descargar la imagen. Intenta de nuevo.'); return; }
       const imageResponse = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`);
-      const imageBase64 = (await imageResponse.buffer()).toString('base64');
+      const imageBase64 = Buffer.from(await imageResponse.arrayBuffer()).toString('base64');
       await handleIncomingImage(chatId, userName, imageBase64, 'telegram', sendTelegramMessage);
     } catch (err) {
       console.error('[Telegram] Image error:', err.message);
