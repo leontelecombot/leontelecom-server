@@ -2300,8 +2300,7 @@ async function sendWelcomeMenu(chatId, sendMsg) {
   if (w && w.name) {
     const first = w.name.trim().split(/\s+/)[0] || '';
     const nombre = first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : '';
-    const planClean = w.plan ? String(w.plan).replace(/^PLAN\s+/i, '').trim() : '';
-    saludo = `👋 ¡Hola de nuevo, ${nombre}!` + (planClean ? ` 📶 Tu plan: ${planClean}.` : '');
+    saludo = `👋 ¡Hola de nuevo, ${nombre}!`;
   } else {
     const knownName = nameOf(getProfile(chatId));
     saludo = knownName ? `👋 ¡Hola de nuevo, ${knownName}!` : '👋 ¡Hola! Soy Leo, de León Telecom.';
