@@ -2400,6 +2400,14 @@ function parseTimeToMinutes(hhmm, fallback = 600) {
   return (mins >= 0 && mins < 1440) ? mins : fallback;
 }
 
+// "CARLOS MANUEL ACEVEDO FLORES" → "Carlos Manuel Acevedo Flores" (partículas en minúscula).
+function tituloCase(s) {
+  const chicas = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'e', 'da', 'do']);
+  return String(s || '').trim().toLowerCase().split(/\s+/).filter(Boolean).map((w, i) =>
+    (i > 0 && chicas.has(w)) ? w : w.charAt(0).toUpperCase() + w.slice(1)
+  ).join(' ');
+}
+
 // force=true (desde el panel) corre ya, sin esperar la hora — el dedup evita repetir.
 async function sweepCorteReminders(force = false) {
   try {
@@ -2419,7 +2427,8 @@ async function sweepCorteReminders(force = false) {
 
     const mananaDate = new Date(Date.now() + 24 * 3600 * 1000);
     const manana = mexicoDateStr(mananaDate);
-    const bonita = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(mananaDate);
+    // "jueves 16 de julio" (sin la coma que mete Intl entre el día de la semana y la fecha).
+    const bonita = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(mananaDate).replace(',', '');
 
     let sent = 0, failed = 0, yaEnviados = 0;
     for (const [phone, c] of wisphubClients.entries()) {
@@ -2430,8 +2439,9 @@ async function sweepCorteReminders(force = false) {
         if (corteReminders[key]) { yaEnviados++; continue; }
         const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
         const nombre = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+        const titular = tituloCase(c.name) || 'ti';
         const msgCorte = `Hola ${nombre} 👋 Te recordamos que mañana ${bonita} tu servicio de internet ` +
-          `a nombre de ${c.name} está por vencer. Realiza tu pago a tiempo para evitar la suspensión del servicio. ` +
+          `a nombre de ${titular} está por vencer. Realiza tu pago a tiempo para evitar la suspensión del servicio. ` +
           `Si ya realizaste tu pago, por favor ignora este mensaje. — León Telecom 💙`;
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
