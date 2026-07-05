@@ -1962,6 +1962,14 @@ async function sendDocToAllAgents(docUrl, docName) {
     try { await sendWhatsAppDocument(num, docUrl, docName); } catch (_) {}
   }
 }
+// Avisa a los OTROS asesores (todos menos el que actuó). Útil para "caso ya tomado".
+async function notifyOtherAgents(exceptAgent, text) {
+  const ex = _normAgentNum(exceptAgent);
+  for (const num of AGENT_WHATSAPP_NUMBERS) {
+    if (num === ex) continue;
+    try { await sendWhatsAppMessage(num, text); } catch (e) { console.error('[notify other]', num, e.message); }
+  }
+}
 // ¿Qué asesor está atendiendo (relay) a este cliente? '' si ninguno.
 function agentHandling(clientId) {
   const c = String(clientId);
@@ -2125,6 +2133,9 @@ async function handleAgentCommand(agentNumber, text) {
     ].join('\n'), [], {
       buttons: [{ id: `LIBERAR ${clientId}`, title: 'Cerrar caso' }]
     });
+    // Avisa a los demás asesores que este caso ya fue tomado (sus botones ya no aplican).
+    await notifyOtherAgents(agentNumber,
+      `🔒 El caso de *${clientName}* (${clientId}) ya fue *tomado por otro asesor*.\nLos botones de ese caso ya no aplican. 🙅`);
     return;
   }
 
@@ -2150,15 +2161,28 @@ async function handleAgentCommand(agentNumber, text) {
   const recibidoMatch = v.match(/^RECIBIDO\s+(\d+)/);
   if (recibidoMatch) {
     const clientId = normalizeClientNumber(recibidoMatch[1]);
+    const cName = nameOf(getProfile(clientId), clientId);
+    // Si OTRO asesor ya lo está atendiendo, no lo tocamos (él lo cierra).
+    const dueño = agentHandling(clientId);
+    if (dueño && dueño !== agentNumber) {
+      await sendWhatsAppMessage(agentNumber, `🔒 *${cName}* (${clientId}) ya lo está atendiendo otro asesor. No hice nada.`);
+      return;
+    }
+    // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
+    const marcados = markCases(clientId, 'recibido');
+    if (!marcados && !pendingAgentRequests.has(clientId)) {
+      await sendWhatsAppMessage(agentNumber, `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por otro asesor.`);
+      return;
+    }
     pendingAgentRequests.delete(clientId);
-    markCases(clientId, 'recibido');
     schedulePersist();
     try {
       await sendWhatsAppMessage(clientId,
         '✅ ¡Gracias! Recibimos tu mensaje y lo estamos revisando. En breve te contactamos. 🙌');
     } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
-    const cName = nameOf(getProfile(clientId), clientId);
     await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
+    // Avisa a los demás asesores que este caso ya fue gestionado.
+    await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por otro asesor.`);
     return;
   }
 
