@@ -2177,8 +2177,7 @@ async function handleAgentCommand(agentNumber, text) {
     pendingAgentRequests.delete(clientId);
     schedulePersist();
     try {
-      await sendWhatsAppMessage(clientId,
-        '✅ ¡Gracias! Recibimos tu mensaje y lo estamos revisando. En breve te contactamos. 🙌');
+      await sendWhatsAppMessage(clientId, '✅ ¡Recibido, gracias! 🙌');
     } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
     await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
     // Avisa a los demás asesores que este caso ya fue gestionado.
