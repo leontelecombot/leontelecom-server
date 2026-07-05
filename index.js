@@ -77,7 +77,22 @@ const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL ||
 const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
 const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
 const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
-const AGENT_WHATSAPP_NUMBER = process.env.AGENT_WHATSAPP_NUMBER || '';
+// Asesor(es): admite VARIOS números (coma/espacio en AGENT_WHATSAPP_NUMBER) y un
+// 2º opcional en AGENT_WHATSAPP_NUMBER_2. Todos reciben avisos y pueden dar comandos.
+function _normAgentNum(raw) {
+  let n = String(raw || '').replace(/\D/g, '');
+  if (n.length === 10) n = '52' + n;
+  if (n.startsWith('521') && n.length === 13) n = '52' + n.slice(3);
+  return n.length >= 12 ? n : '';
+}
+const AGENT_WHATSAPP_NUMBERS = [...new Set(
+  // Separamos SOLO por coma/;/salto de línea (NO por espacios: un número puede venir
+  // formateado como "+52 1 951 169 7346"). _normAgentNum se queda solo con los dígitos.
+  [process.env.AGENT_WHATSAPP_NUMBER, process.env.AGENT_WHATSAPP_NUMBER_2]
+    .filter(Boolean).join(';').split(/[,;\n]+/).map(_normAgentNum).filter(Boolean)
+)];
+const AGENT_WHATSAPP_NUMBER = AGENT_WHATSAPP_NUMBERS[0] || '';
+function isAgentNumber(n) { const x = _normAgentNum(n); return !!x && AGENT_WHATSAPP_NUMBERS.includes(x); }
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'leon123'; // Change in production!
 // Secreto para firmar los tokens del panel. Si no se define, se deriva de la
 // contraseña (estable entre reinicios). Definir ADMIN_SECRET en Render es lo ideal.
@@ -303,6 +318,7 @@ const agentActiveCases = new Map(); // Map<agentNumber, clientId>
 // si nadie los atiende en cierto tiempo. clientId → { since, name, type, stage }
 const pendingAgentRequests = new Map();
 const pendingImage = new Map(); // confirmación de comprobante: chatId -> { url, analysis, userName, ts, stage }
+const pendingDoc = new Map();   // documento/PDF: chatId -> { docUrl, fname, userName, ts }
 
 // ==================== REGISTRO DE CASOS (persistente en Mongo) ====================
 // Cada aviso al asesor queda registrado aquí para que NO se pierda nada
@@ -333,6 +349,17 @@ function logCase(clientId, name, type, resumen, extra = {}) {
     schedulePersist();
     return c;
   } catch (e) { console.error('[casos] log error:', e.message); return null; }
+}
+
+// Actualiza campos de un caso ya registrado (por id).
+function updateCase(caseId, fields) {
+  if (!caseId) return false;
+  const c = caseLog.find(x => x.id === caseId);
+  if (!c) return false;
+  Object.assign(c, fields || {});
+  if (fields && typeof fields.resumen === 'string') c.resumen = fields.resumen.replace(/\s+/g, ' ').trim().slice(0, 300);
+  schedulePersist();
+  return true;
 }
 
 // Marca como atendidos/recibidos los casos pendientes de un cliente.
@@ -1572,18 +1599,14 @@ async function notifyAgentRequest(chatId, userText, location = '', opts = {}) {
     }
   }
 
-  if (AGENT_WHATSAPP_NUMBER) {
-    try {
-      await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, fullMessage, [], {
-        buttons: [
-          { id: `RECIBIDO ${chatId}`, title: '✅ Recibido, gracias' },
-          { id: `ATENDER ${chatId}`, title: '📞 Atender caso' }
-        ]
-      });
-      notified = true;
-    } catch (e) {
-      console.error('Agent WhatsApp notify error:', e.message);
-    }
+  if (AGENT_WHATSAPP_NUMBERS.length) {
+    await sendToAllAgents(fullMessage, [], {
+      buttons: [
+        { id: `RECIBIDO ${chatId}`, title: '✅ Recibido, gracias' },
+        { id: `ATENDER ${chatId}`, title: '📞 Atender caso' }
+      ]
+    });
+    notified = true;
   }
 
   // Registro persistente del caso (para el resumen matutino y que nada se pierda)
@@ -1925,23 +1948,42 @@ async function sendWhatsAppDocument(to, link, filename) {
   } catch (e) { console.error('[WhatsApp] Document send error:', e.message); }
 }
 
-// Avisa al asesor (Telegram y/o WhatsApp) con el texto y, si hay, la foto/documento.
+// Envía un mensaje a TODOS los números de asesor configurados.
+async function sendToAllAgents(text, media = [], opts = {}) {
+  for (const num of AGENT_WHATSAPP_NUMBERS) {
+    try { await sendWhatsAppMessage(num, text, media, opts); }
+    catch (e) { console.error('[notify wa]', num, e.message); }
+  }
+}
+// Reenvía un documento a TODOS los asesores.
+async function sendDocToAllAgents(docUrl, docName) {
+  if (!docUrl) return;
+  for (const num of AGENT_WHATSAPP_NUMBERS) {
+    try { await sendWhatsAppDocument(num, docUrl, docName); } catch (_) {}
+  }
+}
+// ¿Qué asesor está atendiendo (relay) a este cliente? '' si ninguno.
+function agentHandling(clientId) {
+  const c = String(clientId);
+  for (const [agent, client] of agentActiveCases.entries()) if (String(client) === c) return agent;
+  return '';
+}
+
+// Avisa al/los asesor(es) (Telegram y WhatsApp) con el texto y, si hay, la foto/documento.
 // Agrega dos botones de acción: "Recibido, gracias" (acuse) y "Atender caso" (abre relay).
 async function notifyAgentWithImage(chatId, userName, headline, bodyLines, imageUrl, opts = {}) {
   const num = String(chatId).replace(/\D/g, '');
   const msg = [headline, `👤 Cliente: ${userName || 'Sin nombre'}`, `📱 WhatsApp: ${num}`, '', ...(bodyLines || [])].join('\n');
   const media = imageUrl ? [imageUrl] : [];
   // Registro persistente del caso (para el resumen matutino y que nada se pierda)
-  logCase(num, userName, opts.caseType || 'imagen', `${headline} · ${(bodyLines || []).join(' · ')}`, { imageUrl, docUrl: opts.docUrl || '' });
+  if (!opts.noLog) logCase(num, userName, opts.caseType || 'imagen', `${headline} · ${(bodyLines || []).join(' · ')}`, { imageUrl, docUrl: opts.docUrl || '' });
   const buttons = opts.noButtons ? null : [
     { id: `RECIBIDO ${num}`, title: '✅ Recibido, gracias' },
     { id: `ATENDER ${num}`, title: '📞 Atender caso' }
   ];
   if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) { try { await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, msg, media); } catch (e) { console.error('[notify tg]', e.message); } }
-  if (AGENT_WHATSAPP_NUMBER) {
-    if (opts.docUrl) { try { await sendWhatsAppDocument(AGENT_WHATSAPP_NUMBER, opts.docUrl, opts.docName); } catch (_) {} }
-    try { await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, msg, media, buttons ? { buttons } : {}); } catch (e) { console.error('[notify wa]', e.message); }
-  }
+  if (opts.docUrl) await sendDocToAllAgents(opts.docUrl, opts.docName);
+  await sendToAllAgents(msg, media, buttons ? { buttons } : {});
 }
 
 async function handleIncomingImage(chatId, userName, imageBase64, platform, sendMsg) {
@@ -1953,11 +1995,18 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
     const url = await storeIncomingImage(imageBase64);
     const tipo = a.tipo || (a.valido ? 'comprobante' : 'otro');
 
+    // Una imagen nueva invalida cualquier confirmación de comprobante / documento en curso.
+    pendingDoc.delete(String(chatId));
+
     // ---- COMPROBANTE: extrae nombre + monto y pide confirmación con botones ----
     if (tipo === 'comprobante') {
       const nombre = String(a.nombre || '').trim();
       const monto = String(a.monto || '').trim();
-      pendingImage.set(String(chatId), { url, analysis: a, userName, ts: Date.now() });
+      // Registramos el caso YA (aunque el cliente no confirme, no se pierde y sale en el resumen).
+      const _c = logCase(chatId, userName, 'pago',
+        `Comprobante recibido (esperando confirmación del cliente): ${nombre || '¿?'} / ${monto || '¿?'}`,
+        { imageUrl: url });
+      pendingImage.set(String(chatId), { url, analysis: a, userName, ts: Date.now(), caseId: _c && _c.id });
       let det = '📄 Recibí tu comprobante de pago. Detecté estos datos:\n\n';
       det += '👤 Nombre: ' + (nombre || '_no lo pude leer bien_') + '\n';
       det += '💵 Monto: ' + (monto || '_no lo pude leer bien_');
@@ -1975,6 +2024,9 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
     }
 
     // ---- EQUIPO / EMERGENCIA / OTRO: la IA lo describe y se pasa al asesor con la foto ----
+    // Bug fix: una imagen no-comprobante invalida cualquier confirmación pendiente para
+    // que el siguiente texto del cliente NO se dispare como "corrección" fantasma.
+    pendingImage.delete(String(chatId));
     const desc = String(a.descripcion || '').trim();
     if (tipo === 'emergencia') {
       await notifyAgentWithImage(chatId, userName, '🚨 POSIBLE EMERGENCIA (imagen del cliente)', [desc || 'El cliente envió una imagen que parece urgente.'], url, { caseType: 'emergencia' });
@@ -2042,6 +2094,14 @@ async function handleAgentCommand(agentNumber, text) {
       await sendWhatsAppMessage(agentNumber,
         `ℹ️ Ya tienes este caso activo: *${cName}* (${clientId}). Lo que escribas se le reenvía.`,
         [], { buttons: [{ id: `LIBERAR ${clientId}`, title: 'Cerrar caso' }] });
+      return;
+    }
+    // Si OTRO asesor ya está atendiendo a este cliente, avisamos y no lo duplicamos.
+    const otro = agentHandling(clientId);
+    if (otro && otro !== agentNumber) {
+      const cName = nameOf(getProfile(clientId), clientId);
+      await sendWhatsAppMessage(agentNumber,
+        `🙋 *${cName}* (${clientId}) ya lo está atendiendo otro asesor. Si necesitas tomarlo tú, pídele que lo cierre con *LIBERAR ${clientId}*.`);
       return;
     }
 
@@ -2121,9 +2181,17 @@ async function handleAgentCommand(agentNumber, text) {
     return;
   }
 
+  // PENDIENTES / CASOS / MENSAJES — baja de la base de datos los casos pendientes
+  // (los que llegaron fuera de horario también) enlistados con sus botones.
+  if (v === 'PENDIENTES' || v === 'CASOS' || v === 'MENSAJES') {
+    await deliverPendingCases(agentNumber);
+    return;
+  }
+
   // Mensaje normal mientras hay un caso activo → relay al cliente
   const activeClient = agentActiveCases.get(agentNumber);
-  if (activeClient && !v.startsWith('ATENDER') && !v.startsWith('LIBERAR') && !v.startsWith('RECIBIDO') && v !== 'PAUSADOS') {
+  if (activeClient && !v.startsWith('ATENDER') && !v.startsWith('LIBERAR') && !v.startsWith('RECIBIDO')
+      && v !== 'PAUSADOS' && v !== 'PENDIENTES' && v !== 'CASOS' && v !== 'MENSAJES') {
     pendingAgentRequests.delete(activeClient); // el asesor ya respondió
     try {
       await sendWhatsAppMessage(activeClient, text.trim());
@@ -2137,6 +2205,7 @@ async function handleAgentCommand(agentNumber, text) {
   await sendWhatsAppMessage(agentNumber, [
     '🤖 Comandos disponibles:',
     '',
+    'PENDIENTES → Ver los casos pendientes (con sus botones)',
     'ATENDER [número] → Tomar un caso (activa relay)',
     'RECIBIDO [número] → Acuse: agradece al cliente y cierra la espera',
     'LIBERAR [número] → Cerrar caso y devolver al bot',
@@ -2186,27 +2255,55 @@ async function sweepAgentReminders() {
 // ==================== RESUMEN MATUTINO DE CASOS AL ASESOR ====================
 // Manda un mensaje al asesor (o intenta) y si falló por la ventana de 24h,
 // lo reintenta con la plantilla de utilidad (que sí llega siempre).
-async function sendAgentMessageSafe(text) {
+async function sendAgentMessageSafe(text, opts = {}) {
   if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) {
     try { await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, text); } catch (e) { console.error('[digest tg]', e.message); }
   }
-  if (!AGENT_WHATSAPP_NUMBER) return;
-  try {
-    await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, text);
-  } catch (e) {
-    console.warn('[digest] Envío normal falló (¿ventana de 24h?), probando plantilla:', e.message);
-    try { await sendWhatsAppTemplate(AGENT_WHATSAPP_NUMBER, text); }
-    catch (e2) { console.error('[digest] Plantilla también falló:', e2.message); }
+  for (const num of AGENT_WHATSAPP_NUMBERS) {
+    try {
+      await sendWhatsAppMessage(num, text, [], opts);
+    } catch (e) {
+      console.warn('[digest] Envío normal falló a', num, '(¿ventana de 24h?), probando plantilla:', e.message);
+      try { await sendWhatsAppTemplate(num, text); }
+      catch (e2) { console.error('[digest] Plantilla también falló a', num, ':', e2.message); }
+    }
   }
 }
 
 const CASE_TYPE_EMOJI = { pago: '💳', documento: '📄', equipo: '🔧', emergencia: '🚨', asesor: '🙋', imagen: '🖼️' };
 
+// Envía a UN asesor los casos pendientes de la base de datos, uno por uno,
+// cada uno con su foto/documento y sus botones (Recibido / Atender).
+async function deliverPendingCases(agentNumber) {
+  const pend = caseLog.filter(c => c.status === 'pendiente');
+  if (!pend.length) { await sendWhatsAppMessage(agentNumber, '✅ No hay casos pendientes por ahora. ¡Todo al día! 🙌'); return; }
+  const fmtHora = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
+  await sendWhatsAppMessage(agentNumber, `📥 Tienes *${pend.length}* caso(s) pendiente(s). Te los mando con sus botones 👇 (🌙 = fuera de horario)`);
+  const lote = pend.slice(0, 20);
+  for (const c of lote) {
+    try {
+      if (c.docUrl) { try { await sendWhatsAppDocument(agentNumber, c.docUrl, 'documento'); } catch (_) {} }
+      const media = c.imageUrl ? [c.imageUrl] : [];
+      const body = [
+        `${CASE_TYPE_EMOJI[c.type] || '•'}${c.offHours ? ' 🌙' : ''} *${c.name}* (${c.clientId})`,
+        `🕒 ${fmtHora.format(new Date(c.ts))}`,
+        c.resumen || ''
+      ].filter(Boolean).join('\n');
+      await sendWhatsAppMessage(agentNumber, body, media, { buttons: [
+        { id: `RECIBIDO ${c.clientId}`, title: '✅ Recibido, gracias' },
+        { id: `ATENDER ${c.clientId}`, title: '📞 Atender caso' }
+      ] });
+      await new Promise(r => setTimeout(r, 350));
+    } catch (e) { console.error('[casos] deliver error:', e.message); }
+  }
+  if (pend.length > lote.length) await sendWhatsAppMessage(agentNumber, `…y ${pend.length - lote.length} caso(s) más. Ve gestionando estos y vuelve a pedir *PENDIENTES*.`);
+}
+
 // Al abrir la oficina: resumen de los casos que siguen pendientes (sobre todo
 // los que llegaron fuera de horario y se pudieron perder entre los chats).
 async function sweepMorningDigest() {
   try {
-    if (!AGENT_WHATSAPP_NUMBER && !(AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE)) return;
+    if (!AGENT_WHATSAPP_NUMBERS.length && !(AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE)) return;
     const today = mexicoDateStr();
     if (lastDigestDate === today) return;
     const { dow, minutesOfDay } = mexicoNow();
@@ -2233,9 +2330,9 @@ async function sweepMorningDigest() {
       ...lines,
       pend.length > 15 ? `…y ${pend.length - 15} más.` : '',
       '',
-      'Responde *RECIBIDO [número]* o *ATENDER [número]* para gestionarlos.'
+      'Toca *📥 Ver casos* para bajarlos uno por uno con sus botones, o responde *RECIBIDO [número]* / *ATENDER [número]*.'
     ].filter(Boolean).join('\n');
-    await sendAgentMessageSafe(msg);
+    await sendAgentMessageSafe(msg, { buttons: [{ id: 'PENDIENTES', title: '📥 Ver casos' }] });
     console.log(`[digest] Resumen matutino enviado: ${pend.length} casos pendientes`);
   } catch (e) { console.error('[digest] sweep error:', e.message); }
 }
@@ -2309,8 +2406,8 @@ async function sweepCorteReminders(force = false) {
         if (corteReminders[key]) { yaEnviados++; continue; }
         const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
         const nombre = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-        const msgCorte = `Hola ${nombre} 👋 Te recordamos que mañana ${bonita} es la fecha de corte de tu servicio de internet` +
-          `${c.plan ? ` (${c.plan})` : ''} a nombre de ${c.name}. Realiza tu pago a tiempo para evitar la suspensión del servicio. ` +
+        const msgCorte = `Hola ${nombre} 👋 Te recordamos que mañana ${bonita} tu servicio de internet ` +
+          `a nombre de ${c.name} está por vencer. Realiza tu pago a tiempo para evitar la suspensión del servicio. ` +
           `Si ya realizaste tu pago, por favor ignora este mensaje. — León Telecom 💙`;
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
@@ -2728,23 +2825,58 @@ async function startReportFlow(chatId, text, sendMsg) {
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
-    // ---- Confirmación / corrección de comprobante (botones Sí/No o texto) ----
+    // ---- Comprobante (imagen) / Documento (PDF): confirmación, corrección o titular ----
     const _pendKey = String(chatId);
-    const _pend = pendingImage.get(_pendKey);
     const _pt = String(text || '').toLowerCase().trim();
     const _btnSi = _pt === 'comprobante_si';
     const _btnNo = _pt === 'comprobante_no';
+    const _btnDocNo = _pt === 'doc_no';
+    const _isBtn = _btnSi || _btnNo || _btnDocNo;
+    // Una EMERGENCIA siempre tiene prioridad: jamás la consumimos como confirmación/nombre.
+    const _emergencyNow = !_isBtn && isEmergency(text);
+
+    // ===== Documento / PDF pendiente: ¿es comprobante? ¿a nombre de quién el servicio? =====
+    const _pdoc = pendingDoc.get(_pendKey);
+    if (_pdoc && Date.now() - (_pdoc.ts || 0) > 20 * 60 * 1000) {
+      pendingDoc.delete(_pendKey);
+    } else if (_pdoc && !_emergencyNow) {
+      pendingDoc.delete(_pendKey);
+      const noEs = _btnDocNo || /^no[\s.,!]*$|^(no es|no,)/.test(_pt);
+      if (noEs) {
+        await notifyAgentWithImage(chatId, _pdoc.userName, '📄 DOCUMENTO del cliente (dice que NO es comprobante)',
+          ['Archivo: ' + _pdoc.fname, 'El cliente indica que no es un comprobante de pago.'],
+          '', { docUrl: _pdoc.docUrl, docName: _pdoc.fname, caseType: 'documento' });
+        pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pdoc.userName, type: 'documento', stage: 0 });
+        if (typeof schedulePersist === 'function') schedulePersist();
+        await sendMsg(chatId, '✅ Listo, se lo envié a un asesor para revisarlo. En breve te contacta. 🙌');
+        return;
+      }
+      // Lo que escribió es a nombre de quién está el servicio que paga.
+      const titular = String(text || '').trim().slice(0, 120);
+      await notifyAgentWithImage(chatId, _pdoc.userName, '💳 COMPROBANTE (PDF) del cliente',
+        ['Archivo: ' + _pdoc.fname, '👤 Servicio a nombre de: ' + (titular || 'no especificado')],
+        '', { docUrl: _pdoc.docUrl, docName: _pdoc.fname, caseType: 'pago' });
+      pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pdoc.userName, type: 'pago', stage: 0 });
+      if (typeof schedulePersist === 'function') schedulePersist();
+      await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+      return;
+    }
+
+    // ===== Comprobante por imagen: confirmación / corrección de datos =====
+    const _pend = pendingImage.get(_pendKey);
     if (_pend && Date.now() - (_pend.ts || 0) > 20 * 60 * 1000) {
-      // Expiró la confirmación pendiente
       pendingImage.delete(_pendKey);
-      if (_btnSi || _btnNo) {
+      if (_isBtn) {
         await sendMsg(chatId, '⌛ Ese comprobante ya expiró. Por favor mándame de nuevo la *foto del comprobante* y lo reviso al instante. 🙌');
         return;
       }
-    } else if (_pend) {
-      // Envía el comprobante al asesor y registra la espera del cliente.
+    } else if (_pend && !_emergencyNow) {
+      // Envía el comprobante al asesor y actualiza el caso ya registrado (sin duplicarlo).
       const enviarComprobante = async (lines, headline) => {
-        await notifyAgentWithImage(chatId, _pend.userName, headline, lines, _pend.url, { caseType: 'pago' });
+        await notifyAgentWithImage(chatId, _pend.userName, headline, lines, _pend.url, { caseType: 'pago', noLog: true });
+        if (!updateCase(_pend.caseId, { resumen: headline + ' · ' + lines.join(' · ') })) {
+          logCase(chatId, _pend.userName, 'pago', headline + ' · ' + lines.join(' · '), { imageUrl: _pend.url });
+        }
         pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pend.userName, type: 'pago', stage: 0 });
         if (typeof schedulePersist === 'function') schedulePersist();
       };
@@ -2786,8 +2918,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId, '✅ ¡Gracias por la corrección! Envié tu comprobante con los datos correctos a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
         return;
       }
-      const yes = _btnSi || /^(s[ií]\b|si,|correcto|es correcto|sip|simon|asi es|así es|👍|✅)/.test(_pt);
-      const no = _btnNo || /^(no\b|corregir|incorrecto|esta mal|está mal|❌|👎)/.test(_pt);
+      // Regex estrictos: solo respuestas cortas/explícitas disparan sí/no (evita que
+      // "no me llega el internet" caiga como corrección).
+      const yes = _btnSi || /^s[ií][\s.,!]*$|^(s[ií],|correcto|es correcto|asi es|así es|de acuerdo|👍|✅)/.test(_pt);
+      const no = _btnNo || /^no[\s.,!]*$|^(corregir|incorrecto|esta mal|está mal|no es|no,|❌|👎)/.test(_pt);
       if (yes) { await confirmarOriginal(); return; }
       if (no) {
         _pend.stage = 'correccion';
@@ -2797,21 +2931,20 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       // Escribió otra cosa: dejamos la confirmación pendiente y seguimos el flujo normal.
-    } else if (_btnSi || _btnNo) {
+    } else if (_isBtn) {
       // Botón de un comprobante viejo (ya procesado o expirado) → evitamos que la IA invente.
       await sendMsg(chatId, 'ℹ️ Ese comprobante ya fue procesado o expiró. Si necesitas enviar otro, mándame la *foto* y con gusto lo reviso. 🙌');
       return;
     }
 
-    // If agent has taken over this chat, relay client message to agent
+    // If agent has taken over this chat, relay client message to the RIGHT agent.
     if (isPaused(chatId)) {
-      if (AGENT_WHATSAPP_NUMBER) {
+      const dest = agentHandling(chatId) || AGENT_WHATSAPP_NUMBER;
+      if (dest) {
         const cp = getProfile(chatId);
         const clientName = nameOf(cp, chatId);
         try {
-          await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER,
-            `💬 ${clientName}:\n${text}`
-          );
+          await sendWhatsAppMessage(dest, `💬 ${clientName}:\n${text}`);
         } catch (e) { console.error('[Relay] Error forwarding to agent:', e.message); }
       }
       return;
@@ -3686,8 +3819,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
   console.log(`[WhatsApp] Incoming: type=${msg.type} from=${from} (raw=${rawFrom}) name=${contactName}`);
 
-  // Métrica: cuenta conversaciones únicas por día (no cuenta al asesor).
-  if (!AGENT_WHATSAPP_NUMBER || from !== AGENT_WHATSAPP_NUMBER) { try { trackConversation(from); } catch (_) {} }
+  // Métrica: cuenta conversaciones únicas por día (no cuenta a los asesores).
+  if (!isAgentNumber(from)) { try { trackConversation(from); } catch (_) {} }
 
   // Save WhatsApp profile name if we don't know this client yet
   if (contactName && contactName !== 'Usuario') {
@@ -3711,7 +3844,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
   if (msg.type === 'document') {
     const fname = msg.document?.filename || 'documento.pdf';
     try {
-      // No interrogamos al cliente: descargamos el archivo y se lo reenviamos al asesor.
+      // Descargamos el archivo y preguntamos: ¿es comprobante? ¿a nombre de quién el servicio?
       let docUrl = '';
       try {
         const b64 = await downloadWhatsAppMedia(msg.document?.id);
@@ -3719,13 +3852,11 @@ app.post('/webhook/whatsapp', async (req, res) => {
         const ext = (fname.includes('.') ? fname.split('.').pop() : 'pdf');
         docUrl = await storeIncomingFile(b64, mime, ext);
       } catch (e) { console.error('[WhatsApp] Doc download error:', e.message); }
-      await notifyAgentWithImage(from, contactName, '📄 DOCUMENTO del cliente (posible comprobante)',
-        ['Archivo: ' + fname, docUrl ? 'Te lo reenvío aquí abajo. 👇' : '⚠️ No pude adjuntarlo; contáctalo para pedírselo.'],
-        '', { docUrl, docName: fname, caseType: 'documento' });
+      pendingImage.delete(from); // un doc nuevo invalida una confirmación de imagen en curso
+      pendingDoc.set(from, { docUrl, fname, userName: contactName, ts: Date.now() });
       await sendWhatsAppMessage(from,
-        '✅ ¡Recibido! Ya le envié tu documento a un asesor para revisarlo. En breve se pone en contacto contigo. 🙌');
-      pendingAgentRequests.set(from, { since: new Date(), name: contactName, type: 'documento', stage: 0 });
-      if (typeof schedulePersist === 'function') schedulePersist();
+        `📄 Recibí *${fname}*.\n\n¿Es un *recibo/comprobante de pago*? Si sí, escríbeme *a nombre de quién está el servicio* que estás pagando (nombre completo). 🙌\n\nSi *no* es un comprobante, toca el botón. 👇`,
+        [], { buttons: [{ id: 'doc_no', title: '❌ No es comprobante' }] });
     } catch (e) { console.error('[WhatsApp] Document handling error:', e.message); }
     return;
   }
@@ -3734,8 +3865,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
     const text = msg.text?.body?.trim();
     if (!text) return;
 
-    // If message is FROM the agent → route to agent handler (commands or relay)
-    if (AGENT_WHATSAPP_NUMBER && from === AGENT_WHATSAPP_NUMBER) {
+    // If message is FROM an agent → route to agent handler (commands or relay)
+    if (isAgentNumber(from)) {
       await handleAgentCommand(from, text);
       return;
     }
@@ -3756,8 +3887,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
     }
     if (replyId) {
       console.log(`[WhatsApp] Interactive reply: ${itype} id="${replyId}" from=${from}`);
-      // If agent tapped a button (e.g. "Atender caso") → route to agent commands
-      if (AGENT_WHATSAPP_NUMBER && from === AGENT_WHATSAPP_NUMBER) {
+      // If an agent tapped a button (e.g. "Atender caso") → route to agent commands
+      if (isAgentNumber(from)) {
         await handleAgentCommand(from, replyId);
       } else {
         await handleChatMessage(from, replyId, sendWhatsAppMessage);
