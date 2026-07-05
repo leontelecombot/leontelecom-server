@@ -2364,7 +2364,10 @@ async function sweepMorningDigest() {
 // Un día antes del corte, se avisa a cada cliente por PLANTILLA de utilidad
 // (llega aunque no haya chateado con el bot en 24h), personalizado con su nombre.
 const CORTE_REMINDER_TIME = process.env.CORTE_REMINDER_TIME || '10:00'; // hora de México
-const CORTE_REMINDER_ENABLED = String(process.env.CORTE_REMINDER_ENABLED || 'true') !== 'false';
+// APAGADO por defecto: los avisos de corte NO se envían solos hasta el lanzamiento
+// oficial del bot. Para activarlos: poner CORTE_REMINDER_ENABLED=true en Render.
+// (La prueba manual desde el panel con force=true sí funciona aunque esté apagado.)
+const CORTE_REMINDER_ENABLED = String(process.env.CORTE_REMINDER_ENABLED || 'false') === 'true';
 
 // Normaliza fecha de corte de Wisphub a 'YYYY-MM-DD'. Acepta: '2026-07-15',
 // ISO con hora, '15/07/2026' o solo el día del mes ('15').
