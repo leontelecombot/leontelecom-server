@@ -2442,6 +2442,7 @@ async function sweepCorteReminders(force = false) {
         const titular = tituloCase(c.name) || 'ti';
         const msgCorte = `Hola ${nombre} 👋 Te recordamos que mañana ${bonita} tu servicio de internet ` +
           `a nombre de ${titular} está por vencer. Realiza tu pago a tiempo para evitar la suspensión del servicio. ` +
+          `💳 Responde *PAGAR* y te muestro cómo y dónde pagar (efectivo o tarjeta en oficina, o transferencia). ` +
           `Si ya realizaste tu pago, por favor ignora este mensaje. — León Telecom 💙`;
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
@@ -2868,6 +2869,26 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const _isBtn = _btnSi || _btnNo || _btnDocNo;
     // Una EMERGENCIA siempre tiene prioridad: jamás la consumimos como confirmación/nombre.
     const _emergencyNow = !_isBtn && isEmergency(text);
+
+    // ===== Botones del recordatorio de corte (horario en oficina / datos de pago) =====
+    if (_pt === 'pago_horario') {
+      await sendMsg(chatId, buildBusinessHoursMessage() + '\n\n🏢 En oficina puedes pagar en *efectivo* o con *tarjeta* (presencial). ¡Te esperamos!');
+      return;
+    }
+    if (_pt === 'pago_datos') {
+      const img = SERVER_BASE_URL ? [`${SERVER_BASE_URL}/images/metodosdepago.jpeg`] : [];
+      await sendMsg(chatId, '💳 Estos son nuestros *datos de pago vigentes* (depósito o transferencia):', img);
+      await sendMsg(chatId, 'Cuando realices tu pago, mándanos tu *comprobante* (foto o PDF) por aquí y lo registramos. 🙌');
+      return;
+    }
+    // Intención de pago (o el "PAGAR" que sugiere el recordatorio de corte) → 2 botones.
+    if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago)/.test(_pt)) {
+      await sendMsg(chatId, '💳 ¿Cómo quieres pagar? Elige una opción:', [], { buttons: [
+        { id: 'pago_horario', title: '🏢 Horario en oficina' },
+        { id: 'pago_datos', title: '💳 Datos de pago' }
+      ] });
+      return;
+    }
 
     // ===== Documento / PDF pendiente: ¿es comprobante? ¿a nombre de quién el servicio? =====
     const _pdoc = pendingDoc.get(_pendKey);
