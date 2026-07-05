@@ -302,7 +302,58 @@ const agentActiveCases = new Map(); // Map<agentNumber, clientId>
 // Clientes que pidieron un asesor y siguen esperando — para enviar recordatorio
 // si nadie los atiende en cierto tiempo. clientId → { since, name, type, stage }
 const pendingAgentRequests = new Map();
-const pendingImage = new Map(); // confirmación de comprobante: chatId -> { url, analysis, userName, ts }
+const pendingImage = new Map(); // confirmación de comprobante: chatId -> { url, analysis, userName, ts, stage }
+
+// ==================== REGISTRO DE CASOS (persistente en Mongo) ====================
+// Cada aviso al asesor queda registrado aquí para que NO se pierda nada
+// (comprobantes, documentos, emergencias, solicitudes de asesor, etc.).
+let caseLog = []; // [{id, ts, clientId, name, type, resumen, imageUrl, docUrl, offHours, status}]
+const CASE_LOG_MAX = 400;
+let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matutino enviado
+let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
+let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
+
+function logCase(clientId, name, type, resumen, extra = {}) {
+  try {
+    const num = String(clientId).replace(/\D/g, '');
+    const c = {
+      id: `caso-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      ts: new Date().toISOString(),
+      clientId: num,
+      name: name || 'Sin nombre',
+      type: type || 'otro',
+      resumen: String(resumen || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+      imageUrl: extra.imageUrl || '',
+      docUrl: extra.docUrl || '',
+      offHours: !isWithinBusinessHours(),
+      status: 'pendiente'
+    };
+    caseLog.unshift(c);
+    if (caseLog.length > CASE_LOG_MAX) caseLog.length = CASE_LOG_MAX;
+    schedulePersist();
+    return c;
+  } catch (e) { console.error('[casos] log error:', e.message); return null; }
+}
+
+// Marca como atendidos/recibidos los casos pendientes de un cliente.
+function markCases(clientId, status) {
+  try {
+    const num = String(clientId).replace(/\D/g, '');
+    let n = 0;
+    for (const c of caseLog) {
+      if (c.clientId === num && c.status === 'pendiente') { c.status = status; n++; }
+    }
+    if (n) schedulePersist();
+    return n;
+  } catch (e) { return 0; }
+}
+
+// Fecha 'YYYY-MM-DD' en zona horaria de Oaxaca (el server corre en UTC).
+function mexicoDateStr(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TZ, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(d);
+}
 
 function isPaused(chatId) {
   const p = pausedChats.get(String(chatId));
@@ -627,7 +678,11 @@ function buildStateSnapshot() {
     plans: plans,
     stats: stats,
     tickets: mapToObj(tickets),
-    promoBanners: promoBanners
+    promoBanners: promoBanners,
+    caseLog: caseLog.slice(0, CASE_LOG_MAX),
+    lastDigestDate: lastDigestDate,
+    corteReminders: corteReminders,
+    lastCorteRunDate: lastCorteRunDate
   };
 }
 
@@ -669,6 +724,10 @@ function hydrateState(s) {
   if (Array.isArray(s.broadcastHistory)) { broadcastHistory.length = 0; broadcastHistory.push(...s.broadcastHistory); }
   if (s.pausedChats) for (const [k, v] of Object.entries(s.pausedChats)) pausedChats.set(k, { pausedUntil: new Date(v.pausedUntil) });
   if (s.pendingAgentRequests) for (const [k, v] of Object.entries(s.pendingAgentRequests)) pendingAgentRequests.set(k, { ...v, since: new Date(v.since) });
+  if (Array.isArray(s.caseLog)) caseLog = s.caseLog.slice(0, CASE_LOG_MAX);
+  if (typeof s.lastDigestDate === 'string') lastDigestDate = s.lastDigestDate;
+  if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
+  if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   console.log(`[persistence] Estado restaurado — perfiles:${clientProfiles.size} clientes:${manualClients.size} avisos:${scheduledBroadcasts.size} folios:${folios.size}`);
 }
 
@@ -1516,13 +1575,19 @@ async function notifyAgentRequest(chatId, userText, location = '', opts = {}) {
   if (AGENT_WHATSAPP_NUMBER) {
     try {
       await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, fullMessage, [], {
-        buttons: [{ id: `ATENDER ${chatId}`, title: 'Atender caso' }]
+        buttons: [
+          { id: `RECIBIDO ${chatId}`, title: '✅ Recibido, gracias' },
+          { id: `ATENDER ${chatId}`, title: '📞 Atender caso' }
+        ]
       });
       notified = true;
     } catch (e) {
       console.error('Agent WhatsApp notify error:', e.message);
     }
   }
+
+  // Registro persistente del caso (para el resumen matutino y que nada se pierda)
+  logCase(chatId, clientName, opts.urgent ? 'emergencia' : 'asesor', summaryLine);
 
   if (!notified) {
     console.warn('[notify] No notification channel configured. Set AGENT_WHATSAPP_NUMBER, AGENT_NOTIFY_CHAT_ID, or AGENT_NOTIFY_WEBHOOK_URL in environment variables.');
@@ -1832,13 +1897,51 @@ async function storeIncomingImage(imageBase64) {
   } catch (e) { console.error('[img] store error:', e.message); return ''; }
 }
 
-// Avisa al asesor (Telegram y/o WhatsApp) con el texto y, si hay, la foto.
-async function notifyAgentWithImage(chatId, userName, headline, bodyLines, imageUrl) {
+// Guarda un archivo cualquiera (ej. PDF) en Mongo y devuelve una URL pública.
+async function storeIncomingFile(base64, contentType, ext) {
+  try {
+    if (!SERVER_BASE_URL) return '';
+    const buffer = Buffer.from(base64, 'base64');
+    const safeExt = String(ext || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'bin';
+    const id = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${safeExt}`;
+    const ok = await persistence.saveImage(id, contentType || 'application/octet-stream', buffer);
+    return ok ? `${SERVER_BASE_URL}/images/db/${id}` : '';
+  } catch (e) { console.error('[file] store error:', e.message); return ''; }
+}
+
+// Envía un documento (PDF, etc.) por WhatsApp a partir de un link público.
+async function sendWhatsAppDocument(to, link, filename) {
+  if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return;
+  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  try {
+    await fetch(base, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp', to, type: 'document',
+        document: { link, filename: String(filename || 'documento.pdf').slice(0, 240) }
+      })
+    });
+  } catch (e) { console.error('[WhatsApp] Document send error:', e.message); }
+}
+
+// Avisa al asesor (Telegram y/o WhatsApp) con el texto y, si hay, la foto/documento.
+// Agrega dos botones de acción: "Recibido, gracias" (acuse) y "Atender caso" (abre relay).
+async function notifyAgentWithImage(chatId, userName, headline, bodyLines, imageUrl, opts = {}) {
   const num = String(chatId).replace(/\D/g, '');
   const msg = [headline, `👤 Cliente: ${userName || 'Sin nombre'}`, `📱 WhatsApp: ${num}`, '', ...(bodyLines || [])].join('\n');
   const media = imageUrl ? [imageUrl] : [];
+  // Registro persistente del caso (para el resumen matutino y que nada se pierda)
+  logCase(num, userName, opts.caseType || 'imagen', `${headline} · ${(bodyLines || []).join(' · ')}`, { imageUrl, docUrl: opts.docUrl || '' });
+  const buttons = opts.noButtons ? null : [
+    { id: `RECIBIDO ${num}`, title: '✅ Recibido, gracias' },
+    { id: `ATENDER ${num}`, title: '📞 Atender caso' }
+  ];
   if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) { try { await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, msg, media); } catch (e) { console.error('[notify tg]', e.message); } }
-  if (AGENT_WHATSAPP_NUMBER) { try { await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, msg, media); } catch (e) { console.error('[notify wa]', e.message); } }
+  if (AGENT_WHATSAPP_NUMBER) {
+    if (opts.docUrl) { try { await sendWhatsAppDocument(AGENT_WHATSAPP_NUMBER, opts.docUrl, opts.docName); } catch (_) {} }
+    try { await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, msg, media, buttons ? { buttons } : {}); } catch (e) { console.error('[notify wa]', e.message); }
+  }
 }
 
 async function handleIncomingImage(chatId, userName, imageBase64, platform, sendMsg) {
@@ -1874,13 +1977,13 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
     // ---- EQUIPO / EMERGENCIA / OTRO: la IA lo describe y se pasa al asesor con la foto ----
     const desc = String(a.descripcion || '').trim();
     if (tipo === 'emergencia') {
-      await notifyAgentWithImage(chatId, userName, '🚨 POSIBLE EMERGENCIA (imagen del cliente)', [desc || 'El cliente envió una imagen que parece urgente.'], url);
+      await notifyAgentWithImage(chatId, userName, '🚨 POSIBLE EMERGENCIA (imagen del cliente)', [desc || 'El cliente envió una imagen que parece urgente.'], url, { caseType: 'emergencia' });
       await sendMsg(chatId, '🚨 Recibí tu imagen y parece algo urgente. Ya avisé a un asesor para atenderte lo antes posible. Si es una emergencia grave, por favor llama también. 🙏');
     } else if (tipo === 'equipo') {
-      await notifyAgentWithImage(chatId, userName, '🔧 Imagen de equipo / posible falla', [desc || 'El cliente envió una foto de un equipo.'], url);
+      await notifyAgentWithImage(chatId, userName, '🔧 Imagen de equipo / posible falla', [desc || 'El cliente envió una foto de un equipo.'], url, { caseType: 'equipo' });
       await sendMsg(chatId, '✅ Recibí la foto de tu equipo. Un asesor la está revisando y te contactará pronto para ayudarte. 🔧');
     } else {
-      await notifyAgentWithImage(chatId, userName, '🖼️ Imagen del cliente', [desc || 'El cliente envió una imagen.'], url);
+      await notifyAgentWithImage(chatId, userName, '🖼️ Imagen del cliente', [desc || 'El cliente envió una imagen.'], url, { caseType: 'imagen' });
       await sendMsg(chatId, '✅ Recibí tu imagen. Un asesor la revisará y se pondrá en contacto contigo. 😊');
     }
     pendingAgentRequests.set(String(chatId), { since: new Date(), name: userName, type: 'imagen', stage: 0 });
@@ -1945,6 +2048,7 @@ async function handleAgentCommand(agentNumber, text) {
     pauseChat(clientId, 4);
     agentActiveCases.set(agentNumber, clientId);
     pendingAgentRequests.delete(clientId); // ya lo está atendiendo un asesor
+    markCases(clientId, 'atendido');
     schedulePersist();
     const clientProfile = getProfile(clientId);
     const clientName = nameOf(clientProfile, clientId);
@@ -1971,6 +2075,7 @@ async function handleAgentCommand(agentNumber, text) {
     unpauseChat(clientId);
     agentActiveCases.delete(agentNumber);
     pendingAgentRequests.delete(clientId);
+    markCases(clientId, 'atendido');
     schedulePersist();
     try {
       await sendWhatsAppMessage(clientId,
@@ -1978,6 +2083,22 @@ async function handleAgentCommand(agentNumber, text) {
       );
     } catch (e) {}
     await sendWhatsAppMessage(agentNumber, `✅ Caso cerrado. Bot reactivado para ${clientId}.`);
+    return;
+  }
+
+  // RECIBIDO [número] — acuse de recibo: agradece al cliente y cierra la espera (NO abre relay)
+  const recibidoMatch = v.match(/^RECIBIDO\s+(\d+)/);
+  if (recibidoMatch) {
+    const clientId = normalizeClientNumber(recibidoMatch[1]);
+    pendingAgentRequests.delete(clientId);
+    markCases(clientId, 'recibido');
+    schedulePersist();
+    try {
+      await sendWhatsAppMessage(clientId,
+        '✅ ¡Gracias! Recibimos tu mensaje y lo estamos revisando. En breve te contactamos. 🙌');
+    } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
+    const cName = nameOf(getProfile(clientId), clientId);
+    await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
     return;
   }
 
@@ -2002,7 +2123,7 @@ async function handleAgentCommand(agentNumber, text) {
 
   // Mensaje normal mientras hay un caso activo → relay al cliente
   const activeClient = agentActiveCases.get(agentNumber);
-  if (activeClient && !v.startsWith('ATENDER') && !v.startsWith('LIBERAR') && v !== 'PAUSADOS') {
+  if (activeClient && !v.startsWith('ATENDER') && !v.startsWith('LIBERAR') && !v.startsWith('RECIBIDO') && v !== 'PAUSADOS') {
     pendingAgentRequests.delete(activeClient); // el asesor ya respondió
     try {
       await sendWhatsAppMessage(activeClient, text.trim());
@@ -2017,6 +2138,7 @@ async function handleAgentCommand(agentNumber, text) {
     '🤖 Comandos disponibles:',
     '',
     'ATENDER [número] → Tomar un caso (activa relay)',
+    'RECIBIDO [número] → Acuse: agradece al cliente y cierra la espera',
     'LIBERAR [número] → Cerrar caso y devolver al bot',
     'PAUSADOS → Ver casos activos',
     '',
@@ -2059,6 +2181,152 @@ async function sweepAgentReminders() {
       console.error('[reminder] error enviando recordatorio:', e.message);
     }
   }
+}
+
+// ==================== RESUMEN MATUTINO DE CASOS AL ASESOR ====================
+// Manda un mensaje al asesor (o intenta) y si falló por la ventana de 24h,
+// lo reintenta con la plantilla de utilidad (que sí llega siempre).
+async function sendAgentMessageSafe(text) {
+  if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) {
+    try { await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, text); } catch (e) { console.error('[digest tg]', e.message); }
+  }
+  if (!AGENT_WHATSAPP_NUMBER) return;
+  try {
+    await sendWhatsAppMessage(AGENT_WHATSAPP_NUMBER, text);
+  } catch (e) {
+    console.warn('[digest] Envío normal falló (¿ventana de 24h?), probando plantilla:', e.message);
+    try { await sendWhatsAppTemplate(AGENT_WHATSAPP_NUMBER, text); }
+    catch (e2) { console.error('[digest] Plantilla también falló:', e2.message); }
+  }
+}
+
+const CASE_TYPE_EMOJI = { pago: '💳', documento: '📄', equipo: '🔧', emergencia: '🚨', asesor: '🙋', imagen: '🖼️' };
+
+// Al abrir la oficina: resumen de los casos que siguen pendientes (sobre todo
+// los que llegaron fuera de horario y se pudieron perder entre los chats).
+async function sweepMorningDigest() {
+  try {
+    if (!AGENT_WHATSAPP_NUMBER && !(AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE)) return;
+    const today = mexicoDateStr();
+    if (lastDigestDate === today) return;
+    const { dow, minutesOfDay } = mexicoNow();
+    const windows = BUSINESS_HOURS[dow] || [];
+    if (!windows.length) return;
+    const opening = windows[0][0];
+    // Ventana de 20 min a partir de la hora de apertura del día
+    if (minutesOfDay < opening || minutesOfDay >= opening + 20) return;
+    lastDigestDate = today;
+    schedulePersist();
+
+    const cutoff = Date.now() - 36 * 3600 * 1000; // casos de las últimas 36 horas
+    const pend = caseLog.filter(c => c.status === 'pendiente' && new Date(c.ts).getTime() >= cutoff);
+    if (!pend.length) return; // sin pendientes, no molestamos
+
+    const fmtHora = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
+    const lines = pend.slice(0, 15).map(c =>
+      `${CASE_TYPE_EMOJI[c.type] || '•'}${c.offHours ? ' 🌙' : ''} *${c.name}* (${c.clientId}) — ${fmtHora.format(new Date(c.ts))}\n   ${c.resumen.slice(0, 140)}`
+    );
+    const msg = [
+      `☀️ ¡Buenos días! Tienes *${pend.length} caso${pend.length === 1 ? '' : 's'} pendiente${pend.length === 1 ? '' : 's'}*:`,
+      '(🌙 = llegó fuera de horario)',
+      '',
+      ...lines,
+      pend.length > 15 ? `…y ${pend.length - 15} más.` : '',
+      '',
+      'Responde *RECIBIDO [número]* o *ATENDER [número]* para gestionarlos.'
+    ].filter(Boolean).join('\n');
+    await sendAgentMessageSafe(msg);
+    console.log(`[digest] Resumen matutino enviado: ${pend.length} casos pendientes`);
+  } catch (e) { console.error('[digest] sweep error:', e.message); }
+}
+
+// ==================== RECORDATORIO DE FECHA DE CORTE (Wisphub) ====================
+// Un día antes del corte, se avisa a cada cliente por PLANTILLA de utilidad
+// (llega aunque no haya chateado con el bot en 24h), personalizado con su nombre.
+const CORTE_REMINDER_TIME = process.env.CORTE_REMINDER_TIME || '10:00'; // hora de México
+const CORTE_REMINDER_ENABLED = String(process.env.CORTE_REMINDER_ENABLED || 'true') !== 'false';
+
+// Normaliza fecha de corte de Wisphub a 'YYYY-MM-DD'. Acepta: '2026-07-15',
+// ISO con hora, '15/07/2026' o solo el día del mes ('15').
+function parseFechaCorte(v) {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  m = s.match(/^\d{1,2}$/); // solo el día del mes → próxima ocurrencia
+  if (m) {
+    const day = Number(s);
+    if (day < 1 || day > 31) return null;
+    const [y, mo] = mexicoDateStr().split('-').map(Number);
+    const mk = (yy, mm) => {
+      const dim = new Date(Date.UTC(yy, mm, 0)).getUTCDate(); // días del mes
+      return `${yy}-${String(mm).padStart(2, '0')}-${String(Math.min(day, dim)).padStart(2, '0')}`;
+    };
+    const hoy = mexicoDateStr();
+    const cand = mk(y, mo);
+    if (cand >= hoy) return cand;
+    return mo === 12 ? mk(y + 1, 1) : mk(y, mo + 1);
+  }
+  return null;
+}
+
+function parseTimeToMinutes(hhmm, fallback = 600) {
+  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallback;
+  const mins = Number(m[1]) * 60 + Number(m[2]);
+  return (mins >= 0 && mins < 1440) ? mins : fallback;
+}
+
+// force=true (desde el panel) corre ya, sin esperar la hora — el dedup evita repetir.
+async function sweepCorteReminders(force = false) {
+  try {
+    if (!CORTE_REMINDER_ENABLED && !force) return null;
+    if (!WHATSAPP_AVISO_TEMPLATE || !WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN) return null;
+    if (!wisphubClients.size) return null;
+    const today = mexicoDateStr();
+    if (!force) {
+      if (lastCorteRunDate === today) return null;
+      const objetivo = parseTimeToMinutes(CORTE_REMINDER_TIME);
+      const { minutesOfDay } = mexicoNow();
+      // Ventana de 30 min a partir de la hora configurada
+      if (minutesOfDay < objetivo || minutesOfDay >= objetivo + 30) return null;
+    }
+    lastCorteRunDate = today;
+    schedulePersist();
+
+    const mananaDate = new Date(Date.now() + 24 * 3600 * 1000);
+    const manana = mexicoDateStr(mananaDate);
+    const bonita = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(mananaDate);
+
+    let sent = 0, failed = 0, yaEnviados = 0;
+    for (const [phone, c] of wisphubClients.entries()) {
+      try {
+        const fc = parseFechaCorte(c.fechaCorte);
+        if (!fc || fc !== manana) continue;
+        const key = `${phone}|${fc}`;
+        if (corteReminders[key]) { yaEnviados++; continue; }
+        const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
+        const nombre = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+        const msgCorte = `Hola ${nombre} 👋 Te recordamos que mañana ${bonita} es la fecha de corte de tu servicio de internet` +
+          `${c.plan ? ` (${c.plan})` : ''} a nombre de ${c.name}. Realiza tu pago a tiempo para evitar la suspensión del servicio. ` +
+          `Si ya realizaste tu pago, por favor ignora este mensaje. — León Telecom 💙`;
+        await sendWhatsAppTemplate(phone, msgCorte);
+        corteReminders[key] = new Date().toISOString();
+        sent++;
+        await new Promise(r => setTimeout(r, 300)); // pausa para no saturar la API
+      } catch (e) { failed++; }
+    }
+    // Limpieza: registros de hace más de 60 días
+    const old = Date.now() - 60 * 24 * 3600 * 1000;
+    for (const [k, v] of Object.entries(corteReminders)) {
+      if (new Date(v).getTime() < old) delete corteReminders[k];
+    }
+    schedulePersist();
+    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos`);
+    return { manana, sent, failed, yaEnviados };
+  } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 
 const MENU_LIST_ITEMS = [
@@ -2460,36 +2728,79 @@ async function startReportFlow(chatId, text, sendMsg) {
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
-    // ---- Confirmación de comprobante (botón Sí/No o texto) ----
-    const _pend = pendingImage.get(String(chatId));
-    if (_pend) {
-      if (Date.now() - (_pend.ts || 0) > 10 * 60 * 1000) {
-        pendingImage.delete(String(chatId));
-      } else {
-        const t = String(text || '').toLowerCase().trim();
-        const yes = t === 'comprobante_si' || /^(s[ií]\b|si,|correcto|es correcto|sip|simon|asi es|así es|👍|✅)/.test(t);
-        const no = t === 'comprobante_no' || /^(no\b|corregir|incorrecto|esta mal|está mal|❌|👎)/.test(t);
-        if (yes || no) {
-          pendingImage.delete(String(chatId));
-          if (yes) {
-            const a = _pend.analysis || {};
-            const lines = [
-              '💳 Datos del comprobante (confirmados por el cliente):',
-              '👤 Nombre: ' + (String(a.nombre || '').trim() || 'no especificado'),
-              '💵 Monto: ' + (String(a.monto || '').trim() || 'no especificado')
-            ];
-            if (a.banco) lines.push('🏦 Banco/Operador: ' + a.banco);
-            if (a.fecha) lines.push('📅 Fecha: ' + a.fecha);
-            await notifyAgentWithImage(chatId, _pend.userName, '💳 COMPROBANTE DE PAGO', lines, _pend.url);
-            pendingAgentRequests.set(String(chatId), { since: new Date(), name: _pend.userName, type: 'pago', stage: 0 });
-            if (typeof schedulePersist === 'function') schedulePersist();
-            await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
-          } else {
-            await sendMsg(chatId, 'De acuerdo 🙏. Por favor mándame de nuevo una *foto clara* del comprobante, o escríbeme el *nombre* y el *monto* correctos y con gusto lo registro.');
-          }
+    // ---- Confirmación / corrección de comprobante (botones Sí/No o texto) ----
+    const _pendKey = String(chatId);
+    const _pend = pendingImage.get(_pendKey);
+    const _pt = String(text || '').toLowerCase().trim();
+    const _btnSi = _pt === 'comprobante_si';
+    const _btnNo = _pt === 'comprobante_no';
+    if (_pend && Date.now() - (_pend.ts || 0) > 20 * 60 * 1000) {
+      // Expiró la confirmación pendiente
+      pendingImage.delete(_pendKey);
+      if (_btnSi || _btnNo) {
+        await sendMsg(chatId, '⌛ Ese comprobante ya expiró. Por favor mándame de nuevo la *foto del comprobante* y lo reviso al instante. 🙌');
+        return;
+      }
+    } else if (_pend) {
+      // Envía el comprobante al asesor y registra la espera del cliente.
+      const enviarComprobante = async (lines, headline) => {
+        await notifyAgentWithImage(chatId, _pend.userName, headline, lines, _pend.url, { caseType: 'pago' });
+        pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pend.userName, type: 'pago', stage: 0 });
+        if (typeof schedulePersist === 'function') schedulePersist();
+      };
+      const confirmarOriginal = async () => {
+        pendingImage.delete(_pendKey);
+        const a = _pend.analysis || {};
+        const lines = [
+          '💳 Datos del comprobante (confirmados por el cliente):',
+          '👤 Nombre: ' + (String(a.nombre || '').trim() || 'no especificado'),
+          '💵 Monto: ' + (String(a.monto || '').trim() || 'no especificado')
+        ];
+        if (a.banco) lines.push('🏦 Banco/Operador: ' + a.banco);
+        if (a.fecha) lines.push('📅 Fecha: ' + a.fecha);
+        await enviarComprobante(lines, '💳 COMPROBANTE DE PAGO');
+        await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+      };
+      if (_pend.stage === 'correccion') {
+        // El cliente está corrigiendo: lo que escriba son el nombre y monto correctos.
+        if (_btnSi) { await confirmarOriginal(); return; }
+        if (_btnNo) {
+          await sendMsg(chatId, '✍️ Escríbeme en un *solo mensaje* el nombre y el monto correctos.\n\nEjemplo: _Juan Pérez, $500_');
           return;
         }
+        const raw = String(text || '').trim().slice(0, 200);
+        if (!raw) return;
+        pendingImage.delete(_pendKey);
+        const a = _pend.analysis || {};
+        const montoM = raw.match(/\$\s*[\d,]+(?:\.\d{1,2})?|\b\d[\d,]*(?:\.\d{1,2})?\s*(?:pesos|mxn|mx)?\b/i);
+        const monto = montoM ? montoM[0].trim() : '';
+        const nombre = raw.replace(montoM ? montoM[0] : '', '').replace(/[,;:\-–]+/g, ' ').replace(/\s+/g, ' ').trim();
+        const lines = [
+          '💳 Datos CORREGIDOS por el cliente:',
+          '👤 Nombre: ' + (nombre || 'ver texto abajo'),
+          '💵 Monto: ' + (monto || 'ver texto abajo'),
+          '📝 Escribió: "' + raw + '"',
+          '🤖 La IA había leído: ' + (String(a.nombre || '').trim() || '¿?') + ' / ' + (String(a.monto || '').trim() || '¿?')
+        ];
+        await enviarComprobante(lines, '💳 COMPROBANTE DE PAGO (corregido por el cliente)');
+        await sendMsg(chatId, '✅ ¡Gracias por la corrección! Envié tu comprobante con los datos correctos a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+        return;
       }
+      const yes = _btnSi || /^(s[ií]\b|si,|correcto|es correcto|sip|simon|asi es|así es|👍|✅)/.test(_pt);
+      const no = _btnNo || /^(no\b|corregir|incorrecto|esta mal|está mal|❌|👎)/.test(_pt);
+      if (yes) { await confirmarOriginal(); return; }
+      if (no) {
+        _pend.stage = 'correccion';
+        _pend.ts = Date.now(); // renueva el tiempo para que no expire a media corrección
+        pendingImage.set(_pendKey, _pend);
+        await sendMsg(chatId, 'De acuerdo 🙏 Escríbeme en un *solo mensaje* el nombre y el monto correctos.\n\nEjemplo: _Juan Pérez, $500_\n\nO si prefieres, mándame otra *foto más clara* del comprobante. 📸');
+        return;
+      }
+      // Escribió otra cosa: dejamos la confirmación pendiente y seguimos el flujo normal.
+    } else if (_btnSi || _btnNo) {
+      // Botón de un comprobante viejo (ya procesado o expirado) → evitamos que la IA invente.
+      await sendMsg(chatId, 'ℹ️ Ese comprobante ya fue procesado o expiró. Si necesitas enviar otro, mándame la *foto* y con gusto lo reviso. 🙌');
+      return;
     }
 
     // If agent has taken over this chat, relay client message to agent
@@ -3398,11 +3709,23 @@ app.post('/webhook/whatsapp', async (req, res) => {
   }
 
   if (msg.type === 'document') {
-    const fname = msg.document?.filename || 'tu archivo';
+    const fname = msg.document?.filename || 'documento.pdf';
     try {
+      // No interrogamos al cliente: descargamos el archivo y se lo reenviamos al asesor.
+      let docUrl = '';
+      try {
+        const b64 = await downloadWhatsAppMedia(msg.document?.id);
+        const mime = msg.document?.mime_type || 'application/octet-stream';
+        const ext = (fname.includes('.') ? fname.split('.').pop() : 'pdf');
+        docUrl = await storeIncomingFile(b64, mime, ext);
+      } catch (e) { console.error('[WhatsApp] Doc download error:', e.message); }
+      await notifyAgentWithImage(from, contactName, '📄 DOCUMENTO del cliente (posible comprobante)',
+        ['Archivo: ' + fname, docUrl ? 'Te lo reenvío aquí abajo. 👇' : '⚠️ No pude adjuntarlo; contáctalo para pedírselo.'],
+        '', { docUrl, docName: fname, caseType: 'documento' });
       await sendWhatsAppMessage(from,
-        `📄 Recibí *${fname}*.\n\n¿Es tu *comprobante de pago*? Si es así, dime *a nombre de quién* viene y de *qué monto*. 🙌\n\nO mejor mándame una *foto / captura de pantalla* del comprobante y lo proceso al instante. 📸`);
-      await notifyAgentWithImage(from, contactName, '📄 El cliente envió un documento (PDF)', ['Archivo: ' + fname, 'El bot le pidió que confirme si es comprobante y de parte de quién.'], '');
+        '✅ ¡Recibido! Ya le envié tu documento a un asesor para revisarlo. En breve se pone en contacto contigo. 🙌');
+      pendingAgentRequests.set(from, { since: new Date(), name: contactName, type: 'documento', stage: 0 });
+      if (typeof schedulePersist === 'function') schedulePersist();
     } catch (e) { console.error('[WhatsApp] Document handling error:', e.message); }
     return;
   }
@@ -4024,6 +4347,35 @@ app.get('/images/db/:id', async (req, res) => {
   res.send(img.buffer);
 });
 
+// API: Registro de casos del asesor (comprobantes, documentos, solicitudes…)
+app.get('/admin/api/casos', verifyAdminToken, (req, res) => {
+  res.json({ total: caseLog.length, pendientes: caseLog.filter(c => c.status === 'pendiente').length, casos: caseLog.slice(0, 200) });
+});
+
+// API: Vista previa de recordatorios de corte (quién recibiría el aviso mañana)
+app.get('/admin/api/corte-reminders', verifyAdminToken, (req, res) => {
+  const mananaDate = new Date(Date.now() + 24 * 3600 * 1000);
+  const manana = mexicoDateStr(mananaDate);
+  const lista = [];
+  for (const [phone, c] of wisphubClients.entries()) {
+    const fc = parseFechaCorte(c.fechaCorte);
+    if (fc === manana) lista.push({ name: c.name, phone, plan: c.plan || '', fechaCorte: c.fechaCorte, yaEnviado: !!corteReminders[`${phone}|${fc}`] });
+  }
+  res.json({
+    manana, total: lista.length,
+    habilitado: CORTE_REMINDER_ENABLED, hora: CORTE_REMINDER_TIME,
+    plantillaConfigurada: !!WHATSAPP_AVISO_TEMPLATE,
+    corridaHoy: lastCorteRunDate === mexicoDateStr(),
+    lista: lista.slice(0, 200)
+  });
+});
+
+// API: Forzar la corrida de recordatorios de corte AHORA (para probar)
+app.post('/admin/api/corte-reminders/run', verifyAdminToken, async (req, res) => {
+  const r = await sweepCorteReminders(true);
+  res.json(r || { error: 'No se pudo correr (¿plantilla o Wisphub sin configurar?)' });
+});
+
 // API: List all clients (bot + manual)
 app.get('/admin/api/clients', verifyAdminToken, (req, res) => {
   const recipients = getAllBroadcastRecipients();
@@ -4399,6 +4751,12 @@ const port = Number(process.env.PORT || 3000);
 
   // 3b) Promo de productos a clientes que dejaron de responder unos minutos
   setInterval(() => sweepIdlePromos().catch(() => {}), 120000);
+
+  // 3c) Resumen matutino de casos pendientes al asesor (al abrir la oficina)
+  setInterval(() => sweepMorningDigest().catch(() => {}), 60000);
+
+  // 3d) Recordatorio de fecha de corte (un día antes, por plantilla de utilidad)
+  setInterval(() => sweepCorteReminders().catch(() => {}), 5 * 60000);
 
   // 4) Levantar el servidor
   app.listen(port, () => {
