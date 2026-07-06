@@ -75,6 +75,7 @@ const FIBER_PLAN_MEDIA_URL = process.env.FIBER_PLAN_MEDIA_URL ||
 const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL ||
   (SERVER_BASE_URL ? `${SERVER_BASE_URL}/images/planesinalambrico.jpeg` : '');
 const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
+const STORE_URL = process.env.STORE_URL || 'https://tienda.leontelecom.com';
 const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
 const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
 // Asesor(es): admite VARIOS números (coma/espacio en AGENT_WHATSAPP_NUMBER) y un
@@ -2701,7 +2702,7 @@ async function sendProductHighlight(chatId, sendMsg) {
   const p = nextPromoProduct();
   if (!p) return;
   await sendMsg(chatId,
-    `Por cierto 👀 en nuestra oficina también vendemos:\n🛍️ *${p.name}*\n¿Te interesa? Escribe *productos* para ver más.`,
+    `Por cierto 👀 en nuestra oficina también vendemos:\n🛍️ *${p.name}*\n¿Te interesa? Escribe *productos* para ver más.\n\n🛒 Y en nuestra *tienda en línea* encuentras mucho más (cámaras, redes, control de acceso, cableado y más):\n${STORE_URL}`,
     [getProductImageUrl(p)]
   );
 }
@@ -2717,6 +2718,8 @@ function buildProductListText() {
   const lines = ['🛍️ *Productos y accesorios en nuestra oficina:*', ''];
   for (const c of order) { lines.push(`*${c}*`, ...cats[c], ''); }
   lines.push('Escríbeme el nombre del que te interese y te mando foto. 😊');
+  lines.push('');
+  lines.push(`🛒 ¿Buscas *más*? Visita nuestra *tienda en línea* — cámaras, redes, control de acceso, alarmas y más:\n${STORE_URL}`);
   return lines.join('\n');
 }
 
@@ -3098,7 +3101,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           trackProductHit(p.id);
           await sendMsg(chatId, `🛍️ *${p.name}* — ${p.price}`, [getProductImageUrl(p)]);
         }
-        await sendMsg(chatId, '¿Te interesa alguno? Te puedo pasar con un asesor para apartarlo. 😊');
+        await sendMsg(chatId, `¿Te interesa alguno? Te puedo pasar con un asesor para apartarlo. 😊\n\n🛒 Y si quieres ver *mucho más* (cámaras, redes, control de acceso…), checa nuestra *tienda en línea*:\n${STORE_URL}`);
         return;
       }
     }
