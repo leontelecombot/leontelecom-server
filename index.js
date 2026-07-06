@@ -2619,7 +2619,7 @@ function planWaLink(p) {
     ? 'Internet Inalámbrico'
     : ('Fibra Óptica' + (p.label && p.label !== 'Internet Inalámbrico' ? ' ' + p.label : ''));
   const msg = `Hola 👋, vi el plan ${tipoTxt} de ${p.mbps} Mbps (${fmtPrice(p.price)}/mes) en su página web y me gustaría contratarlo. ¿Me ayudan?`;
-  return 'https://wa.me/529511697346?text=' + encodeURIComponent(msg);
+  return 'https://wa.me/529512172814?text=' + encodeURIComponent(msg);
 }
 
 // URL de imagen: si ya es una URL completa (imagen subida), úsala tal cual;
