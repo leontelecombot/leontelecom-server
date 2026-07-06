@@ -319,6 +319,7 @@ const agentActiveCases = new Map(); // Map<agentNumber, clientId>
 const pendingAgentRequests = new Map();
 const pendingImage = new Map(); // confirmación de comprobante: chatId -> { url, analysis, userName, ts, stage }
 const pendingDoc = new Map();   // documento/PDF: chatId -> { docUrl, fname, userName, ts }
+const statedTitular = new Map(); // cliente dijo "a nombre de X" -> chatId -> { name, ts }
 
 // ==================== REGISTRO DE CASOS (persistente en Mongo) ====================
 // Cada aviso al asesor queda registrado aquí para que NO se pierda nada
@@ -2010,15 +2011,20 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
     if (tipo === 'comprobante') {
       const nombre = String(a.nombre || '').trim();
       const monto = String(a.monto || '').trim();
+      // ¿El cliente ya había dicho por texto "a nombre de X"? Lo cotejamos.
+      const _st = statedTitular.get(String(chatId));
+      const titular = (_st && Date.now() - (_st.ts || 0) < 20 * 60 * 1000) ? _st.name : '';
+      statedTitular.delete(String(chatId));
       // Registramos el caso YA (aunque el cliente no confirme, no se pierde y sale en el resumen).
       const _c = logCase(chatId, userName, 'pago',
-        `Comprobante recibido (esperando confirmación del cliente): ${nombre || '¿?'} / ${monto || '¿?'}`,
+        `Comprobante recibido (esperando confirmación): pagó ${nombre || '¿?'} / ${monto || '¿?'}${titular ? ' · a nombre de ' + titular : ''}`,
         { imageUrl: url });
-      pendingImage.set(String(chatId), { url, analysis: a, userName, ts: Date.now(), caseId: _c && _c.id });
-      let det = '📄 Recibí tu comprobante de pago. Detecté estos datos:\n\n';
+      pendingImage.set(String(chatId), { url, analysis: a, userName, ts: Date.now(), caseId: _c && _c.id, titular });
+      let det = '📄 Recibí tu comprobante de pago. En la imagen detecté:\n\n';
       det += '👤 Nombre: ' + (nombre || '_no lo pude leer bien_') + '\n';
       det += '💵 Monto: ' + (monto || '_no lo pude leer bien_');
       if (a.fecha) det += '\n📅 Fecha: ' + a.fecha;
+      if (titular) det += '\n\n📝 Y tú me dijiste que es a nombre de: *' + titular + '*.';
       det += '\n\n¿Los datos son correctos?';
       if (platform === 'whatsapp') {
         await sendMsg(chatId, det, [], { buttons: [
@@ -2400,6 +2406,27 @@ function parseTimeToMinutes(hhmm, fallback = 600) {
   if (!m) return fallback;
   const mins = Number(m[1]) * 60 + Number(m[2]);
   return (mins >= 0 && mins < 1440) ? mins : fallback;
+}
+
+// Extrae el nombre que el cliente dice en un texto: "a nombre de X", "de parte de X",
+// "comprobante de X", "el pago es de X". Devuelve '' si no encuentra un nombre razonable.
+function extractTitularName(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  const m = t.match(/(?:a\s+nombre\s+de|de\s+parte\s+de|el\s+pago\s+es\s+de|comprobante\s+(?:de|del|es\s+de|a\s+nombre\s+de))\s+(.+)$/i);
+  if (!m) return '';
+  let name = m[1]
+    .replace(/\b(gracias|porfa(?:vor)?|please|saludos|buen[oa]s?\s+(?:d[ií]as|tardes|noches))\b.*$/i, '')
+    .replace(/[.,;:!¡¿?"'()]+/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  // Solo palabras que parezcan de un nombre (letras), máximo 6.
+  let palabras = name.split(' ').filter(w => /^[a-záéíóúñü]+$/i.test(w));
+  // Quita títulos/artículos al inicio (la señora Guadalupe → Guadalupe).
+  const titulos = new Set(['la', 'el', 'sr', 'sra', 'señor', 'señora', 'don', 'doña', 'c', 'mi', 'del']);
+  while (palabras.length && titulos.has(palabras[0].toLowerCase())) palabras.shift();
+  palabras = palabras.slice(0, 6);
+  name = palabras.join(' ').trim();
+  if (name.length < 3 || palabras.length < 1) return '';
+  return tituloCase(name);
 }
 
 // "CARLOS MANUEL ACEVEDO FLORES" → "Carlos Manuel Acevedo Flores" (partículas en minúscula).
@@ -2930,6 +2957,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     } else if (_pend && !_emergencyNow) {
       // Envía el comprobante al asesor y actualiza el caso ya registrado (sin duplicarlo).
       const enviarComprobante = async (lines, headline) => {
+        if (_pend.titular) lines = [...lines, '🧾 A nombre de (dicho por el cliente): ' + _pend.titular];
         await notifyAgentWithImage(chatId, _pend.userName, headline, lines, _pend.url, { caseType: 'pago', noLog: true });
         if (!updateCase(_pend.caseId, { resumen: headline + ' · ' + lines.join(' · ') })) {
           logCase(chatId, _pend.userName, 'pago', headline + ' · ' + lines.join(' · '), { imageUrl: _pend.url });
@@ -3027,6 +3055,20 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (isEmergency(text)) {
       await handleEmergency(chatId, text, sendMsg);
       return;
+    }
+
+    // El cliente dice "a nombre de X" (titular del comprobante). Lo guardamos para
+    // cotejarlo con la imagen; si viene con contexto de pago, le pedimos la foto/PDF.
+    {
+      const _tit = extractTitularName(text);
+      if (_tit) {
+        statedTitular.set(String(chatId), { name: _tit, ts: Date.now() });
+        const contextoPago = /comprobante|dep[oó]sito|transferencia|pag(?:u|o|é|ar|ue)|abon|ficha/i.test(_pt);
+        if (contextoPago) {
+          await sendMsg(chatId, `¡Perfecto! 🙌 Anoté que el comprobante es a nombre de *${_tit}*.\n\nAhora mándame la *foto o PDF* del comprobante y lo reviso al instante. 📸`);
+          return;
+        }
+      }
     }
 
     // Pregunta por el horario de atención → responder con la lista (sin romper el flujo)
