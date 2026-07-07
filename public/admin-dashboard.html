@@ -659,6 +659,23 @@
   </div>
 </div>
 
+<!-- Historial de conversación por cliente -->
+<div id="histModal" class="modal-bg">
+  <div class="modal-card" style="width:540px;max-width:94vw">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:4px">
+      <div>
+        <h3 id="histTitle" style="margin:0">Conversación</h3>
+        <div id="histSub" class="muted" style="font-size:.8em;margin-top:2px"></div>
+      </div>
+      <button class="btn btn-sm" onclick="closeHistory()" style="background:#eee;color:var(--muted);width:auto;padding:6px 12px">✕</button>
+    </div>
+    <div id="histBody" style="max-height:60vh;overflow:auto;background:#f5f6fa;border:1px solid #e5e5ef;border-radius:12px;padding:12px;margin-top:10px"><div class="empty">Cargando…</div></div>
+    <div style="text-align:right;margin-top:10px">
+      <button class="btn btn-edit btn-sm" style="width:auto;padding:8px 14px" onclick="refreshHistory()" id="histRefresh">🔄 Actualizar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modify modal -->
 <div id="modModal" class="modal-bg">
   <div class="modal-card">
@@ -1230,7 +1247,7 @@
           <td>${c.estado?('<span class="badge">'+esc(c.estado)+'</span>'):'—'}</td>
           <td>${esc(c.fechaCorte||'—')}</td>
           <td><span class="badge badge-src-${c.source||'bot'}">${c.source==='wisphub'?'Wisphub':c.source==='manual'?'Manual':'Bot'}</span></td>
-          <td style="text-align:right">${c.source==='manual'?`<button class="btn btn-danger btn-sm" onclick="deleteClient('${c.chatId}')">✕</button>`:''}</td>
+          <td style="text-align:right;white-space:nowrap"><button class="btn btn-edit btn-sm" onclick="openHistory('${esc(String(c.chatId))}')" title="Ver conversación">💬</button>${c.source==='manual'?` <button class="btn btn-danger btn-sm" onclick="deleteClient('${c.chatId}')">✕</button>`:''}</td>
         </tr>`).join('')}
       </tbody></table>`;
   }
@@ -1634,6 +1651,42 @@
     try{ const r=await fetchAuth('/admin/api/promo-banner/'+id,{method:'DELETE'}); const d=await r.json(); if(!r.ok) throw new Error(d.error); renderPromoBanners(d.banners||[]); }
     catch(e){ showAlert('pbAlert','❌ '+e.message,'error'); }
   }
+
+  // ===== Historial de conversación por cliente =====
+  let HIST_CHAT = null;
+  async function openHistory(chatId){
+    HIST_CHAT = String(chatId||'');
+    const c = (typeof CLIENTS_DATA!=='undefined'?CLIENTS_DATA:[]).find(x=>String(x.chatId)===HIST_CHAT);
+    document.getElementById('histTitle').textContent = '💬 ' + ((c&&c.name)||HIST_CHAT);
+    document.getElementById('histSub').textContent = HIST_CHAT + (c&&c.plan?(' · '+c.plan):'');
+    document.getElementById('histBody').innerHTML = '<div class="empty">Cargando…</div>';
+    document.getElementById('histModal').style.display='flex';
+    try{
+      const r = await fetchAuth('/admin/api/history/'+encodeURIComponent(HIST_CHAT));
+      const d = await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      renderHistory(d);
+    }catch(e){ document.getElementById('histBody').innerHTML = '<div class="empty">❌ '+esc(e.message)+'</div>'; }
+  }
+  function renderHistory(d){
+    const body = document.getElementById('histBody');
+    const msgs = (d&&d.messages)||[];
+    if(!msgs.length){ body.innerHTML='<div class="empty">Sin mensajes registrados todavía.</div>'; return; }
+    body.innerHTML = msgs.map(m=>{
+      const mine = m.role==='user';
+      let when=''; try{ if(m.ts) when=new Date(m.ts).toLocaleString('es-MX',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(_){}
+      const bg = mine?'#e7f0ff':'#ffffff';
+      const align = mine?'flex-end':'flex-start';
+      const who = mine?'Cliente':'Bot';
+      return `<div style="display:flex;justify-content:${align};margin-bottom:8px">
+        <div style="max-width:80%;background:${bg};border:1px solid #e5e5ef;border-radius:12px;padding:8px 11px">
+          <div style="font-size:.68em;color:var(--muted);margin-bottom:2px">${who}${when?' · '+when:''}</div>
+          <div style="font-size:.9em;white-space:pre-wrap;word-break:break-word">${esc(m.text)}</div>
+        </div></div>`;
+    }).join('');
+    body.scrollTop = body.scrollHeight;
+  }
+  function closeHistory(){ document.getElementById('histModal').style.display='none'; HIST_CHAT=null; }
+  function refreshHistory(){ if(HIST_CHAT) openHistory(HIST_CHAT); }
 
   function showAlert(id, msg, type) {
     const el = document.getElementById(id);

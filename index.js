@@ -823,6 +823,14 @@ function schedulePersist() {
 // Ready for persistence: Can be easily migrated to MongoDB/PostgreSQL for WhatsApp integration
 const chatHistory = new Map();
 
+// --- Historial por cliente (persistencia SEPARADA, bajo demanda) ------------
+// _convDirty = chats con mensajes nuevos pendientes de volcar al almacén aparte.
+// Marcar/volcar NO toca el estado principal → cero impacto en el guardado normal.
+// Todo es defensivo: si el historial falla, el bot sigue funcionando igual.
+const _convDirty = new Set();
+const CONV_MAX_CHATS = 2500;   // tope de chats en memoria (blindaje anti-fuga)
+let _convFlushing = false;
+
 function getHistory(chatId) {
   const id = String(chatId);
   if (!chatHistory.has(id)) {
@@ -849,6 +857,7 @@ function addMessageToHistory(chatId, role, text) {
   if (history.messages.length > 100) {
     history.messages = history.messages.slice(-100);
   }
+  _convDirty.add(id); // marcar para volcar al almacén de historial (barato: 1 Set.add)
 }
 
 function clearHistory(chatId) {
@@ -865,6 +874,42 @@ function getFullChatContext(chatId) {
     recentMessages: history.messages.slice(-10), // Last 10 messages
     fullHistory: history.messages // Full history if needed
   };
+}
+
+// Vuelca a un almacén SEPARADO los chats con mensajes nuevos (solo los "dirty").
+// Corre en un intervalo aparte; nunca lanza (todo envuelto). Si un guardado
+// falla, ese chat se re-marca para el siguiente intento.
+async function flushConversations() {
+  if (_convFlushing) return;         // evita solapes si un volcado tardó
+  _convFlushing = true;
+  try {
+    const ids = [..._convDirty];
+    _convDirty.clear();
+    for (const id of ids) {
+      try {
+        const h = chatHistory.get(id);
+        if (!h || !h.messages || !h.messages.length) continue;
+        const ok = await persistence.saveConversation(id, {
+          chatId: id, createdAt: h.createdAt, updatedAt: h.updatedAt, messages: h.messages
+        });
+        if (!ok) _convDirty.add(id); // reintenta en la próxima pasada
+      } catch (_) { _convDirty.add(id); }
+    }
+    // Blindaje de memoria: si hay demasiados chats, saca de RAM los menos recientes
+    // (ya quedaron guardados; se recargan bajo demanda si alguien los abre).
+    if (chatHistory.size > CONV_MAX_CHATS) {
+      const entries = [...chatHistory.entries()]
+        .sort((a, b) => new Date(a[1].updatedAt || 0) - new Date(b[1].updatedAt || 0));
+      const sobran = chatHistory.size - CONV_MAX_CHATS;
+      for (let i = 0; i < sobran; i++) {
+        if (!_convDirty.has(entries[i][0])) chatHistory.delete(entries[i][0]);
+      }
+    }
+  } catch (e) {
+    console.error('[historial] flush error:', e.message);
+  } finally {
+    _convFlushing = false;
+  }
 }
 
 const FIBER_PLANS = [
@@ -4649,6 +4694,33 @@ app.get('/admin/api/casos', verifyAdminToken, (req, res) => {
   res.json({ total: caseLog.length, pendientes: caseLog.filter(c => c.status === 'pendiente').length, casos: caseLog.slice(0, 200) });
 });
 
+// API: Historial de conversación de un cliente (memoria si está, si no del almacén;
+// bajo demanda para no cargar todo en RAM). Defensivo: nunca rompe.
+app.get('/admin/api/history/:chatId', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  try {
+    const id = String(req.params.chatId || '').replace(/\D/g, '');
+    if (!id) return res.status(400).json({ error: 'Número inválido' });
+    let msgs = [];
+    const mem = chatHistory.get(id);
+    if (mem && Array.isArray(mem.messages) && mem.messages.length) {
+      msgs = mem.messages;
+    } else {
+      const stored = await persistence.loadConversation(id).catch(() => null);
+      if (stored && Array.isArray(stored.messages)) msgs = stored.messages;
+    }
+    const w = wisphubClients.get(id), man = manualClients.get(id), prof = clientProfiles.get(id);
+    const name = (w && w.name) || (man && man.name) || (prof && prof.name) || '';
+    const messages = msgs.slice(-200).map(m => ({
+      role: m.role === 'user' ? 'user' : 'bot',
+      text: String(m.text == null ? '' : m.text).slice(0, 4000),
+      ts: m.timestamp || m.ts || null
+    }));
+    res.json({ chatId: id, name, count: messages.length, messages });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo cargar el historial' });
+  }
+});
+
 // API: Vista previa de recordatorios de corte (quién recibiría el aviso mañana)
 app.get('/admin/api/corte-reminders', verifyAdminToken, (req, res) => {
   const mananaDate = new Date(Date.now() + 24 * 3600 * 1000);
@@ -5110,6 +5182,9 @@ const port = Number(process.env.PORT || 3000);
 
   // 3d) Recordatorio de fecha de corte (un día antes, por plantilla de utilidad)
   setInterval(() => sweepCorteReminders().catch(() => {}), 5 * 60000);
+
+  // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
+  setInterval(() => flushConversations().catch(() => {}), 60000);
 
   // 4) Levantar el servidor
   app.listen(port, () => {

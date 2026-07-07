@@ -32,6 +32,7 @@ let _backend = 'file'; // 'mongodb' | 'postgres' | 'file'
 let mongoClient = null;
 let mongoCollection = null;
 let mongoImages = null;
+let mongoConversations = null;
 // Postgres
 let pgPool = null;
 
@@ -44,6 +45,7 @@ async function init() {
       await mongoClient.connect();
       mongoCollection = mongoClient.db(MONGODB_DB).collection('state');
       mongoImages = mongoClient.db(MONGODB_DB).collection('images');
+      mongoConversations = mongoClient.db(MONGODB_DB).collection('conversations');
       await mongoCollection.findOne({ _id: STATE_KEY }); // valida la conexión
       _backend = 'mongodb';
       console.log('[persistence] MongoDB Atlas conectado — datos persistentes ✅');
@@ -169,12 +171,65 @@ async function loadImage(id) {
   }
 }
 
+// ---- Conversaciones (historial por cliente) ----
+// Almacén SEPARADO del estado principal: guardar/leer el historial NO toca ni
+// agranda el documento de estado, así que NO afecta el rendimiento del save normal.
+// Se escribe por cliente (upsert) y se lee bajo demanda. Todo defensivo.
+async function saveConversation(chatId, doc) {
+  try {
+    const id = String(chatId);
+    if (_backend === 'mongodb' && mongoConversations) {
+      await mongoConversations.replaceOne({ _id: id }, { _id: id, ...doc, updatedAt: new Date() }, { upsert: true });
+      return true;
+    }
+    if (_backend === 'postgres' && pgPool) {
+      await pgPool.query(
+        `INSERT INTO kv_store (key, value, updated_at) VALUES ($1, $2::jsonb, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        ['conv:' + id, JSON.stringify(doc)]
+      );
+      return true;
+    }
+    const dir = path.join(__dirname, '..', 'data', 'conversations');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, encodeURIComponent(id) + '.json'), JSON.stringify(doc));
+    return true;
+  } catch (e) {
+    console.error('[persistence] saveConversation:', e.message);
+    return false;
+  }
+}
+
+async function loadConversation(chatId) {
+  try {
+    const id = String(chatId);
+    if (_backend === 'mongodb' && mongoConversations) {
+      const doc = await mongoConversations.findOne({ _id: id });
+      if (!doc) return null;
+      const { _id, ...rest } = doc;
+      return rest;
+    }
+    if (_backend === 'postgres' && pgPool) {
+      const r = await pgPool.query('SELECT value FROM kv_store WHERE key = $1', ['conv:' + id]);
+      return r.rows.length ? (r.rows[0].value || null) : null;
+    }
+    const p = path.join(__dirname, '..', 'data', 'conversations', encodeURIComponent(id) + '.json');
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf-8') || 'null');
+  } catch (e) {
+    console.error('[persistence] loadConversation:', e.message);
+    return null;
+  }
+}
+
 module.exports = {
   init,
   load,
   save,
   saveImage,
   loadImage,
+  saveConversation,
+  loadConversation,
   get backend() { return _backend; },
   get usingPg() { return _backend === 'postgres'; },
   get label() {
