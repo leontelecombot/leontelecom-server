@@ -2518,10 +2518,13 @@ async function sweepCorteReminders(force = false) {
         const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
         const nombre = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
         const titular = tituloCase(c.name) || 'ti';
+        const datos = { nombre, titular, fecha: bonita, plan: c.plan || '' };
         // Mensaje según la plantilla ACTIVA del panel (o la predeterminada).
-        const msgCorte = renderCorteVars(activeCorteTemplate().text, {
-          nombre, titular, fecha: bonita, plan: c.plan || ''
-        });
+        let msgCorte = renderCorteVars(activeCorteTemplate().text, datos);
+        // Salvaguarda: si al sustituir las variables el mensaje queda vacío (p. ej. una
+        // plantilla que es solo "{plan}" y el cliente no tiene plan), usamos la
+        // predeterminada — WhatsApp rechaza un cuerpo de plantilla vacío.
+        if (!msgCorte.replace(/\s+/g, ' ').trim()) msgCorte = renderCorteVars(CORTE_MSG_DEFAULT, datos);
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
         sent++;
