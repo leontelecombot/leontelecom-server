@@ -349,6 +349,40 @@ let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matuti
 let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
 
+// --- Alertas al admin cuando algo falla (throttle por tipo, para no spamear) ---
+const ALERT_ADMIN_NUMBER = process.env.ALERT_ADMIN_NUMBER || '9511603125';
+const _alertLast = new Map(); // tipo -> ts del último aviso
+
+// --- Anti-flood por número (rate-limit ligero del webhook) ---
+const _msgRate = new Map();     // chatId -> [timestamps]
+const RATE_MAX = 12;            // máx mensajes por ventana y número
+const RATE_WINDOW_MS = 30000;   // ventana de 30 s
+
+// --- Bienvenida automática a NUEVOS clientes de Wisphub ---
+// welcomedClients = teléfonos ya conocidos (no se les vuelve a saludar).
+// welcomeSeeded = ya se hizo el "baseline" para NO saludar a los clientes existentes.
+// welcomeReady = true tras hidratar (evita actuar con estado a medias / en arranque).
+const NEW_CLIENT_WELCOME_ENABLED = String(process.env.NEW_CLIENT_WELCOME_ENABLED || 'true') === 'true';
+let welcomedClients = new Set();
+let welcomeSeeded = false;
+let welcomeReady = false;
+let _wisphubSyncing = false;    // evita sincronizaciones/lecturas traslapadas de Wisphub
+
+// Rate-limit por número: true si este chatId está mandando demasiado en la ventana.
+function isFlooding(chatId) {
+  try {
+    const id = String(chatId);
+    const now = Date.now();
+    const arr = (_msgRate.get(id) || []).filter(t => now - t < RATE_WINDOW_MS);
+    arr.push(now);
+    _msgRate.set(id, arr);
+    if (_msgRate.size > 4000) { // limpieza para no crecer sin límite
+      for (const [k, v] of _msgRate) { if (now - (v[v.length - 1] || 0) > RATE_WINDOW_MS) _msgRate.delete(k); }
+    }
+    return arr.length > RATE_MAX;
+  } catch (_) { return false; }
+}
+
 // ---- Plantilla EDITABLE del aviso de corte (con variables) -----------------
 // Plantilla PREDETERMINADA (la de siempre). No se puede borrar ni editar; si no
 // hay ninguna personalizada activa, se usa esta. Variables disponibles abajo.
@@ -468,11 +502,14 @@ let lastWisphubSync = null;
 let wisphubSyncError = null;
 let lastWisphubTotal = null;      // activos revisados en el último sync
 let lastWisphubSinTel = null;     // activos sin teléfono válido
+let lastWisphubComplete = false;  // true SOLO si el último sync paginó COMPLETO (sin cortarse)
 
 async function syncWisphubClients() {
   if (!WISPHUB_API_KEY) {
     return { synced: 0, error: 'WISPHUB_API_KEY no configurado' };
   }
+  if (_wisphubSyncing) return { synced: 0, skipped: true }; // evita sincronizaciones traslapadas
+  _wisphubSyncing = true;
   try {
     const base = (WISPHUB_API_URL || 'https://api.wisphub.net').replace(/\/$/, '');
     const schemes = ['Api-Key', 'Token', 'Bearer'];
@@ -497,9 +534,10 @@ async function syncWisphubClients() {
     // en http:// y al seguirlos se pierde la autenticación, por eso no los usamos.
     // Tope alto (pages < 2000 ≈ 600,000 clientes) para crecer sin límite práctico.
     const PAGE = 500;
+    let complete = false; // ¿paginó todo sin cortarse? (clave para la bienvenida a nuevos)
     while (data && pages < 2000) {
       const items = Array.isArray(data) ? data : (data.results || []);
-      if (!items.length) break;
+      if (!items.length) { complete = true; break; } // ya no hay más datos
       revisados += items.length;
       for (const c of items) {
         const rawPhone = c.telefono || c.celular || c.phone || '';
@@ -520,9 +558,9 @@ async function syncWisphubClients() {
       }
       offset += items.length;
       pages++;
-      if (count && offset >= count) break;
+      if (count && offset >= count) { complete = true; break; } // llegamos al total
       const res = await fetch(`${base}/api/clientes/?format=json&limit=${PAGE}&offset=${offset}&estado=1`, { headers: { 'Authorization': authHeader } });
-      if (!res.ok) break;
+      if (!res.ok) break; // ⚠️ se cortó a media paginación → NO es un sync completo
       data = await res.json();
     }
 
@@ -533,12 +571,57 @@ async function syncWisphubClients() {
     wisphubSyncError = null;
     lastWisphubTotal = revisados;
     lastWisphubSinTel = sinTelefono;
+    lastWisphubComplete = complete; // la bienvenida a nuevos solo actúa si esto es true
     console.log(`[Wisphub] Sync OK: ${unicos} números únicos | ${revisados} activos | ${sinTelefono} sin teléfono válido | ${repetidos} con número repetido`);
     return { synced: unicos, total: revisados, sinTelefono, repetidos };
   } catch (e) {
     wisphubSyncError = e.message;
     console.error('[Wisphub] Sync error:', e.message);
+    alertAdmin('wisphub', `Falló la sincronización con Wisphub: ${e.message}`);
     return { synced: 0, error: e.message };
+  } finally {
+    _wisphubSyncing = false;
+  }
+}
+
+// Bienvenida automática a NUEVOS clientes de Wisphub. Lee la lista YA sincronizada
+// (no toca el sync) y solo actúa tras hidratar. La PRIMERA vez marca a todos los
+// clientes actuales como "conocidos" SIN enviar nada (baseline), para no saludar a
+// los existentes; después solo saluda a los que aparezcan nuevos. Con tope de
+// seguridad: si aparecen demasiados "nuevos" de golpe, NO envía (avisa al admin).
+async function sweepNewClients() {
+  try {
+    // Solo actúa sobre un sync VERIFICADAMENTE COMPLETO (lastWisphubComplete). Un sync
+    // que se cortó a media paginación daría una lista parcial y haría ver como "nuevos"
+    // a clientes EXISTENTES → jamás sembramos ni saludamos con una lista incompleta.
+    if (!welcomeReady || _wisphubSyncing || wisphubSyncError || !lastWisphubComplete || !wisphubClients.size) return;
+    const current = new Set(wisphubClients.keys());
+    if (!welcomeSeeded) {
+      for (const ph of current) welcomedClients.add(ph);
+      welcomeSeeded = true; schedulePersist();
+      console.log(`[bienvenida] baseline: ${welcomedClients.size} clientes marcados como conocidos (sin enviar).`);
+      return;
+    }
+    if (!NEW_CLIENT_WELCOME_ENABLED) return;
+    const nuevos = [...current].filter(ph => !welcomedClients.has(ph));
+    if (!nuevos.length) return;
+    if (nuevos.length > 30) { // anomalía (¿se reinició la lista?): NO enviar, avisar
+      for (const ph of nuevos) welcomedClients.add(ph);
+      schedulePersist();
+      console.warn(`[bienvenida] ${nuevos.length} "nuevos" de golpe — NO envío por seguridad.`);
+      alertAdmin('bienvenida-anomala', `Aparecieron ${nuevos.length} clientes "nuevos" de golpe; NO se enviaron bienvenidas por seguridad.`);
+      return;
+    }
+    for (const ph of nuevos) {
+      welcomedClients.add(ph); // marca ANTES de enviar (no re-saluda aunque falle)
+      const c = wisphubClients.get(ph);
+      try { await sendNewClientWelcome(ph, c && c.name); console.log(`[bienvenida] enviada a nuevo cliente ${ph}`); }
+      catch (e) { console.error('[bienvenida] falló envío a', ph, e.message); }
+      await new Promise(r => setTimeout(r, 300));
+    }
+    schedulePersist();
+  } catch (e) {
+    console.error('[bienvenida] sweep error:', e.message);
   }
 }
 
@@ -650,6 +733,36 @@ async function sendBroadcastSmart(message, imageUrls = []) {
   if (img && WHATSAPP_PROMO_TEMPLATE) return await sendBulkTemplate(message, { templateName: WHATSAPP_PROMO_TEMPLATE, imageUrl: img });
   if (!img && WHATSAPP_AVISO_TEMPLATE) return await sendBulkTemplate(message);
   return await sendBulkWhatsApp(message, imageUrls);
+}
+
+// Avisa al admin (a ALERT_ADMIN_NUMBER) cuando algo crítico falla. Usa la plantilla
+// de utilidad (llega aunque no haya chat reciente) y hace throttle por tipo: no
+// repite el mismo aviso en 30 min. Nunca lanza: si el aviso falla, no pasa nada.
+async function alertAdmin(type, message) {
+  try {
+    const now = Date.now();
+    if (now - (_alertLast.get(type) || 0) < 30 * 60 * 1000) return;
+    _alertLast.set(type, now);
+    const to = normalizePhone(String(ALERT_ADMIN_NUMBER || ''));
+    if (!to || to.length < 12) return;
+    const txt = `⚠️ Alerta del bot León Telecom\n${String(message || '').slice(0, 500)}`;
+    if (WHATSAPP_AVISO_TEMPLATE) {
+      await sendWhatsAppTemplate(to, txt).catch(() => sendWhatsAppMessage(to, txt).catch(() => {}));
+    } else {
+      await sendWhatsAppMessage(to, txt).catch(() => {});
+    }
+  } catch (_) { /* nunca romper por una alerta */ }
+}
+
+// Mensaje de bienvenida/agradecimiento a un cliente recién dado de alta en Wisphub.
+async function sendNewClientWelcome(phone, name) {
+  const first = String(name || '').trim().split(/\s+/)[0] || '';
+  const nombre = first ? (first.charAt(0).toUpperCase() + first.slice(1).toLowerCase()) : 'cliente';
+  const txt = `¡Hola ${nombre}! 🎉 Te damos la bienvenida a *León Telecom* y te agradecemos por contratar tu servicio de internet con nosotros. 💙 ` +
+    `Por este WhatsApp puedes reportar una falla, enviar tu comprobante de pago o pedir soporte cuando lo necesites. ` +
+    `Escribe *hola* y con gusto te atendemos. ¡Bienvenido(a) a la familia León Telecom!`;
+  if (WHATSAPP_AVISO_TEMPLATE) return sendWhatsAppTemplate(phone, txt);
+  return sendWhatsAppMessage(phone, txt);
 }
 
 // Scheduler — checks every 60s if any broadcast needs to be sent
@@ -773,7 +886,9 @@ function buildStateSnapshot() {
     corteReminders: corteReminders,
     lastCorteRunDate: lastCorteRunDate,
     corteTemplates: corteTemplates,
-    corteActiveId: corteActiveId
+    corteActiveId: corteActiveId,
+    welcomedClients: [...welcomedClients],
+    welcomeSeeded: welcomeSeeded
   };
 }
 
@@ -821,6 +936,8 @@ function hydrateState(s) {
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
   if (typeof s.corteActiveId === 'string') corteActiveId = s.corteActiveId;
+  if (Array.isArray(s.welcomedClients)) welcomedClients = new Set(s.welcomedClients.map(String));
+  if (typeof s.welcomeSeeded === 'boolean') welcomeSeeded = s.welcomeSeeded;
   // Seguridad: si la activa apunta a una plantilla que ya no existe, vuelve a la predeterminada.
   if (corteActiveId !== 'default' && !corteTemplates.some(t => t.id === corteActiveId)) corteActiveId = 'default';
   console.log(`[persistence] Estado restaurado — perfiles:${clientProfiles.size} clientes:${manualClients.size} avisos:${scheduledBroadcasts.size} folios:${folios.size}`);
@@ -930,7 +1047,10 @@ async function flushConversations() {
   }
 }
 
-const FIBER_PLANS = [
+// Planes que usa el BOT para cotizar. Los PRECIOS se mantienen en sync con los
+// planes editables del panel vía syncHardcodedPlanPrices() → una sola fuente de
+// precios (se editan en el panel y el bot los sigue). Por eso son `let`.
+let FIBER_PLANS = [
   { name: 'Lite', speed: '30 Mbps', price: '$289/mes' },
   { name: 'Basic', speed: '80 Mbps', price: '$320/mes' },
   { name: 'Medium', speed: '150 Mbps', price: '$440/mes' },
@@ -938,7 +1058,7 @@ const FIBER_PLANS = [
   { name: 'Ultra', speed: '300 Mbps', price: '$680/mes' }
 ];
 
-const WIRELESS_PLANS = [
+let WIRELESS_PLANS = [
   { name: '15 Mbps', speed: '15 Mbps', price: '$290/mes' },
   { name: '20 Mbps', speed: '20 Mbps', price: '$340/mes' },
   { name: '30 Mbps', speed: '30 Mbps', price: '$440/mes' }
@@ -2109,6 +2229,8 @@ async function notifyAgentWithImage(chatId, userName, headline, bodyLines, image
 
 async function handleIncomingImage(chatId, userName, imageBase64, platform, sendMsg) {
   try {
+    // Anti-flood: las imágenes son caras (análisis IA); limitamos por número también.
+    if (!isAgentNumber(String(chatId)) && isFlooding(chatId)) { console.warn(`[rate-limit] exceso de imágenes de ${chatId}, ignorado`); return; }
     dataManager.registerUser(chatId, { name: userName, platform });
     await sendMsg(chatId, '⏳ Analizando tu imagen…');
     const a = (await analyzePaymentReceipt(imageBase64)) || {};
@@ -2723,6 +2845,27 @@ const DEFAULT_PLANS = [
 let plans = DEFAULT_PLANS.map((p, i) => ({ id: 'planseed' + (i + 1), active: true, order: i, period: '/mes', ...p }));
 function findPlanById(id) { return plans.find(p => p.id === id) || null; }
 function getWebPlans() { return plans.filter(p => p.active !== false).slice().sort((a, b) => (a.order || 0) - (b.order || 0)); }
+
+// UNA SOLA FUENTE DE PRECIOS: copia los precios de los planes EDITABLES del panel
+// a las listas que el bot usa para cotizar (empareja por Mbps). Si un plan no está
+// en el panel, conserva su precio actual. Solo sincroniza PRECIOS (no agrega/quita
+// niveles). Se llama al arrancar y cada vez que se editan los planes en el panel.
+function syncHardcodedPlanPrices() {
+  try {
+    const web = getWebPlans();
+    const apply = (arr, tipo) => {
+      for (const p of arr) {
+        const mbps = parseInt(String(p.speed), 10);
+        // Solo planes de HOGAR (los que cotiza el bot); ignora los de 'negocio' para
+        // que un plan empresarial del mismo Mbps no pise el precio residencial.
+        const src = web.find(w => (w.tipo === tipo) && ((w.segmento || 'hogar') === 'hogar') && parseInt(String(w.mbps), 10) === mbps);
+        if (src && src.price) p.price = `${src.price}${src.period || '/mes'}`;
+      }
+    };
+    apply(FIBER_PLANS, 'fibra');
+    apply(WIRELESS_PLANS, 'inalambrico');
+  } catch (e) { console.error('[planes] sync de precios:', e.message); }
+}
 function sanitizeFeatures(f) {
   const arr = Array.isArray(f) ? f : String(f || '').split('\n');
   return arr.map(s => String(s).trim()).filter(Boolean).slice(0, 8);
@@ -3006,6 +3149,9 @@ async function startReportFlow(chatId, text, sendMsg) {
 
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
+    // Anti-flood: si UN número manda demasiados mensajes en poco tiempo, ignoramos el
+    // exceso (protege al bot de saturación). No aplica a los asesores.
+    if (!isAgentNumber(String(chatId)) && isFlooding(chatId)) { console.warn(`[rate-limit] exceso de mensajes de ${chatId}, ignorado`); return; }
     // ---- Comprobante (imagen) / Documento (PDF): confirmación, corrección o titular ----
     const _pendKey = String(chatId);
     const _pt = String(text || '').toLowerCase().trim();
@@ -4467,6 +4613,7 @@ app.post('/admin/api/plans', verifyAdminToken, requirePermission('products'), (r
   };
   plans.push(p);
   schedulePersist();
+  syncHardcodedPlanPrices(); // el bot cotiza con estos precios
   res.json({ success: true, plan: p });
 });
 app.patch('/admin/api/plans/:id', verifyAdminToken, requirePermission('products'), (req, res) => {
@@ -4483,6 +4630,7 @@ app.patch('/admin/api/plans/:id', verifyAdminToken, requirePermission('products'
   if (typeof b.active === 'boolean') p.active = b.active;
   if (b.order !== undefined && Number.isFinite(+b.order)) p.order = +b.order;
   schedulePersist();
+  syncHardcodedPlanPrices(); // el bot cotiza con estos precios
   res.json({ success: true, plan: p });
 });
 app.delete('/admin/api/plans/:id', verifyAdminToken, requirePermission('products'), (req, res) => {
@@ -4490,6 +4638,7 @@ app.delete('/admin/api/plans/:id', verifyAdminToken, requirePermission('products
   if (i < 0) return res.status(404).json({ error: 'Plan no encontrado' });
   const [removed] = plans.splice(i, 1);
   schedulePersist();
+  syncHardcodedPlanPrices(); // el bot cotiza con estos precios
   res.json({ success: true, removed });
 });
 // API pública (la consume la página web) — planes visibles, ordenados.
@@ -5077,6 +5226,10 @@ app.get('/admin/api/wisphub-status', verifyAdminToken, (req, res) => {
 // API: Trigger Wisphub sync manually
 app.post('/admin/api/wisphub-sync', verifyAdminToken, requirePermission('wisphub'), async (req, res) => {
   const result = await syncWisphubClients();
+  // Si ya había una sincronización en curso, avisamos claro (no es un error de 0 clientes).
+  if (result && result.skipped) {
+    return res.json({ skipped: true, message: 'Ya hay una sincronización en curso. Espera unos segundos e intenta de nuevo.' });
+  }
   res.json(result);
 });
 
@@ -5199,6 +5352,8 @@ const port = Number(process.env.PORT || 3000);
   try {
     await persistence.init();
     hydrateState(await persistence.load());
+    syncHardcodedPlanPrices(); // el bot cotiza con los precios del panel (una sola fuente)
+    welcomeReady = true;       // ya con estado hidratado, la bienvenida a nuevos puede actuar
   } catch (e) {
     console.error('[persistence] Error al iniciar:', e.message);
   }
@@ -5221,6 +5376,10 @@ const port = Number(process.env.PORT || 3000);
 
   // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
   setInterval(() => flushConversations().catch(() => {}), 60000);
+
+  // 3f) Bienvenida a NUEVOS clientes de Wisphub (baseline + saludo a los nuevos)
+  setTimeout(() => sweepNewClients().catch(() => {}), 20000);        // primera pasada al arrancar
+  setInterval(() => sweepNewClients().catch(() => {}), 15 * 60000);  // luego cada 15 min
 
   // 4) Levantar el servidor
   app.listen(port, () => {
