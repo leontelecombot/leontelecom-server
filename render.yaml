@@ -61,7 +61,7 @@ services:
       - key: ADMIN_SECRET
         generateValue: true
       - key: LEON_CONTACT_NUMBER
-        value: "9511603125"
+        value: "951 169 7346"
 
       # ---- Persistencia ----
       # Opción recomendada: MongoDB Atlas (tier gratis M0, NO expira).

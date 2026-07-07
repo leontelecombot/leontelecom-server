@@ -74,7 +74,7 @@ const FIBER_PLAN_MEDIA_URL = process.env.FIBER_PLAN_MEDIA_URL ||
   (SERVER_BASE_URL ? `${SERVER_BASE_URL}/images/planesfibraoptica.jpeg` : '');
 const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL ||
   (SERVER_BASE_URL ? `${SERVER_BASE_URL}/images/planesinalambrico.jpeg` : '');
-const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '9511603125';
+const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '951 169 7346';
 const STORE_URL = process.env.STORE_URL || 'https://tienda.leontelecom.com';
 const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
 const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
@@ -1173,7 +1173,7 @@ function buildAgentReply() {
   return {
     text: [
       'Perfecto, voy a conectarte con un agente ahora.',
-      'Tu contacto: 📞 9511603125. Alguien te atiende en poco tiempo.'
+      'Tu contacto: 📞 951 169 7346. Alguien te atiende en poco tiempo.'
     ].join(' '),
     mediaUrls: []
   };
