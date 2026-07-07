@@ -439,6 +439,46 @@
 
 <!-- ===== PÁGINA: Cobranza ===== -->
 <section class="page" id="page-cobranza">
+
+  <!-- Editor del mensaje de aviso de corte (arriba, es lo que más se edita) -->
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">✏️</span> Mensaje de aviso de corte</div>
+      <div class="card-body">
+        <div id="ctAlert" class="alert"></div>
+        <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
+          Este es el mensaje que el bot envía a cada cliente <b>un día antes</b> de su fecha de corte.
+          Personalízalo con variables (se reemplazan por los datos de cada cliente). Solo puede haber
+          <b>una plantilla activa</b>; si borras la activa, se vuelve a usar la predeterminada.
+        </p>
+
+        <!-- Mensaje activo + vista previa -->
+        <div id="ctActiveBox" style="margin-bottom:16px"></div>
+
+        <!-- Editor -->
+        <label style="font-size:.85em;font-weight:600;display:block;margin-bottom:6px" id="ctFormTitle">➕ Nueva plantilla</label>
+        <input type="text" id="ctName" placeholder="Nombre (ej: Aviso amable)" maxlength="60" style="margin-bottom:10px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:9px">
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:8px 14px" onclick="usarPredeterminadaBase()">📋 Partir de la predeterminada</button>
+          <span style="font-size:.8em;color:var(--muted)">carga el texto de siempre para que le agregues lo tuyo abajo</span>
+        </div>
+        <div style="font-size:.82em;color:var(--muted);margin-bottom:6px">Toca una variable para insertarla:</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="ctVars"></div>
+        <textarea id="ctText" rows="6" style="width:100%;font-family:inherit;line-height:1.5" oninput="updateCortePreview()" placeholder="Escribe el mensaje… ej: Hola {nombre}, tu servicio a nombre de {titular} vence {fecha}."></textarea>
+        <div style="font-size:.82em;color:var(--muted);margin:8px 0 4px">👁️ Vista previa (con datos de ejemplo):</div>
+        <div id="ctPreview" style="background:#faf7ff;border:1px solid #e5e2f2;border-radius:10px;padding:11px 13px;font-size:.9em;white-space:pre-wrap;min-height:22px;line-height:1.5">—</div>
+        <div style="font-size:.75em;color:var(--muted);margin-top:5px">💡 WhatsApp convierte los saltos de línea en espacios. Usa <b>*texto*</b> para negritas.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="saveCorteTemplate()" id="ctSaveBtn">💾 Guardar y activar</button>
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:11px 16px" onclick="resetCorteEditor()">✖️ Limpiar</button>
+        </div>
+
+        <h4 style="margin:22px 0 8px;font-size:.95em">Plantillas guardadas</h4>
+        <div id="ctList" style="overflow-x:auto"><div class="empty">Cargando…</div></div>
+      </div>
+    </div>
+  </div>
+
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
       <div class="card-header"><span class="hico">💰</span> Cobranza <span id="cobAge" style="font-size:.76em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
@@ -458,40 +498,6 @@
     </div>
   </div>
 
-  <!-- Editor del mensaje de aviso de corte -->
-  <div class="wrap" style="margin-bottom:28px">
-    <div class="card">
-      <div class="card-header"><span class="hico">✏️</span> Mensaje de aviso de corte</div>
-      <div class="card-body">
-        <div id="ctAlert" class="alert"></div>
-        <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
-          Este es el mensaje que el bot envía a cada cliente <b>un día antes</b> de su fecha de corte.
-          Personalízalo con variables (se reemplazan por los datos de cada cliente). Solo puede haber
-          <b>una plantilla activa</b>; si borras la activa, se vuelve a usar la predeterminada.
-        </p>
-
-        <!-- Mensaje activo + vista previa -->
-        <div id="ctActiveBox" style="margin-bottom:16px"></div>
-
-        <!-- Editor -->
-        <label style="font-size:.85em;font-weight:600;display:block;margin-bottom:6px" id="ctFormTitle">➕ Nueva plantilla</label>
-        <input type="text" id="ctName" placeholder="Nombre (ej: Aviso amable)" maxlength="60" style="margin-bottom:10px">
-        <div style="font-size:.82em;color:var(--muted);margin-bottom:6px">Toca una variable para insertarla:</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="ctVars"></div>
-        <textarea id="ctText" rows="5" style="width:100%;font-family:inherit;line-height:1.5" oninput="updateCortePreview()" placeholder="Escribe el mensaje… ej: Hola {nombre}, tu servicio a nombre de {titular} vence {fecha}."></textarea>
-        <div style="font-size:.82em;color:var(--muted);margin:8px 0 4px">👁️ Vista previa (con datos de ejemplo):</div>
-        <div id="ctPreview" style="background:#faf7ff;border:1px solid #e5e2f2;border-radius:10px;padding:11px 13px;font-size:.9em;white-space:pre-wrap;min-height:22px;line-height:1.5">—</div>
-        <div style="font-size:.75em;color:var(--muted);margin-top:5px">💡 WhatsApp convierte los saltos de línea en espacios. Usa <b>*texto*</b> para negritas.</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="saveCorteTemplate()" id="ctSaveBtn">💾 Guardar y activar</button>
-          <button class="btn btn-edit btn-sm" style="width:auto;padding:11px 16px" onclick="resetCorteEditor()">✖️ Limpiar</button>
-        </div>
-
-        <h4 style="margin:22px 0 8px;font-size:.95em">Plantillas guardadas</h4>
-        <div id="ctList" style="overflow-x:auto"><div class="empty">Cargando…</div></div>
-      </div>
-    </div>
-  </div>
 </section>
 
 <!-- ===== PÁGINA: Soporte / Tickets ===== -->
@@ -1698,6 +1704,20 @@
     document.getElementById('ctFormTitle').textContent='➕ Nueva plantilla';
     document.getElementById('ctSaveBtn').textContent='💾 Guardar y activar';
     updateCortePreview();
+  }
+  // Carga el texto de la predeterminada en el editor para agregarle texto extra abajo.
+  function usarPredeterminadaBase(){
+    if(!CORTE_DATA || !CORTE_DATA.default){ showAlert('ctAlert','Espera un momento a que cargue la plantilla…','error'); return; }
+    ctEditingId=null;  // se guarda como NUEVA (no pisa la predeterminada, que es inmutable)
+    document.getElementById('ctFormTitle').textContent='➕ Nueva (partiendo de la predeterminada)';
+    document.getElementById('ctSaveBtn').textContent='💾 Guardar y activar';
+    const nm=document.getElementById('ctName');
+    if(!nm.value.trim()) nm.value='Predeterminada + extra';
+    const ta=document.getElementById('ctText');
+    ta.value = CORTE_DATA.default.text + '\n\n';
+    ta.focus(); ta.selectionStart=ta.selectionEnd=ta.value.length;
+    updateCortePreview();
+    ta.scrollIntoView({behavior:'smooth',block:'center'});
   }
   function editCorteTemplate(id){
     const t=((CORTE_DATA&&CORTE_DATA.templates)||[]).find(x=>x.id===id); if(!t) return;
