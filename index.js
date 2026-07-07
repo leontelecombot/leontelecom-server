@@ -280,6 +280,24 @@ function isHoursRequest(text) {
     || (/\b(abren|cierran|atienden)\b/.test(v) && /\?|hora|dia/.test(v));
 }
 
+// ¿El cliente pide una PRÓRROGA / más tiempo o plazo para pagar? Es una decisión
+// que solo puede tomar una persona, así que lo mandamos directo con un asesor.
+// Preciso a propósito: exige contexto de PAGO + señal de aplazamiento (evita falsos
+// positivos como "llevo unos días sin internet", que NO es de pago).
+function isProrrogaRequest(text) {
+  const v = normalizeText(text);
+  if (/\bprorrog\w*/.test(v)) return true;                       // "prórroga", "prorrogar"
+  const pago = /\b(pag\w*|abon\w*|recibo|mensualidad|adeudo|deuda)\b/;
+  if (!pago.test(v)) return false;
+  // pedir chance / más tiempo / que lo esperen / quincena / otra semana
+  if (/\b(chance|plazo|mas tiempo|mas dias?|unos dias?|un dia mas|otro dia|otros dias?|otra semana|proxima semana|me espera\w*|esper\w*me|aguant\w*|tiempito|quincena|(el mes|la semana) que (entra|viene))\b/.test(v)) return true;
+  // "para/hasta" + un día futuro / semana
+  if (/\b(para|hasta)\b[\s\w]*\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo|manana|semana|quincena|fin de semana|proxim\w+)\b/.test(v)) return true;
+  // "no puedo pagar hoy/ahorita/ahora…"
+  if (/\bno (puedo|voy a poder|alcanzo|tengo (con que|para))\b/.test(v) && /\b(hoy|ahorita|ahora|por ahora|por el momento|este momento|esta semana)\b/.test(v)) return true;
+  return false;
+}
+
 // Mensaje con el horario de atención en formato de lista.
 function buildBusinessHoursMessage() {
   const abierto = isWithinBusinessHours();
@@ -2341,8 +2359,8 @@ async function handleAgentCommand(agentNumber, text) {
 
 // ==================== RECORDATORIO AL CLIENTE EN ESPERA ====================
 // Si un cliente pidió asesor y nadie lo atiende, le mandamos un mensaje de calma.
-const REMINDER_1_MIN = 10;   // primer recordatorio
-const REMINDER_2_MIN = 30;   // segundo recordatorio (ofrece teléfono directo)
+const REMINDER_1_MIN = 15;   // primer recordatorio (mensaje de calma, sin número)
+const REMINDER_2_MIN = 30;   // segundo recordatorio (recién aquí ofrece el teléfono)
 const REMINDER_STALE_MIN = 360; // tras 6h sin atención, descartamos la espera
 
 async function sweepAgentReminders() {
@@ -2362,11 +2380,11 @@ async function sweepAgentReminders() {
     try {
       if ((info.stage || 0) < 1 && mins >= REMINDER_1_MIN) {
         await sendWhatsAppMessage(clientId,
-          'Seguimos gestionando tu solicitud. 🙏 En breve un asesor de León Telecom te atenderá, gracias por tu paciencia.');
+          'Estimado cliente, agradecemos su paciencia. 🙏 Su solicitud sigue en proceso y un asesor de León Telecom lo atenderá muy pronto. Una disculpa por la espera.');
         info.stage = 1; pendingAgentRequests.set(clientId, info); schedulePersist();
       } else if ((info.stage || 0) < 2 && mins >= REMINDER_2_MIN) {
         await sendWhatsAppMessage(clientId,
-          `Disculpa la demora. 🙏 Si es urgente puedes llamarnos directamente al ${LEON_CONTACT_NUMBER}. Un asesor te atenderá lo antes posible.`);
+          `Lamentamos la demora. 🙏 Un asesor lo atenderá lo antes posible. Si su asunto es *urgente*, puede llamarnos directamente al ${LEON_CONTACT_NUMBER}.`);
         info.stage = 2; pendingAgentRequests.set(clientId, info); schedulePersist();
       }
     } catch (e) {
@@ -3015,6 +3033,24 @@ async function handleChatMessage(chatId, text, sendMsg) {
         { id: 'pago_horario', title: '🏢 Horario en oficina' },
         { id: 'pago_datos', title: '💳 Datos de pago' }
       ] });
+      return;
+    }
+
+    // ===== Prórroga / plazo de pago → directo con un asesor (decisión humana) =====
+    // Solo si no es emergencia, no es un botón y no hay un comprobante pendiente por
+    // confirmar (esos flujos de arriba tienen prioridad). agentNotifiedMsg ya adapta
+    // el mensaje al horario: en horario "te contactará en breve", fuera de horario
+    // "te contactará <próximo horario>" (sin dar número). El caso queda registrado
+    // para el resumen matutino si es fuera de horario.
+    if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && isProrrogaRequest(text)) {
+      addMessageToHistory(chatId, 'user', text);
+      const _nom = nameOf(getProfile(chatId));
+      const _notif = await notifyAgentRequest(chatId, [
+        '📅 SOLICITUD DE PRÓRROGA / PLAZO DE PAGO',
+        _nom ? `Cliente: ${_nom}` : '',
+        `Mensaje: ${text}`
+      ].filter(Boolean).join('\n'), '').catch(() => false);
+      await sendMsg(chatId, agentNotifiedMsg(_notif, _nom, 'asesor'));
       return;
     }
 
