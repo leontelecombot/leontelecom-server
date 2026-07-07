@@ -331,6 +331,48 @@ let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matuti
 let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
 
+// ---- Plantilla EDITABLE del aviso de corte (con variables) -----------------
+// Plantilla PREDETERMINADA (la de siempre). No se puede borrar ni editar; si no
+// hay ninguna personalizada activa, se usa esta. Variables disponibles abajo.
+const CORTE_MSG_DEFAULT =
+  'Hola {nombre} 👋 Te recordamos que mañana {fecha} tu servicio de internet ' +
+  'a nombre de {titular} está por vencer. Realiza tu pago a tiempo para evitar la suspensión del servicio. ' +
+  '💳 Responde *PAGAR* y te muestro cómo y dónde pagar (efectivo o tarjeta en oficina, o transferencia). ' +
+  'Si ya realizaste tu pago, por favor ignora este mensaje. — León Telecom 💙';
+// Variables que se reemplazan por los datos de cada cliente (también las muestra el panel).
+const CORTE_VARS = ['nombre', 'titular', 'fecha', 'plan'];
+let corteTemplates = [];        // personalizadas: [{id, name, text, createdAt, updatedAt}]
+let corteActiveId = 'default';  // 'default' o el id de UNA personalizada (nunca dos activas)
+
+// Reemplaza {nombre}, {fecha}, etc. por su valor. Lo que no sea una variable
+// conocida se deja tal cual (así un typo como {nombres} se nota en vez de borrarse).
+function renderCorteVars(text, vars) {
+  return String(text || '').replace(/\{\s*(\w+)\s*\}/g, (m, k) => {
+    const key = k.toLowerCase();
+    if (!CORTE_VARS.includes(key)) return m;
+    const v = vars[key];
+    return (v == null || v === '') ? '' : String(v);
+  });
+}
+// Plantilla activa (o la predeterminada si la activa no existe / es 'default').
+function activeCorteTemplate() {
+  if (corteActiveId && corteActiveId !== 'default') {
+    const t = corteTemplates.find(x => x.id === corteActiveId);
+    if (t) return { id: t.id, name: t.name, text: t.text, isDefault: false };
+  }
+  return { id: 'default', name: 'Predeterminada', text: CORTE_MSG_DEFAULT, isDefault: true };
+}
+// Payload uniforme para el panel (predeterminada + personalizadas, marca la activa).
+function corteTemplatesPayload() {
+  const active = activeCorteTemplate();
+  return {
+    activeId: active.id,
+    variables: CORTE_VARS,
+    default: { id: 'default', name: 'Predeterminada', text: CORTE_MSG_DEFAULT, isDefault: true, active: active.id === 'default' },
+    templates: corteTemplates.map(t => ({ ...t, isDefault: false, active: t.id === corteActiveId }))
+  };
+}
+
 function logCase(clientId, name, type, resumen, extra = {}) {
   try {
     const num = String(clientId).replace(/\D/g, '');
@@ -711,7 +753,9 @@ function buildStateSnapshot() {
     caseLog: caseLog.slice(0, CASE_LOG_MAX),
     lastDigestDate: lastDigestDate,
     corteReminders: corteReminders,
-    lastCorteRunDate: lastCorteRunDate
+    lastCorteRunDate: lastCorteRunDate,
+    corteTemplates: corteTemplates,
+    corteActiveId: corteActiveId
   };
 }
 
@@ -757,6 +801,10 @@ function hydrateState(s) {
   if (typeof s.lastDigestDate === 'string') lastDigestDate = s.lastDigestDate;
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
+  if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
+  if (typeof s.corteActiveId === 'string') corteActiveId = s.corteActiveId;
+  // Seguridad: si la activa apunta a una plantilla que ya no existe, vuelve a la predeterminada.
+  if (corteActiveId !== 'default' && !corteTemplates.some(t => t.id === corteActiveId)) corteActiveId = 'default';
   console.log(`[persistence] Estado restaurado — perfiles:${clientProfiles.size} clientes:${manualClients.size} avisos:${scheduledBroadcasts.size} folios:${folios.size}`);
 }
 
@@ -2470,10 +2518,10 @@ async function sweepCorteReminders(force = false) {
         const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
         const nombre = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
         const titular = tituloCase(c.name) || 'ti';
-        const msgCorte = `Hola ${nombre} 👋 Te recordamos que mañana ${bonita} tu servicio de internet ` +
-          `a nombre de ${titular} está por vencer. Realiza tu pago a tiempo para evitar la suspensión del servicio. ` +
-          `💳 Responde *PAGAR* y te muestro cómo y dónde pagar (efectivo o tarjeta en oficina, o transferencia). ` +
-          `Si ya realizaste tu pago, por favor ignora este mensaje. — León Telecom 💙`;
+        // Mensaje según la plantilla ACTIVA del panel (o la predeterminada).
+        const msgCorte = renderCorteVars(activeCorteTemplate().text, {
+          nombre, titular, fecha: bonita, plan: c.plan || ''
+        });
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
         sent++;
@@ -4607,6 +4655,62 @@ app.get('/admin/api/corte-reminders', verifyAdminToken, (req, res) => {
 app.post('/admin/api/corte-reminders/run', verifyAdminToken, async (req, res) => {
   const r = await sweepCorteReminders(true);
   res.json(r || { error: 'No se pudo correr (¿plantilla o Wisphub sin configurar?)' });
+});
+
+// ===== Plantillas del mensaje de aviso de corte (predeterminada + personalizadas) =====
+// Listar (marca la activa; incluye variables disponibles).
+app.get('/admin/api/corte-templates', verifyAdminToken, requirePermission('clients'), (req, res) => {
+  res.json(corteTemplatesPayload());
+});
+// Crear una plantilla personalizada. Por defecto queda ACTIVA (solo una activa).
+app.post('/admin/api/corte-templates', verifyAdminToken, requirePermission('clients'), (req, res) => {
+  const b = req.body || {};
+  const text = String(b.text || '').trim().slice(0, 900);
+  if (!text) return res.status(400).json({ error: 'Escribe el texto del mensaje' });
+  const name = String(b.name || '').trim().slice(0, 60) || ('Plantilla ' + (corteTemplates.length + 1));
+  const now = new Date().toISOString();
+  const t = { id: 'ct' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, text, createdAt: now, updatedAt: now };
+  corteTemplates.unshift(t);
+  if (b.activate !== false) corteActiveId = t.id; // al crear queda activa
+  schedulePersist();
+  res.json({ success: true, ...corteTemplatesPayload() });
+});
+// Editar (texto/nombre) o activar. La predeterminada no se edita, solo se activa.
+app.patch('/admin/api/corte-templates/:id', verifyAdminToken, requirePermission('clients'), (req, res) => {
+  const id = req.params.id;
+  const body = req.body || {};
+  // Activar → deja SOLO esta activa (o la predeterminada con id 'default').
+  if (body.active === true) {
+    if (id === 'default') corteActiveId = 'default';
+    else if (corteTemplates.some(t => t.id === id)) corteActiveId = id;
+    else return res.status(404).json({ error: 'Plantilla no encontrada' });
+    schedulePersist();
+    return res.json({ success: true, ...corteTemplatesPayload() });
+  }
+  if (id === 'default') return res.status(400).json({ error: 'La plantilla predeterminada no se puede editar. Crea una nueva.' });
+  const t = corteTemplates.find(x => x.id === id);
+  if (!t) return res.status(404).json({ error: 'Plantilla no encontrada' });
+  if (body.text !== undefined) {
+    const text = String(body.text).trim().slice(0, 900);
+    if (!text) return res.status(400).json({ error: 'El texto no puede quedar vacío' });
+    t.text = text;
+  }
+  if (body.name !== undefined) t.name = String(body.name).trim().slice(0, 60) || t.name;
+  t.updatedAt = new Date().toISOString();
+  if (body.activate) corteActiveId = t.id;
+  schedulePersist();
+  res.json({ success: true, ...corteTemplatesPayload() });
+});
+// Eliminar una personalizada. Si estaba activa → regresa a la predeterminada (nunca queda vacío).
+app.delete('/admin/api/corte-templates/:id', verifyAdminToken, requirePermission('clients'), (req, res) => {
+  const id = req.params.id;
+  if (id === 'default') return res.status(400).json({ error: 'La plantilla predeterminada no se puede eliminar' });
+  const i = corteTemplates.findIndex(x => x.id === id);
+  if (i < 0) return res.status(404).json({ error: 'Plantilla no encontrada' });
+  corteTemplates.splice(i, 1);
+  if (corteActiveId === id) corteActiveId = 'default';
+  schedulePersist();
+  res.json({ success: true, ...corteTemplatesPayload() });
 });
 
 // API: List all clients (bot + manual)

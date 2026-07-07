@@ -457,6 +457,41 @@
       </div>
     </div>
   </div>
+
+  <!-- Editor del mensaje de aviso de corte -->
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">✏️</span> Mensaje de aviso de corte</div>
+      <div class="card-body">
+        <div id="ctAlert" class="alert"></div>
+        <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
+          Este es el mensaje que el bot envía a cada cliente <b>un día antes</b> de su fecha de corte.
+          Personalízalo con variables (se reemplazan por los datos de cada cliente). Solo puede haber
+          <b>una plantilla activa</b>; si borras la activa, se vuelve a usar la predeterminada.
+        </p>
+
+        <!-- Mensaje activo + vista previa -->
+        <div id="ctActiveBox" style="margin-bottom:16px"></div>
+
+        <!-- Editor -->
+        <label style="font-size:.85em;font-weight:600;display:block;margin-bottom:6px" id="ctFormTitle">➕ Nueva plantilla</label>
+        <input type="text" id="ctName" placeholder="Nombre (ej: Aviso amable)" maxlength="60" style="margin-bottom:10px">
+        <div style="font-size:.82em;color:var(--muted);margin-bottom:6px">Toca una variable para insertarla:</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="ctVars"></div>
+        <textarea id="ctText" rows="5" style="width:100%;font-family:inherit;line-height:1.5" oninput="updateCortePreview()" placeholder="Escribe el mensaje… ej: Hola {nombre}, tu servicio a nombre de {titular} vence {fecha}."></textarea>
+        <div style="font-size:.82em;color:var(--muted);margin:8px 0 4px">👁️ Vista previa (con datos de ejemplo):</div>
+        <div id="ctPreview" style="background:#faf7ff;border:1px solid #e5e2f2;border-radius:10px;padding:11px 13px;font-size:.9em;white-space:pre-wrap;min-height:22px;line-height:1.5">—</div>
+        <div style="font-size:.75em;color:var(--muted);margin-top:5px">💡 WhatsApp convierte los saltos de línea en espacios. Usa <b>*texto*</b> para negritas.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="saveCorteTemplate()" id="ctSaveBtn">💾 Guardar y activar</button>
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:11px 16px" onclick="resetCorteEditor()">✖️ Limpiar</button>
+        </div>
+
+        <h4 style="margin:22px 0 8px;font-size:.95em">Plantillas guardadas</h4>
+        <div id="ctList" style="overflow-x:auto"><div class="empty">Cargando…</div></div>
+      </div>
+    </div>
+  </div>
 </section>
 
 <!-- ===== PÁGINA: Soporte / Tickets ===== -->
@@ -708,7 +743,7 @@
     else if(page==='soporte' && can('reports')){ loadTickets(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); loadPromoBanner(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
-    else if(page==='cobranza' && can('clients')){ loadCobranza(); }
+    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
     else if(page==='usuarios' && can('users')){ loadUsers(); }
@@ -1586,6 +1621,125 @@
     el.textContent = msg;
     el.style.display = 'block';
     setTimeout(() => el.style.display='none', 5000);
+  }
+
+  // ===== Plantilla del mensaje de aviso de corte =====
+  const CORTE_SAMPLE = { nombre:'Juan', titular:'Juan Pérez López', fecha:'jueves 16 de julio', plan:'Fibra 60 Mbps' };
+  let CORTE_DATA = null;    // último payload del servidor
+  let ctEditingId = null;   // id de la personalizada en edición (null = nueva)
+
+  // Reemplaza {var} por el ejemplo (mismo criterio del servidor) y colapsa espacios como al enviar.
+  function renderCorteSample(text){
+    return String(text||'').replace(/\{\s*(\w+)\s*\}/g,(m,k)=>{
+      const key=k.toLowerCase();
+      return Object.prototype.hasOwnProperty.call(CORTE_SAMPLE,key) ? CORTE_SAMPLE[key] : m;
+    }).replace(/\s+/g,' ').trim();
+  }
+  function updateCortePreview(){
+    const box=document.getElementById('ctPreview'); if(!box) return;
+    box.textContent = renderCorteSample(document.getElementById('ctText').value) || '—';
+  }
+  function insertCorteVar(v){
+    const ta=document.getElementById('ctText');
+    const s=(ta.selectionStart!=null)?ta.selectionStart:ta.value.length;
+    const e=(ta.selectionEnd!=null)?ta.selectionEnd:ta.value.length;
+    const tok='{'+v+'}';
+    ta.value=ta.value.slice(0,s)+tok+ta.value.slice(e);
+    ta.focus(); ta.selectionStart=ta.selectionEnd=s+tok.length;
+    updateCortePreview();
+  }
+  async function loadCorteTemplates(){
+    try{
+      const r=await fetchAuth('/admin/api/corte-templates'); const d=await r.json();
+      CORTE_DATA=d;
+      document.getElementById('ctVars').innerHTML=(d.variables||[]).map(v=>
+        `<span onclick="insertCorteVar('${v}')" title="Insertar {${v}}" style="cursor:pointer;background:#ede9fe;color:#5b21b6;border-radius:14px;padding:4px 11px;font-size:.8em;font-weight:700">{${v}}</span>`
+      ).join('');
+      renderCorteActive(d); renderCorteList(d); updateCortePreview();
+    }catch(e){}
+  }
+  function renderCorteActive(d){
+    const all=[d.default, ...(d.templates||[])];
+    const act=all.find(t=>t.active)||d.default;
+    const badge= act.isDefault
+      ? '<span class="badge" style="background:#e0f2fe;color:#0369a1">Predeterminada</span>'
+      : '<span class="badge" style="background:#dcfce7;color:#15803d">Personalizada: '+esc(act.name)+'</span>';
+    document.getElementById('ctActiveBox').innerHTML=
+      `<div style="border:1px solid #e5e2f2;border-radius:12px;padding:13px 15px;background:#f5f0ff">
+         <div style="font-size:.82em;color:var(--muted);margin-bottom:6px">✅ Mensaje activo ahora — ${badge}</div>
+         <div style="font-size:.92em;white-space:pre-wrap;line-height:1.5">${esc(renderCorteSample(act.text))}</div>
+       </div>`;
+  }
+  function renderCorteList(d){
+    const rows=[];
+    rows.push(`<tr style="${d.default.active?'background:#f3eeff':''}">
+      <td><b>Predeterminada</b>${d.default.active?' <span class="badge" style="background:#dcfce7;color:#15803d">activa</span>':''}
+        <div class="muted" style="font-size:.78em">La de siempre — no se puede editar ni borrar.</div></td>
+      <td style="text-align:center">${d.default.active?'✅':`<button class="btn btn-edit btn-sm" onclick="activateCorteTemplate('default')">Activar</button>`}</td>
+      <td></td>
+    </tr>`);
+    (d.templates||[]).forEach(t=>{
+      rows.push(`<tr style="${t.active?'background:#f3eeff':''}">
+        <td><b>${esc(t.name)}</b>${t.active?' <span class="badge" style="background:#dcfce7;color:#15803d">activa</span>':''}
+          <div class="muted" style="font-size:.78em;max-width:440px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.text)}</div></td>
+        <td style="text-align:center">${t.active?'✅':`<button class="btn btn-edit btn-sm" onclick="activateCorteTemplate('${t.id}')">Activar</button>`}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-edit btn-sm" onclick="editCorteTemplate('${t.id}')" title="Editar">✏️</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCorteTemplate('${t.id}')" title="Eliminar">✕</button></td>
+      </tr>`);
+    });
+    document.getElementById('ctList').innerHTML=
+      '<table class="data-table"><thead><tr><th>Plantilla</th><th style="text-align:center">Activa</th><th></th></tr></thead><tbody>'+rows.join('')+'</tbody></table>';
+  }
+  function resetCorteEditor(){
+    ctEditingId=null;
+    document.getElementById('ctName').value='';
+    document.getElementById('ctText').value='';
+    document.getElementById('ctFormTitle').textContent='➕ Nueva plantilla';
+    document.getElementById('ctSaveBtn').textContent='💾 Guardar y activar';
+    updateCortePreview();
+  }
+  function editCorteTemplate(id){
+    const t=((CORTE_DATA&&CORTE_DATA.templates)||[]).find(x=>x.id===id); if(!t) return;
+    ctEditingId=id;
+    document.getElementById('ctName').value=t.name;
+    document.getElementById('ctText').value=t.text;
+    document.getElementById('ctFormTitle').textContent='✏️ Editando: '+t.name;
+    document.getElementById('ctSaveBtn').textContent='💾 Guardar cambios y activar';
+    updateCortePreview();
+    document.getElementById('ctText').scrollIntoView({behavior:'smooth',block:'center'});
+  }
+  async function saveCorteTemplate(){
+    const name=document.getElementById('ctName').value.trim();
+    const text=document.getElementById('ctText').value.trim();
+    if(!text){ showAlert('ctAlert','Escribe el texto del mensaje','error'); return; }
+    try{
+      const url= ctEditingId ? '/admin/api/corte-templates/'+ctEditingId : '/admin/api/corte-templates';
+      const method= ctEditingId ? 'PATCH' : 'POST';
+      const r=await fetchAuth(url,{method,body:JSON.stringify({name,text,activate:true})});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      CORTE_DATA=d; resetCorteEditor();
+      renderCorteActive(d); renderCorteList(d);
+      showAlert('ctAlert','✅ Guardado. Este es el mensaje que se enviará.','success');
+    }catch(e){ showAlert('ctAlert','❌ '+e.message,'error'); }
+  }
+  async function activateCorteTemplate(id){
+    try{
+      const r=await fetchAuth('/admin/api/corte-templates/'+id,{method:'PATCH',body:JSON.stringify({active:true})});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      CORTE_DATA=d; renderCorteActive(d); renderCorteList(d);
+      showAlert('ctAlert', id==='default'?'✅ Se activó la plantilla predeterminada':'✅ Plantilla activada','success');
+    }catch(e){ showAlert('ctAlert','❌ '+e.message,'error'); }
+  }
+  async function deleteCorteTemplate(id){
+    if(!confirm('¿Eliminar esta plantilla? Si está activa, se volverá a usar la predeterminada.')) return;
+    try{
+      const r=await fetchAuth('/admin/api/corte-templates/'+id,{method:'DELETE'});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      CORTE_DATA=d; if(ctEditingId===id) resetCorteEditor();
+      renderCorteActive(d); renderCorteList(d);
+      showAlert('ctAlert','🗑️ Plantilla eliminada','success');
+    }catch(e){ showAlert('ctAlert','❌ '+e.message,'error'); }
   }
 </script>
 </body>
