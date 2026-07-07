@@ -644,7 +644,11 @@
     <div class="form-group"><label>Nombre completo</label><input type="text" id="uName" placeholder="ej: Juan Pérez"></div>
     <div class="form-group" id="uUserRow"><label>Usuario (para iniciar sesión)</label><input type="text" id="uUsername" placeholder="ej: juan"></div>
     <div class="form-group"><label id="uPassLabel">Contraseña</label><input type="text" id="uPassword" placeholder="contraseña"></div>
-    <div class="form-group">
+    <div class="form-group" id="uAdminRow" style="background:#faf7ff;border:1px solid #e5e2f2;border-radius:10px;padding:10px 12px">
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600"><input type="checkbox" id="uAdmin" onchange="toggleAdminPerms()"> 👑 Administrador (acceso total)</label>
+      <div style="font-size:.8em;color:var(--muted);margin-top:3px">Puede ver y hacer todo, incluyendo gestionar usuarios.</div>
+    </div>
+    <div class="form-group" id="uPermsRow">
       <label>Permisos</label>
       <div id="uPerms" style="display:flex;flex-direction:column;gap:7px"></div>
     </div>
@@ -776,6 +780,11 @@
     const sel=new Set(selected||[]);
     return ALL_PERMS.filter(p=>p!=='users').map(p=>`<label style="display:flex;align-items:center;gap:8px;font-size:.9em;cursor:pointer"><input type="checkbox" value="${p}" ${sel.has(p)?'checked':''}> ${PERM_LABELS[p]||p}</label>`).join('');
   }
+  // Muestra/oculta la lista de permisos según el switch de Administrador.
+  function toggleAdminPerms(){
+    const adm=document.getElementById('uAdmin').checked;
+    document.getElementById('uPermsRow').style.display = adm ? 'none' : '';
+  }
   function openUserModal(){
     document.getElementById('userModalTitle').textContent='Nuevo usuario';
     document.getElementById('uEditUsername').value='';
@@ -784,7 +793,9 @@
     document.getElementById('uUserRow').style.display='';
     document.getElementById('uPassword').value='';
     document.getElementById('uPassLabel').textContent='Contraseña';
+    document.getElementById('uAdmin').checked=false;
     document.getElementById('uPerms').innerHTML=permCheckboxes([]);
+    toggleAdminPerms();
     document.getElementById('userModal').style.display='flex';
   }
   function editUser(i){
@@ -796,7 +807,9 @@
     document.getElementById('uUserRow').style.display='none';
     document.getElementById('uPassword').value='';
     document.getElementById('uPassLabel').textContent='Nueva contraseña (vacío = no cambiar)';
-    document.getElementById('uPerms').innerHTML = u.role==='superadmin' ? '<div class="muted" style="font-size:.85em;color:var(--muted)">El administrador tiene todos los permisos.</div>' : permCheckboxes(u.permissions);
+    document.getElementById('uAdmin').checked = (u.role==='superadmin');
+    document.getElementById('uPerms').innerHTML=permCheckboxes(u.role==='superadmin'?[]:u.permissions);
+    toggleAdminPerms();
     document.getElementById('userModal').style.display='flex';
   }
   function closeUserModal(){ document.getElementById('userModal').style.display='none'; }
@@ -804,17 +817,19 @@
     const editing=document.getElementById('uEditUsername').value;
     const name=document.getElementById('uName').value.trim();
     const password=document.getElementById('uPassword').value;
+    const isAdmin=document.getElementById('uAdmin').checked;
     const perms=[...document.querySelectorAll('#uPerms input:checked')].map(c=>c.value);
+    const role=isAdmin?'superadmin':'staff';
     if(!name){ showAlert('userAlert','Escribe el nombre','error'); return; }
     try{
       if(editing){
-        const body={name,permissions:perms}; if(password) body.password=password;
+        const body={name,permissions:perms,role}; if(password) body.password=password;
         const r=await fetchAuth('/admin/api/users/'+editing,{method:'PATCH',body:JSON.stringify(body)});
         const d=await r.json(); if(!r.ok) throw new Error(d.error);
       } else {
         const username=document.getElementById('uUsername').value.trim();
         if(!username||!password){ showAlert('userAlert','Usuario y contraseña son obligatorios','error'); return; }
-        const r=await fetchAuth('/admin/api/users',{method:'POST',body:JSON.stringify({username,name,password,permissions:perms})});
+        const r=await fetchAuth('/admin/api/users',{method:'POST',body:JSON.stringify({username,name,password,permissions:perms,role})});
         const d=await r.json(); if(!r.ok) throw new Error(d.error);
       }
       closeUserModal(); showAlert('userAlert','✅ Usuario guardado','success'); loadUsers();

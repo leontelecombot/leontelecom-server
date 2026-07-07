@@ -4208,9 +4208,12 @@ app.post('/admin/api/users', verifyAdminToken, requirePermission('users'), (req,
   if (!username || !password || !name) return res.status(400).json({ error: 'Faltan datos: usuario, nombre y contraseña' });
   if (!/^[a-z0-9._-]{3,20}$/.test(username)) return res.status(400).json({ error: 'Usuario inválido (3-20, solo letras/números)' });
   if (getAdminUser(username)) return res.status(400).json({ error: 'Ese usuario ya existe' });
-  const perms = Array.isArray(permissions) ? permissions.filter(p => ADMIN_PERMISSIONS.includes(p) && p !== 'users') : [];
+  // Crear como Administrador (acceso total): solo un superadmin puede.
+  const makeAdmin = (req.body && req.body.role === 'superadmin') && req.admin.role === 'superadmin';
+  const perms = makeAdmin ? ADMIN_PERMISSIONS.slice()
+    : (Array.isArray(permissions) ? permissions.filter(p => ADMIN_PERMISSIONS.includes(p) && p !== 'users') : []);
   const { salt, hash } = hashAdminPassword(password);
-  adminUsers.set(username, { username, name, role: 'staff', salt, hash, permissions: perms, active: true, createdAt: new Date().toISOString() });
+  adminUsers.set(username, { username, name, role: makeAdmin ? 'superadmin' : 'staff', salt, hash, permissions: perms, active: true, createdAt: new Date().toISOString() });
   schedulePersist();
   res.json({ success: true });
 });
@@ -4218,11 +4221,21 @@ app.post('/admin/api/users', verifyAdminToken, requirePermission('users'), (req,
 app.patch('/admin/api/users/:username', verifyAdminToken, requirePermission('users'), (req, res) => {
   const u = getAdminUser(req.params.username);
   if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
-  const { name, password, permissions, active } = req.body || {};
+  const { name, password, permissions, active, role } = req.body || {};
   if (name) u.name = String(name).trim();
   if (typeof active === 'boolean') {
     if (u.role === 'superadmin' && active === false) return res.status(400).json({ error: 'No puedes desactivar al superadmin' });
     u.active = active;
+  }
+  // Cambio de rol (Administrador ↔ Staff): SOLO un administrador (superadmin) puede.
+  if (role === 'superadmin' || role === 'staff') {
+    if (req.admin.role !== 'superadmin') return res.status(403).json({ error: 'Solo un administrador puede cambiar el rol' });
+    if (role === 'staff' && u.role === 'superadmin') {
+      const otrosAdmins = [...adminUsers.values()].filter(x => x.role === 'superadmin' && x.username !== u.username && x.active !== false);
+      if (!otrosAdmins.length) return res.status(400).json({ error: 'Debe quedar al menos un administrador activo' });
+    }
+    u.role = role;
+    if (role === 'superadmin') u.permissions = ADMIN_PERMISSIONS.slice();
   }
   if (Array.isArray(permissions) && u.role !== 'superadmin') {
     u.permissions = permissions.filter(p => ADMIN_PERMISSIONS.includes(p) && p !== 'users');
