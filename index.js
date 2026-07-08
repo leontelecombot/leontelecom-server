@@ -363,6 +363,7 @@ const RATE_WINDOW_MS = 30000;   // ventana de 30 s
 // welcomeSeeded = ya se hizo el "baseline" para NO saludar a los clientes existentes.
 // welcomeReady = true tras hidratar (evita actuar con estado a medias / en arranque).
 const NEW_CLIENT_WELCOME_ENABLED = String(process.env.NEW_CLIENT_WELCOME_ENABLED || 'true') === 'true';
+const WELCOME_MAX_AGE_DAYS = Number(process.env.WELCOME_MAX_AGE_DAYS || 4); // solo saluda si la instalación es de los últimos N días
 let welcomedClients = new Set();
 let welcomeSeeded = false;
 let welcomeReady = false;
@@ -551,6 +552,7 @@ async function syncWisphubClients() {
           name, phone, status: c.estado, wisphubId: c.id_servicio || c.id, source: 'wisphub',
           // Datos de cuenta para la búsqueda/estado de cuenta en el panel:
           saldo: c.saldo, fechaCorte: c.fecha_corte,
+          fechaInstalacion: c.fecha_instalacion, // para distinguir cliente NUEVO de reactivado
           plan: (c.plan_internet && c.plan_internet.nombre) || c.plan_internet || '',
           precioPlan: c.precio_plan, estadoFacturas: c.estado_facturas, usuario: c.usuario
         });
@@ -589,6 +591,22 @@ async function syncWisphubClients() {
 // clientes actuales como "conocidos" SIN enviar nada (baseline), para no saludar a
 // los existentes; después solo saluda a los que aparezcan nuevos. Con tope de
 // seguridad: si aparecen demasiados "nuevos" de golpe, NO envía (avisa al admin).
+// Parsea la fecha de instalación de Wisphub ("DD/MM/YYYY HH:MM:SS" o "DD/MM/YYYY").
+function parseInstallDate(v) {
+  if (!v) return null;
+  const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (!m) return null;
+  const dt = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0));
+  return isNaN(dt.getTime()) ? null : dt;
+}
+// ¿La instalación es RECIENTE (cliente realmente nuevo, no reactivado)? Sin fecha → NO.
+function isRecentInstall(v, days = WELCOME_MAX_AGE_DAYS) {
+  const dt = parseInstallDate(v);
+  if (!dt) return false;
+  const age = Date.now() - dt.getTime();
+  return age >= -86400000 && age <= days * 86400000; // instalado en los últimos <days> días
+}
+
 async function sweepNewClients() {
   try {
     // Solo actúa sobre un sync VERIFICADAMENTE COMPLETO (lastWisphubComplete). Un sync
@@ -605,21 +623,28 @@ async function sweepNewClients() {
     if (!NEW_CLIENT_WELCOME_ENABLED) return;
     const nuevos = [...current].filter(ph => !welcomedClients.has(ph));
     if (!nuevos.length) return;
-    if (nuevos.length > 30) { // anomalía (¿se reinició la lista?): NO enviar, avisar
-      for (const ph of nuevos) welcomedClients.add(ph);
-      schedulePersist();
-      console.warn(`[bienvenida] ${nuevos.length} "nuevos" de golpe — NO envío por seguridad.`);
-      alertAdmin('bienvenida-anomala', `Aparecieron ${nuevos.length} clientes "nuevos" de golpe; NO se enviaron bienvenidas por seguridad.`);
+    // Marca TODOS los "nuevos" como conocidos (para no re-evaluarlos) y separa los que
+    // REALMENTE son nuevos (instalación reciente) de los existentes/reactivados (fecha
+    // de instalación vieja) → estos NO reciben bienvenida (solo se marcan).
+    const recientes = [];
+    for (const ph of nuevos) {
+      welcomedClients.add(ph);
+      const c = wisphubClients.get(ph);
+      if (c && isRecentInstall(c.fechaInstalacion)) recientes.push(ph);
+    }
+    schedulePersist();
+    if (!recientes.length) return; // eran reactivaciones/existentes, no clientes nuevos
+    if (recientes.length > 30) { // anomalía real: demasiados nuevos-recientes de golpe
+      console.warn(`[bienvenida] ${recientes.length} nuevos recientes de golpe — NO envío por seguridad.`);
+      alertAdmin('bienvenida-anomala', `Aparecieron ${recientes.length} clientes nuevos (instalación reciente) de golpe; NO se enviaron bienvenidas por seguridad.`);
       return;
     }
-    for (const ph of nuevos) {
-      welcomedClients.add(ph); // marca ANTES de enviar (no re-saluda aunque falle)
+    for (const ph of recientes) {
       const c = wisphubClients.get(ph);
       try { await sendNewClientWelcome(ph, c && c.name); console.log(`[bienvenida] enviada a nuevo cliente ${ph}`); }
       catch (e) { console.error('[bienvenida] falló envío a', ph, e.message); }
       await new Promise(r => setTimeout(r, 300));
     }
-    schedulePersist();
   } catch (e) {
     console.error('[bienvenida] sweep error:', e.message);
   }
