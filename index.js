@@ -349,6 +349,13 @@ let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matuti
 let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
 
+// --- Modo Incidencia (falla masiva) ---
+// Cuando el admin lo activa desde el panel, el bot AVISA a quien reporte una falla y
+// NO crea ticket ni pinga al asesor (evita que 80 reportes saturen todo). Apagado
+// (default) = el bot se comporta EXACTAMENTE igual que hoy.
+let incident = { active: false, zona: '', since: null };
+let incidentAffected = new Set(); // chatIds que reportaron durante la incidencia (para avisar al restablecer)
+
 // --- Alertas al admin cuando algo falla (throttle por tipo, para no spamear) ---
 const ALERT_ADMIN_NUMBER = process.env.ALERT_ADMIN_NUMBER || '9511603125';
 const _alertLast = new Map(); // tipo -> ts del último aviso
@@ -913,7 +920,8 @@ function buildStateSnapshot() {
     corteTemplates: corteTemplates,
     corteActiveId: corteActiveId,
     welcomedClients: [...welcomedClients],
-    welcomeSeeded: welcomeSeeded
+    welcomeSeeded: welcomeSeeded,
+    incident: incident
   };
 }
 
@@ -963,6 +971,9 @@ function hydrateState(s) {
   if (typeof s.corteActiveId === 'string') corteActiveId = s.corteActiveId;
   if (Array.isArray(s.welcomedClients)) welcomedClients = new Set(s.welcomedClients.map(String));
   if (typeof s.welcomeSeeded === 'boolean') welcomeSeeded = s.welcomeSeeded;
+  if (s.incident && typeof s.incident === 'object') {
+    incident = { active: !!s.incident.active, zona: String(s.incident.zona || ''), since: s.incident.since || null };
+  }
   // Seguridad: si la activa apunta a una plantilla que ya no existe, vuelve a la predeterminada.
   if (corteActiveId !== 'default' && !corteTemplates.some(t => t.id === corteActiveId)) corteActiveId = 'default';
   console.log(`[persistence] Estado restaurado — perfiles:${clientProfiles.size} clientes:${manualClients.size} avisos:${scheduledBroadcasts.size} folios:${folios.size}`);
@@ -3226,6 +3237,19 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
+    // ===== Modo Incidencia: falla masiva declarada desde el panel =====
+    // Si está ACTIVO y el cliente reporta una falla, le damos el aviso y NO creamos
+    // ticket ni pingeamos al asesor (evita saturación). Emergencias (fuego/humo) y
+    // comprobantes pendientes NO se tocan. Apagado = flujo idéntico a hoy.
+    if (incident.active && !_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey)
+        && (isTechnicalIssue(text) || isReportRequest(text))) {
+      addMessageToHistory(chatId, 'user', text);
+      incidentAffected.add(String(chatId));
+      const _zona = incident.zona ? ` en ${incident.zona}` : '';
+      await sendMsg(chatId, `🔧 Ya estamos al tanto de una falla${_zona} y nuestro equipo técnico trabaja en repararla. Te avisaremos por aquí en cuanto se restablezca. Gracias por tu paciencia. 🙏 — León Telecom`);
+      return;
+    }
+
     // ===== Documento / PDF pendiente: ¿es comprobante? ¿a nombre de quién el servicio? =====
     const _pdoc = pendingDoc.get(_pendKey);
     if (_pdoc && Date.now() - (_pdoc.ts || 0) > 20 * 60 * 1000) {
@@ -4903,6 +4927,40 @@ app.get('/images/db/:id', async (req, res) => {
 // API: Registro de casos del asesor (comprobantes, documentos, solicitudes…)
 app.get('/admin/api/casos', verifyAdminToken, (req, res) => {
   res.json({ total: caseLog.length, pendientes: caseLog.filter(c => c.status === 'pendiente').length, casos: caseLog.slice(0, 200) });
+});
+
+// ===== Modo Incidencia (falla masiva) — el bot avisa y no satura al asesor =====
+app.get('/admin/api/incident', verifyAdminToken, requirePermission('reports'), (req, res) => {
+  res.json({ active: incident.active, zona: incident.zona, since: incident.since, avisados: incidentAffected.size });
+});
+app.post('/admin/api/incident', verifyAdminToken, requirePermission('reports'), async (req, res) => {
+  const b = req.body || {};
+  if (b.active) {
+    if (!incident.active) { incident.since = new Date().toISOString(); incidentAffected = new Set(); }
+    incident.active = true;
+    incident.zona = String(b.zona || '').trim().slice(0, 80);
+    schedulePersist();
+    return res.json({ success: true, active: true, zona: incident.zona, since: incident.since });
+  }
+  // Desactivar (servicio restablecido)
+  const afectados = [...incidentAffected];
+  incident.active = false; incident.zona = ''; incident.since = null;
+  incidentAffected = new Set();
+  schedulePersist();
+  const porAvisar = (b.notifyResolved && afectados.length) ? afectados.length : 0;
+  res.json({ success: true, active: false, porAvisar });
+  // Aviso "ya quedó" en SEGUNDO PLANO (no bloquea la respuesta aunque sean muchos).
+  if (porAvisar) {
+    (async () => {
+      for (const id of afectados) {
+        try {
+          await sendWhatsAppMessage(id, '✅ ¡Buenas noticias! Tu servicio de internet ya quedó *restablecido*. Si sigues con algún problema, escríbenos y con gusto te ayudamos. — León Telecom 💙');
+        } catch (_) {}
+        await new Promise(r => setTimeout(r, 150));
+      }
+      console.log(`[incidencia] aviso de restablecido enviado a ${afectados.length} clientes`);
+    })().catch(() => {});
+  }
 });
 
 // API: Historial de conversación de un cliente (memoria si está, si no del almacén;

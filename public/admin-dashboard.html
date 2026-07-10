@@ -220,6 +220,23 @@
   <button class="status-btn" onclick="setOnline()" id="statusResetBtn" style="display:none">✅ Marcar como Online</button>
 </div>
 
+<!-- Modo Incidencia (falla masiva) — conectado al bot -->
+<div class="wrap" id="incidentWrap" style="margin-top:14px">
+  <div class="card" id="incidentCard" style="border-left:4px solid var(--muted)">
+    <div class="card-body">
+      <div id="incAlert" class="alert"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-weight:700;font-size:1.02em"><span id="incDot">⚪</span> Modo Incidencia (falla masiva)</div>
+          <div id="incStatus" style="font-size:.85em;color:var(--muted);margin-top:2px">Cargando…</div>
+        </div>
+        <div id="incControls" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"></div>
+      </div>
+      <div style="font-size:.8em;color:var(--muted);margin-top:8px">Al activarlo, el bot le avisa solo a quien reporte "no hay internet" y NO satura al asesor con tickets. Al restablecer, puede avisarles que ya quedó.</div>
+    </div>
+  </div>
+</div>
+
 <!-- KPI cards -->
 <div class="wrap">
   <div class="kpis">
@@ -722,6 +739,46 @@
 
   function setOnline() { updateStatusBanner('ok'); }
 
+  // ===== Modo Incidencia (falla masiva) — conectado al bot =====
+  let INCIDENT = { active:false, zona:'', avisados:0, since:null };
+  async function loadIncident(){
+    try{ const r=await fetchAuth('/admin/api/incident'); const d=await r.json(); if(r.ok){ INCIDENT=d; renderIncident(); } }catch(e){}
+  }
+  function renderIncident(){
+    const dot=document.getElementById('incDot'), st=document.getElementById('incStatus'), ct=document.getElementById('incControls'), card=document.getElementById('incidentCard');
+    if(!dot) return;
+    if(INCIDENT.active){
+      dot.textContent='🔴'; card.style.borderLeftColor='#dc2626';
+      let desde=''; try{ if(INCIDENT.since) desde=new Date(INCIDENT.since).toLocaleString('es-MX',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(_){}
+      st.innerHTML='<b style="color:#dc2626">FALLA ACTIVA</b>'+(INCIDENT.zona?(' · '+esc(INCIDENT.zona)):'')+(desde?(' · desde '+desde):'')+' · '+(INCIDENT.avisados||0)+' avisados';
+      ct.innerHTML='<label style="font-size:.85em;display:flex;align-items:center;gap:6px"><input type="checkbox" id="incNotify" checked> avisar "ya quedó"</label><button class="btn btn-primary btn-sm" style="width:auto;padding:9px 16px" onclick="restablecer()">🟢 Marcar restablecido</button>';
+      if(typeof updateStatusBanner==='function') updateStatusBanner('repair');
+    } else {
+      dot.textContent='🟢'; card.style.borderLeftColor='#16a34a';
+      st.textContent='Servicio operativo — sin falla declarada.';
+      ct.innerHTML='<input type="text" id="incZona" placeholder="Zona (opcional: Huitzo Centro…)" style="width:auto;padding:8px 11px;font-size:.85em"><button class="btn btn-danger btn-sm" style="width:auto;padding:9px 16px" onclick="declararFalla()">🔴 Declarar falla</button>';
+    }
+  }
+  async function declararFalla(){
+    const zona=(document.getElementById('incZona')||{}).value||'';
+    if(!confirm('¿Activar Modo Incidencia? El bot avisará a quien reporte falla y no creará tickets.')) return;
+    try{
+      const r=await fetchAuth('/admin/api/incident',{method:'POST',body:JSON.stringify({active:true,zona:zona})});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      showAlert('incAlert','🔴 Modo Incidencia ACTIVADO — el bot ya avisa a quien reporte falla.','success'); loadIncident();
+    }catch(e){ showAlert('incAlert','❌ '+e.message,'error'); }
+  }
+  async function restablecer(){
+    const notify=!!(document.getElementById('incNotify')||{}).checked;
+    if(!confirm('¿Marcar el servicio como restablecido'+(notify?' y avisar a los que reportaron?':'?'))) return;
+    try{
+      const r=await fetchAuth('/admin/api/incident',{method:'POST',body:JSON.stringify({active:false,notifyResolved:notify})});
+      const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
+      showAlert('incAlert','🟢 Restablecido.'+(d.porAvisar?(' Avisando a '+d.porAvisar+' clientes que reportaron…'):''),'success');
+      if(typeof updateStatusBanner==='function') updateStatusBanner('ok'); loadIncident();
+    }catch(e){ showAlert('incAlert','❌ '+e.message,'error'); }
+  }
+
   const savedStatus = localStorage.getItem('serviceStatus');
   if (savedStatus) updateStatusBanner(savedStatus);
 
@@ -765,7 +822,7 @@
   }
   // Carga (refresca) los datos de cada página solo cuando se abre.
   function loadPage(page){
-    if(page==='inicio'){ loadStats(); loadMetrics(); }
+    if(page==='inicio'){ loadStats(); loadMetrics(); const iw=document.getElementById('incidentWrap'); if(can('reports')){ if(iw) iw.style.display=''; loadIncident(); } else if(iw) iw.style.display='none'; }
     else if(page==='ejecutivo' && can('clients')){ loadEjecutivo(); }
     else if(page==='soporte' && can('reports')){ loadTickets(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); loadPromoBanner(); }
