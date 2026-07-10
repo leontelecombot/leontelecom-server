@@ -2909,7 +2909,8 @@ function planWaLink(p) {
 function getProductImageUrl(p) {
   const img = String(p.img || '');
   if (/^https?:\/\//i.test(img)) return img;
-  return PRODUCT_IMG_BASE + encodeURIComponent(img);
+  // ?v=2 = cache-buster: al cambiar las fotos, el navegador y WhatsApp bajan la nueva.
+  return PRODUCT_IMG_BASE + encodeURIComponent(img) + '?v=2';
 }
 
 function isProductRequest(text) {
