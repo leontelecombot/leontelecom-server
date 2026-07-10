@@ -750,20 +750,23 @@
     if(INCIDENT.active){
       dot.textContent='🔴'; card.style.borderLeftColor='#dc2626';
       let desde=''; try{ if(INCIDENT.since) desde=new Date(INCIDENT.since).toLocaleString('es-MX',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(_){}
-      st.innerHTML='<b style="color:#dc2626">FALLA ACTIVA</b>'+(INCIDENT.zona?(' · '+esc(INCIDENT.zona)):'')+(desde?(' · desde '+desde):'')+' · '+(INCIDENT.avisados||0)+' avisados';
+      const modo = INCIDENT.testNumber ? (' · 🧪 <b>SOLO PRUEBA</b> al '+esc(INCIDENT.testNumber)) : '';
+      st.innerHTML='<b style="color:#dc2626">FALLA ACTIVA</b>'+(INCIDENT.zona?(' · '+esc(INCIDENT.zona)):'')+modo+(desde?(' · desde '+desde):'')+' · '+(INCIDENT.avisados||0)+' avisados';
       ct.innerHTML='<label style="font-size:.85em;display:flex;align-items:center;gap:6px"><input type="checkbox" id="incNotify" checked> avisar "ya quedó"</label><button class="btn btn-primary btn-sm" style="width:auto;padding:9px 16px" onclick="restablecer()">🟢 Marcar restablecido</button>';
       if(typeof updateStatusBanner==='function') updateStatusBanner('repair');
     } else {
       dot.textContent='🟢'; card.style.borderLeftColor='#16a34a';
       st.textContent='Servicio operativo — sin falla declarada.';
-      ct.innerHTML='<input type="text" id="incZona" placeholder="Zona (opcional: Huitzo Centro…)" style="width:auto;padding:8px 11px;font-size:.85em"><button class="btn btn-danger btn-sm" style="width:auto;padding:9px 16px" onclick="declararFalla()">🔴 Declarar falla</button>';
+      ct.innerHTML='<input type="text" id="incZona" placeholder="Zona (opcional)" style="width:auto;max-width:150px;padding:8px 11px;font-size:.85em"><input type="text" id="incTest" placeholder="🧪 # de prueba (opcional)" title="Si pones un número, SOLO ese número recibe el aviso (para probar sin afectar a nadie). Vacío = todos." style="width:auto;max-width:160px;padding:8px 11px;font-size:.85em"><button class="btn btn-danger btn-sm" style="width:auto;padding:9px 16px" onclick="declararFalla()">🔴 Declarar falla</button>';
     }
   }
   async function declararFalla(){
     const zona=(document.getElementById('incZona')||{}).value||'';
-    if(!confirm('¿Activar Modo Incidencia? El bot avisará a quien reporte falla y no creará tickets.')) return;
+    const testNumber=(document.getElementById('incTest')||{}).value||'';
+    const aviso = testNumber ? ('¿Activar Modo Incidencia SOLO de prueba para el número '+testNumber+'? A los demás clientes NO les pasa nada.') : '¿Activar Modo Incidencia para TODOS? El bot avisará a quien reporte falla y no creará tickets.';
+    if(!confirm(aviso)) return;
     try{
-      const r=await fetchAuth('/admin/api/incident',{method:'POST',body:JSON.stringify({active:true,zona:zona})});
+      const r=await fetchAuth('/admin/api/incident',{method:'POST',body:JSON.stringify({active:true,zona:zona,testNumber:testNumber})});
       const d=await r.json(); if(!r.ok) throw new Error(d.error||'Error');
       showAlert('incAlert','🔴 Modo Incidencia ACTIVADO — el bot ya avisa a quien reporte falla.','success'); loadIncident();
     }catch(e){ showAlert('incAlert','❌ '+e.message,'error'); }

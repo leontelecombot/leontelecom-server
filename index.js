@@ -353,8 +353,11 @@ let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de r
 // Cuando el admin lo activa desde el panel, el bot AVISA a quien reporte una falla y
 // NO crea ticket ni pinga al asesor (evita que 80 reportes saturen todo). Apagado
 // (default) = el bot se comporta EXACTAMENTE igual que hoy.
-let incident = { active: false, zona: '', since: null };
+// testNumber: si trae un número, el Modo Incidencia SOLO responde a ese número (para
+// probar sin afectar a los clientes reales). Vacío = aplica a TODOS (falla real).
+let incident = { active: false, zona: '', since: null, testNumber: '' };
 let incidentAffected = new Set(); // chatIds que reportaron durante la incidencia (para avisar al restablecer)
+function _last10(s) { return String(s || '').replace(/\D/g, '').slice(-10); }
 
 // --- Alertas al admin cuando algo falla (throttle por tipo, para no spamear) ---
 const ALERT_ADMIN_NUMBER = process.env.ALERT_ADMIN_NUMBER || '9511603125';
@@ -972,7 +975,7 @@ function hydrateState(s) {
   if (Array.isArray(s.welcomedClients)) welcomedClients = new Set(s.welcomedClients.map(String));
   if (typeof s.welcomeSeeded === 'boolean') welcomeSeeded = s.welcomeSeeded;
   if (s.incident && typeof s.incident === 'object') {
-    incident = { active: !!s.incident.active, zona: String(s.incident.zona || ''), since: s.incident.since || null };
+    incident = { active: !!s.incident.active, zona: String(s.incident.zona || ''), since: s.incident.since || null, testNumber: String(s.incident.testNumber || '') };
   }
   // Seguridad: si la activa apunta a una plantilla que ya no existe, vuelve a la predeterminada.
   if (corteActiveId !== 'default' && !corteTemplates.some(t => t.id === corteActiveId)) corteActiveId = 'default';
@@ -1204,6 +1207,17 @@ function isMigrationRequest(text) {
 function isReportRequest(text) {
   const value = normalizeText(text);
   return /\b(reportar|reporte|reporto|report|denunciar|problema|reportar problema)\b/.test(value);
+}
+
+// Detector AMPLIO de reporte de caída — para el Modo Incidencia. Cubre lo que la
+// gente escribe de verdad: internet/wifi/señal/red/conexión con "no hay/no tengo/no
+// sirve/lento/se cayó". No toca isTechnicalIssue (que usan otros flujos).
+function isOutageReport(text) {
+  const v = normalizeText(text);
+  if (isTechnicalIssue(v) || isReportRequest(v)) return true;
+  const problema = /\b(no (tengo|hay|me da|sirve|funciona|jala|agarra|carga|conecta|prende)|sin|se (fue|cayo|corto|va)|fallo|falla|fallando|caid[oa]|lent[oa]|malo|mala|intermitente)\b/;
+  const conexion = /\b(wifi|wi-?fi|internet|inter|señal|senal|red|conexion|conexión|servicio|el net|la red|linea|línea)\b/;
+  return problema.test(v) && conexion.test(v);
 }
 
 function isInstallationRequest(text) {
@@ -3238,11 +3252,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     // ===== Modo Incidencia: falla masiva declarada desde el panel =====
-    // Si está ACTIVO y el cliente reporta una falla, le damos el aviso y NO creamos
-    // ticket ni pingeamos al asesor (evita saturación). Emergencias (fuego/humo) y
-    // comprobantes pendientes NO se tocan. Apagado = flujo idéntico a hoy.
-    if (incident.active && !_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey)
-        && (isTechnicalIssue(text) || isReportRequest(text))) {
+    // Si está ACTIVO y el cliente reporta una falla (internet/wifi/señal…), le damos el
+    // aviso y NO creamos ticket ni pingeamos al asesor (evita saturación). Emergencias
+    // (fuego/humo) y comprobantes pendientes NO se tocan. Apagado = flujo idéntico a hoy.
+    // Si hay testNumber, SOLO responde a ese número (para probar sin afectar a nadie más).
+    const _incTest = incident.testNumber ? _last10(incident.testNumber) : '';
+    if (incident.active && (!_incTest || _incTest === _last10(chatId))
+        && !_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey)
+        && isOutageReport(text)) {
       addMessageToHistory(chatId, 'user', text);
       incidentAffected.add(String(chatId));
       const _zona = incident.zona ? ` en ${incident.zona}` : '';
@@ -4931,7 +4948,7 @@ app.get('/admin/api/casos', verifyAdminToken, (req, res) => {
 
 // ===== Modo Incidencia (falla masiva) — el bot avisa y no satura al asesor =====
 app.get('/admin/api/incident', verifyAdminToken, requirePermission('reports'), (req, res) => {
-  res.json({ active: incident.active, zona: incident.zona, since: incident.since, avisados: incidentAffected.size });
+  res.json({ active: incident.active, zona: incident.zona, since: incident.since, testNumber: incident.testNumber || '', avisados: incidentAffected.size });
 });
 app.post('/admin/api/incident', verifyAdminToken, requirePermission('reports'), async (req, res) => {
   const b = req.body || {};
@@ -4939,12 +4956,13 @@ app.post('/admin/api/incident', verifyAdminToken, requirePermission('reports'), 
     if (!incident.active) { incident.since = new Date().toISOString(); incidentAffected = new Set(); }
     incident.active = true;
     incident.zona = String(b.zona || '').trim().slice(0, 80);
+    incident.testNumber = String(b.testNumber || '').replace(/\D/g, '').slice(0, 15); // vacío = todos
     schedulePersist();
-    return res.json({ success: true, active: true, zona: incident.zona, since: incident.since });
+    return res.json({ success: true, active: true, zona: incident.zona, testNumber: incident.testNumber, since: incident.since });
   }
   // Desactivar (servicio restablecido)
   const afectados = [...incidentAffected];
-  incident.active = false; incident.zona = ''; incident.since = null;
+  incident.active = false; incident.zona = ''; incident.since = null; incident.testNumber = '';
   incidentAffected = new Set();
   schedulePersist();
   const porAvisar = (b.notifyResolved && afectados.length) ? afectados.length : 0;
