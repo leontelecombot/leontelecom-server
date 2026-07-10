@@ -2910,7 +2910,7 @@ function getProductImageUrl(p) {
   const img = String(p.img || '');
   if (/^https?:\/\//i.test(img)) return img;
   // ?v=2 = cache-buster: al cambiar las fotos, el navegador y WhatsApp bajan la nueva.
-  return PRODUCT_IMG_BASE + encodeURIComponent(img) + '?v=4';
+  return PRODUCT_IMG_BASE + encodeURIComponent(img) + '?v=5';
 }
 
 function isProductRequest(text) {
