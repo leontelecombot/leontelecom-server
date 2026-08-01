@@ -2253,6 +2253,37 @@ async function sendWhatsAppImageCaption(to, link, caption) {
   } catch (e) { console.error('[WhatsApp] Image+caption error:', e.message); return false; }
 }
 
+// TODO-EN-UNO: foto (o PDF) + información + botones dentro de UN solo mensaje de
+// WhatsApp (interactivo con encabezado multimedia). Es el formato ideal para los
+// reportes de pago: nada puede separarse.
+async function sendWhatsAppMediaButtons(to, media, bodyText, buttons) {
+  if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !buttons || !buttons.length) return false;
+  const header = media.imageUrl
+    ? { type: 'image', image: { link: media.imageUrl } }
+    : media.docUrl
+      ? { type: 'document', document: { link: media.docUrl, filename: String(media.docName || 'documento.pdf').slice(0, 240) } }
+      : null;
+  if (!header) return false;
+  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  try {
+    const r = await fetch(base, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp', to, type: 'interactive',
+        interactive: {
+          type: 'button',
+          header,
+          body: { text: String(bodyText || '').slice(0, 1024) },
+          action: { buttons: buttons.slice(0, 3).map(b => ({ type: 'reply', reply: { id: String(b.id).substring(0, 256), title: String(b.title).substring(0, 20) } })) }
+        }
+      })
+    });
+    if (!r.ok) console.error('[WhatsApp] Media+buttons fail', to, r.status, (await r.text().catch(() => '')).slice(0, 180));
+    return r.ok;
+  } catch (e) { console.error('[WhatsApp] Media+buttons error:', e.message); return false; }
+}
+
 // Cola de envío POR ASESOR: cada caso se entrega COMPLETO (foto/PDF anclado + sus
 // botones) antes de que empiece el siguiente. Si dos clientes reportan pago al
 // mismo tiempo, al asesor le llegan en bloques ordenados, nunca revueltos.
@@ -2313,6 +2344,16 @@ async function notifyAgentWithImage(chatId, userName, headline, bodyLines, image
   // después, todo dentro de la cola del asesor para que otro caso no se meta en medio.
   await Promise.all(AGENT_WHATSAPP_NUMBERS.map(agent => agentQueue(agent, async () => {
     try {
+      // 1) IDEAL — TODO EN UNO: adjunto + información + botones en el mismo mensaje.
+      if (buttons && (imageUrl || opts.docUrl)) {
+        const ok = await sendWhatsAppMediaButtons(agent, { imageUrl, docUrl: opts.docUrl, docName: opts.docName }, msg, buttons);
+        if (ok) {
+          // caso rarísimo: imagen Y pdf a la vez → el pdf va justo después, en la misma cola
+          if (imageUrl && opts.docUrl) await sendWhatsAppDocument(agent, opts.docUrl, opts.docName);
+          return;
+        }
+      }
+      // 2) Plan B: adjunto con la info anclada como caption + botones aparte.
       let anclado = false;
       if (imageUrl) anclado = await sendWhatsAppImageCaption(agent, imageUrl, msg);
       if (opts.docUrl) {
@@ -2320,7 +2361,7 @@ async function notifyAgentWithImage(chatId, userName, headline, bodyLines, image
         anclado = anclado || okDoc;
       }
       if (!anclado) {
-        // Sin adjunto o falló el anclaje: que la información NUNCA se pierda.
+        // 3) Último recurso: que la información NUNCA se pierda.
         const aviso = (imageUrl || opts.docUrl)
           ? '\n\n⚠️ No pude adjuntar el archivo aquí; míralo en: ' + (imageUrl || opts.docUrl)
           : '';
@@ -2663,6 +2704,12 @@ async function deliverPendingCases(agentNumber) {
       // foto/PDF con su información como caption + sus botones, sin mezclarse
       // con avisos en vivo que lleguen a media descarga.
       await agentQueue(agentNumber, async () => {
+        // Ideal: adjunto + info + botones en UN solo mensaje.
+        if (c.imageUrl || c.docUrl) {
+          const ok = await sendWhatsAppMediaButtons(agentNumber, { imageUrl: c.imageUrl, docUrl: c.docUrl, docName: 'documento' }, body, btns.buttons);
+          if (ok) { if (c.imageUrl && c.docUrl) await sendWhatsAppDocument(agentNumber, c.docUrl, 'documento'); return; }
+        }
+        // Plan B: caption + botones aparte.
         let anclado = false;
         if (c.imageUrl) anclado = await sendWhatsAppImageCaption(agentNumber, c.imageUrl, body);
         if (c.docUrl) {
