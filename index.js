@@ -2216,34 +2216,67 @@ async function storeIncomingFile(base64, contentType, ext) {
 }
 
 // Envía un documento (PDF, etc.) por WhatsApp a partir de un link público.
-async function sendWhatsAppDocument(to, link, filename) {
-  if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return;
+async function sendWhatsAppDocument(to, link, filename, caption) {
+  if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return false;
+  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const doc = { link, filename: String(filename || 'documento.pdf').slice(0, 240) };
+  // El caption viaja DENTRO del mismo mensaje que el documento (anclados: no se
+  // pueden separar ni entrelazar con otros casos).
+  if (caption) doc.caption = String(caption).slice(0, 1024);
+  try {
+    const r = await fetch(base, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'document', document: doc })
+    });
+    if (!r.ok) console.error('[WhatsApp] Document send fail', to, r.status, (await r.text().catch(() => '')).slice(0, 180));
+    return r.ok;
+  } catch (e) { console.error('[WhatsApp] Document send error:', e.message); return false; }
+}
+
+// Imagen con el texto ANCLADO como caption: un solo mensaje de WhatsApp, así la
+// foto y su información llegan pegadas ("hermanitos") y jamás se cruzan con otro caso.
+async function sendWhatsAppImageCaption(to, link, caption) {
+  if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return false;
   const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   try {
-    await fetch(base, {
+    const r = await fetch(base, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messaging_product: 'whatsapp', to, type: 'document',
-        document: { link, filename: String(filename || 'documento.pdf').slice(0, 240) }
+        messaging_product: 'whatsapp', to, type: 'image',
+        image: { link, caption: String(caption || '').slice(0, 1024) }
       })
     });
-  } catch (e) { console.error('[WhatsApp] Document send error:', e.message); }
+    if (!r.ok) console.error('[WhatsApp] Image+caption fail', to, r.status, (await r.text().catch(() => '')).slice(0, 180));
+    return r.ok;
+  } catch (e) { console.error('[WhatsApp] Image+caption error:', e.message); return false; }
+}
+
+// Cola de envío POR ASESOR: cada caso se entrega COMPLETO (foto/PDF anclado + sus
+// botones) antes de que empiece el siguiente. Si dos clientes reportan pago al
+// mismo tiempo, al asesor le llegan en bloques ordenados, nunca revueltos.
+const _agentSendQ = new Map();
+function agentQueue(num, fn) {
+  const prev = _agentSendQ.get(num) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  _agentSendQ.set(num, next.then(() => {}, () => {}));
+  return next;
 }
 
 // Envía un mensaje a TODOS los números de asesor configurados.
 async function sendToAllAgents(text, media = [], opts = {}) {
-  for (const num of AGENT_WHATSAPP_NUMBERS) {
+  await Promise.all(AGENT_WHATSAPP_NUMBERS.map(num => agentQueue(num, async () => {
     try { await sendWhatsAppMessage(num, text, media, opts); }
     catch (e) { console.error('[notify wa]', num, e.message); }
-  }
+  })));
 }
 // Reenvía un documento a TODOS los asesores.
 async function sendDocToAllAgents(docUrl, docName) {
   if (!docUrl) return;
-  for (const num of AGENT_WHATSAPP_NUMBERS) {
+  await Promise.all(AGENT_WHATSAPP_NUMBERS.map(num => agentQueue(num, async () => {
     try { await sendWhatsAppDocument(num, docUrl, docName); } catch (_) {}
-  }
+  })));
 }
 // Avisa a los OTROS asesores (todos menos el que actuó). Útil para "caso ya tomado".
 async function notifyOtherAgents(exceptAgent, text) {
@@ -2272,9 +2305,31 @@ async function notifyAgentWithImage(chatId, userName, headline, bodyLines, image
     { id: `RECIBIDO ${num}`, title: '✅ Recibido, gracias' },
     { id: `ATENDER ${num}`, title: '📞 Atender caso' }
   ];
+  // Los botones van con el nombre del cliente para que se sepa de QUÉ caso son.
+  const btnTxt = `👆 Botones de ESTE caso: *${userName || 'cliente'}* (${num})`;
   if (AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE) { try { await sendTelegramMessage(AGENT_NOTIFY_CHAT_ID, msg, media); } catch (e) { console.error('[notify tg]', e.message); } }
-  if (opts.docUrl) await sendDocToAllAgents(opts.docUrl, opts.docName);
-  await sendToAllAgents(msg, media, buttons ? { buttons } : {});
+  // Entrega ANCLADA y EN BLOQUE por asesor: la foto/PDF lleva la información como
+  // caption (un solo mensaje, imposible que se separen) y los botones salen justo
+  // después, todo dentro de la cola del asesor para que otro caso no se meta en medio.
+  await Promise.all(AGENT_WHATSAPP_NUMBERS.map(agent => agentQueue(agent, async () => {
+    try {
+      let anclado = false;
+      if (imageUrl) anclado = await sendWhatsAppImageCaption(agent, imageUrl, msg);
+      if (opts.docUrl) {
+        const okDoc = await sendWhatsAppDocument(agent, opts.docUrl, opts.docName, anclado ? '' : msg);
+        anclado = anclado || okDoc;
+      }
+      if (!anclado) {
+        // Sin adjunto o falló el anclaje: que la información NUNCA se pierda.
+        const aviso = (imageUrl || opts.docUrl)
+          ? '\n\n⚠️ No pude adjuntar el archivo aquí; míralo en: ' + (imageUrl || opts.docUrl)
+          : '';
+        await sendWhatsAppMessage(agent, msg + aviso, [], buttons ? { buttons } : {});
+        return;
+      }
+      if (buttons) await sendWhatsAppMessage(agent, btnTxt, [], { buttons });
+    } catch (e) { console.error('[notify anclado]', agent, e.message); }
+  })));
 }
 
 async function handleIncomingImage(chatId, userName, imageBase64, platform, sendMsg) {
@@ -2595,17 +2650,28 @@ async function deliverPendingCases(agentNumber) {
   const lote = pend.slice(0, 20);
   for (const c of lote) {
     try {
-      if (c.docUrl) { try { await sendWhatsAppDocument(agentNumber, c.docUrl, 'documento'); } catch (_) {} }
-      const media = c.imageUrl ? [c.imageUrl] : [];
       const body = [
         `${CASE_TYPE_EMOJI[c.type] || '•'}${c.offHours ? ' 🌙' : ''} *${c.name}* (${c.clientId})`,
         `🕒 ${fmtHora.format(new Date(c.ts))}`,
         c.resumen || ''
       ].filter(Boolean).join('\n');
-      await sendWhatsAppMessage(agentNumber, body, media, { buttons: [
+      const btns = { buttons: [
         { id: `RECIBIDO ${c.clientId}`, title: '✅ Recibido, gracias' },
         { id: `ATENDER ${c.clientId}`, title: '📞 Atender caso' }
-      ] });
+      ] };
+      // Cada caso sale como un BLOQUE anclado dentro de la cola del asesor:
+      // foto/PDF con su información como caption + sus botones, sin mezclarse
+      // con avisos en vivo que lleguen a media descarga.
+      await agentQueue(agentNumber, async () => {
+        let anclado = false;
+        if (c.imageUrl) anclado = await sendWhatsAppImageCaption(agentNumber, c.imageUrl, body);
+        if (c.docUrl) {
+          const okDoc = await sendWhatsAppDocument(agentNumber, c.docUrl, 'documento', anclado ? '' : body);
+          anclado = anclado || okDoc;
+        }
+        if (!anclado) { await sendWhatsAppMessage(agentNumber, body, [], btns); return; }
+        await sendWhatsAppMessage(agentNumber, `👆 Botones de ESTE caso: *${c.name}* (${c.clientId})`, [], btns);
+      });
       await new Promise(r => setTimeout(r, 350));
     } catch (e) { console.error('[casos] deliver error:', e.message); }
   }
@@ -3313,8 +3379,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
         pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pend.userName, type: 'pago', stage: 0 });
         if (typeof schedulePersist === 'function') schedulePersist();
       };
+      // Pide (OBLIGATORIO) el nombre del titular del servicio antes de mandar el
+      // comprobante al asesor — salvo que el cliente ya lo haya dicho por texto.
+      const pedirTitular = async (lines, headline) => {
+        if (_pend.titular) {   // ya lo dijo ("a nombre de X"): no preguntamos doble
+          pendingImage.delete(_pendKey);
+          await enviarComprobante(lines, headline);
+          await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+          return;
+        }
+        _pend.stage = 'titular';
+        _pend.lineasListas = lines;
+        _pend.headlinePend = headline;
+        _pend.ts = Date.now();   // renueva para que no expire a media pregunta
+        pendingImage.set(_pendKey, _pend);
+        await sendMsg(chatId, '👤 Una última cosa: ¿a *nombre de quién* está el servicio de internet que estás pagando?\n\n(El nombre del titular del contrato — puede ser diferente de quien hizo el pago.)');
+      };
       const confirmarOriginal = async () => {
-        pendingImage.delete(_pendKey);
         const a = _pend.analysis || {};
         const lines = [
           '💳 Datos del comprobante (confirmados por el cliente):',
@@ -3323,8 +3404,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         ];
         if (a.banco) lines.push('🏦 Banco/Operador: ' + a.banco);
         if (a.fecha) lines.push('📅 Fecha: ' + a.fecha);
-        await enviarComprobante(lines, '💳 COMPROBANTE DE PAGO');
-        await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+        await pedirTitular(lines, '💳 COMPROBANTE DE PAGO');
       };
       if (_pend.stage === 'correccion') {
         // El cliente está corrigiendo: lo que escriba son el nombre y monto correctos.
@@ -3335,7 +3415,6 @@ async function handleChatMessage(chatId, text, sendMsg) {
         }
         const raw = String(text || '').trim().slice(0, 200);
         if (!raw) return;
-        pendingImage.delete(_pendKey);
         const a = _pend.analysis || {};
         const montoM = raw.match(/\$\s*[\d,]+(?:\.\d{1,2})?|\b\d[\d,]*(?:\.\d{1,2})?\s*(?:pesos|mxn|mx)?\b/i);
         const monto = montoM ? montoM[0].trim() : '';
@@ -3347,8 +3426,19 @@ async function handleChatMessage(chatId, text, sendMsg) {
           '📝 Escribió: "' + raw + '"',
           '🤖 La IA había leído: ' + (String(a.nombre || '').trim() || '¿?') + ' / ' + (String(a.monto || '').trim() || '¿?')
         ];
-        await enviarComprobante(lines, '💳 COMPROBANTE DE PAGO (corregido por el cliente)');
-        await sendMsg(chatId, '✅ ¡Gracias por la corrección! Envié tu comprobante con los datos correctos a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+        // Antes de mandarlo al asesor, falta el dato clave: el titular del servicio.
+        await pedirTitular(lines, '💳 COMPROBANTE DE PAGO (corregido por el cliente)');
+        return;
+      }
+      // ===== Etapa TITULAR: el cliente responde a nombre de quién está el servicio =====
+      if (_pend.stage === 'titular') {
+        if (_isBtn) { await sendMsg(chatId, '👤 Solo me falta el *nombre del titular* del servicio. Escríbemelo por favor 🙏'); return; }
+        const titular = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+        if (titular.length < 3) { await sendMsg(chatId, '👤 ¿Me escribes el *nombre completo del titular* del servicio, por favor?'); return; }
+        pendingImage.delete(_pendKey);
+        const lines = [...(_pend.lineasListas || []), '🧾 Servicio a nombre de: ' + titular];
+        await enviarComprobante(lines, _pend.headlinePend || '💳 COMPROBANTE DE PAGO');
+        await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
         return;
       }
       // Regex estrictos: solo respuestas cortas/explícitas disparan sí/no (evita que
