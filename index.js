@@ -489,6 +489,15 @@ function mexicoDateStr(d = new Date()) {
   }).format(d);
 }
 
+// ===== PROMO DE AGOSTO 2026 — se enciende y se APAGA SOLA por fecha =====
+// Hasta el 31/ago/2026 (hora de México): instalación a $600 (fibra Huitzo y
+// centro de Telixtlahuaca) y el menú NO muestra "Migrar mi servicio".
+// Desde el 1/sep/2026 todo regresa solo a la normalidad ($800 y menú completo)
+// sin tocar nada ni redesplegar: estas funciones se evalúan en cada mensaje.
+function promoAgostoActiva() { return mexicoDateStr() <= '2026-08-31'; }
+function costoInstalacion() { return promoAgostoActiva() ? '$600' : '$800'; }
+function notaPromoInstalacion() { return promoAgostoActiva() ? ' 🎉 ¡PROMO DE AGOSTO! (precio normal $800)' : ''; }
+
 function isPaused(chatId) {
   const p = pausedChats.get(String(chatId));
   if (!p) return false;
@@ -1415,7 +1424,7 @@ function buildPlanReplyForLocation(location) {
         '🔥 Planes de fibra óptica para Huitzo:',
         buildPlanLines(FIBER_PLANS),
         '',
-        '💰 Instalación: $800 | Primer mes gratis',
+        '💰 Instalación: ' + costoInstalacion() + ' | Primer mes gratis' + notaPromoInstalacion(),
         '¿Te interesa alguno? Dime cuál y te conectamos con un asesor.'
       ].join('\n'),
       mediaUrls: FIBER_PLAN_MEDIA_URL ? [FIBER_PLAN_MEDIA_URL] : []
@@ -1429,7 +1438,7 @@ function buildPlanReplyForLocation(location) {
         buildPlanLines(WIRELESS_PLANS),
         '',
         location === LOCATIONS.telixtlahuaca
-          ? '💰 Instalación: Centro de Telixtlahuaca $800 · Agencias de los alrededores $1,200'
+          ? '💰 Instalación: Centro de Telixtlahuaca ' + costoInstalacion() + notaPromoInstalacion() + ' · Agencias de los alrededores $1,200'
           : '💰 Instalación: a cotizar con técnico',
         '¿Te interesa alguno? Dime cuál y te conectamos con un asesor.'
       ].join('\n'),
@@ -1613,8 +1622,8 @@ async function callMainAI(chatId, userText) {
     'Tono: profesional y amable, como un buen agente de atención al cliente. Sin slang ni expresiones informales. Máximo 2-3 oraciones. Sin markdown.',
     '',
     'SERVICIOS DE INTERNET (las 3 zonas SÍ tienen cobertura):',
-    `Huitzo — fibra óptica en: Primera/Segunda/Tercera Sección, La Guadalupe, La Cantera, Cañada del Chisme, Ojo de Agua, Esmeralda, Privada del Laurel, El Llano, Gasolinera, Loma los Pinos, Agua Blanca, Santa María Tenéxpam. Instalación: $800, primer mes gratis. Resto de Huitzo: antena inalámbrica. Planes fibra: ${fiberPlans}`,
-    `Telixtlahuaca (inalámbrico/antena): instalación $800 en el CENTRO/cabecera (${TELIXTLAHUACA_CENTRO_ZONES.join(', ')}); $1,200 en las AGENCIAS/alrededores (${TELIXTLAHUACA_AGENCIAS.join(', ')}). Si el cliente no especifica colonia, pregunta si es en el centro o en una agencia antes de dar el costo. Planes: ${wirelessPlans}`,
+    `Huitzo — fibra óptica en: Primera/Segunda/Tercera Sección, La Guadalupe, La Cantera, Cañada del Chisme, Ojo de Agua, Esmeralda, Privada del Laurel, El Llano, Gasolinera, Loma los Pinos, Agua Blanca, Santa María Tenéxpam. Instalación: ${costoInstalacion()}, primer mes gratis${promoAgostoActiva() ? ' (PROMOCIÓN DE AGOSTO: precio normal $800; menciónala con entusiasmo)' : ''}. Resto de Huitzo: antena inalámbrica. Planes fibra: ${fiberPlans}`,
+    `Telixtlahuaca (inalámbrico/antena): instalación ${costoInstalacion()}${promoAgostoActiva() ? ' (PROMO DE AGOSTO, normal $800)' : ''} en el CENTRO/cabecera (${TELIXTLAHUACA_CENTRO_ZONES.join(', ')}); $1,200 en las AGENCIAS/alrededores (${TELIXTLAHUACA_AGENCIAS.join(', ')}). Si el cliente no especifica colonia, pregunta si es en el centro o en una agencia antes de dar el costo. Planes: ${wirelessPlans}`,
     `Suchilquitongo —también llamado "Suchil"— (inalámbrico/antena): instalación a cotizar con técnico. Planes: ${wirelessPlans}`,
     'IMPORTANTE: León Telecom NO ofrece telefonía, TV ni cable. Sus servicios son: INTERNET, CÁMARAS de seguridad y venta de ACCESORIOS/PRODUCTOS en la oficina.',
     'Las 3 zonas SÍ tienen cobertura. Nunca digas que no hay servicio.',
@@ -1786,6 +1795,8 @@ function buildFallbackReply(text) {
 }
 
 function buildMenuReply() {
+  // Durante la promo de agosto la opción 5 (migración) se oculta; los números
+  // NO se recorren (el 6 sigue siendo productos) para no romper las respuestas.
   return {
     text: [
       '¿En qué puedo ayudarte? Elige una opción:',
@@ -1794,15 +1805,14 @@ function buildMenuReply() {
       '2️⃣ Cámaras de seguridad',
       '3️⃣ Soporte técnico',
       '4️⃣ Hablar con un asesor',
-      '5️⃣ Migrar mi servicio',
+      ...(promoAgostoActiva() ? [] : ['5️⃣ Migrar mi servicio']),
       '6️⃣ Productos y accesorios 🛍️'
     ].join('\n'),
     mediaUrls: [],
     replyMarkup: {
-      keyboard: [
-        [{ text: '1' }, { text: '2' }, { text: '3' }],
-        [{ text: '4' }, { text: '5' }, { text: '6' }]
-      ],
+      keyboard: promoAgostoActiva()
+        ? [[{ text: '1' }, { text: '2' }, { text: '3' }], [{ text: '4' }, { text: '6' }]]
+        : [[{ text: '1' }, { text: '2' }, { text: '3' }], [{ text: '4' }, { text: '5' }, { text: '6' }]],
       one_time_keyboard: true,
       resize_keyboard: true
     }
@@ -3165,7 +3175,7 @@ async function sendWelcomeMenu(chatId, sendMsg) {
     '2️⃣ Cámaras de seguridad',
     '3️⃣ Soporte técnico',
     '4️⃣ Hablar con un asesor',
-    '5️⃣ Migrar mi servicio',
+    ...(promoAgostoActiva() ? [] : ['5️⃣ Migrar mi servicio']),
     '6️⃣ Productos y accesorios 🛍️'
   ].join('\n'));
 }
