@@ -205,6 +205,7 @@
   <button class="nav-item" data-page="planes" data-perm="products" onclick="goTo('planes')">📶 Planes</button>
   <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
   <button class="nav-item" data-page="usuarios" data-perm="users" onclick="goTo('usuarios')">🔑 Usuarios</button>
+  <button class="nav-item" data-page="historial" data-perm="users" onclick="goTo('historial')">📜 Historial</button>
 </nav>
 </div><!-- /appheader -->
 
@@ -553,6 +554,38 @@
 
 </section><!-- /page-usuarios -->
 
+<!-- ===== PÁGINA: Historial (bitácora del panel + Wisphub) ===== -->
+<section class="page" id="page-historial">
+<div class="wrap" style="margin-bottom:28px">
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header"><span class="hico">📜</span> Historial de movimientos</div>
+    <div class="card-body">
+      <p style="color:#6b7280;font-size:13.5px;margin:0 0 14px">Todo lo que se hace desde el panel queda registrado: quién lo hizo, cuándo y si funcionó.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <select id="auditUser" onchange="loadAudit()" style="flex:0 0 auto;min-width:170px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:10px;font-size:14px">
+          <option value="">Todos los usuarios</option>
+        </select>
+        <input id="auditQ" placeholder="Buscar acción…" oninput="auditBuscar()" style="flex:1;min-width:170px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:10px;font-size:14px">
+        <button class="btn" style="width:auto;padding:10px 16px" onclick="loadAudit()">🔄 Actualizar</button>
+      </div>
+      <div id="auditResumen" style="color:#6b7280;font-size:13px;margin-bottom:10px"></div>
+      <div id="auditList"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="hico">🛰️</span> Llamadas a la API de Wisphub</div>
+    <div class="card-body">
+      <p style="color:#6b7280;font-size:13.5px;margin:0 0 14px">Cada consulta que el sistema le hace a Wisphub, con su tiempo de respuesta. Sirve para saber si Wisphub está lento o fallando.</p>
+      <div id="wlStats" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
+      <div id="wlList"></div>
+    </div>
+  </div>
+
+</div>
+</section><!-- /page-historial -->
+
 <!-- ===== PÁGINA: Productos ===== -->
 <section class="page" id="page-productos">
 
@@ -810,7 +843,7 @@
   }
 
   // ===== Navegación por páginas (menú superior) =====
-  const PAGES = ['inicio','ejecutivo','avisos','clientes','cobranza','soporte','planes','productos','usuarios'];
+  const PAGES = ['inicio','ejecutivo','avisos','clientes','cobranza','soporte','planes','productos','usuarios','historial'];
   function goTo(page, fromHistory){
     if(!PAGES.includes(page)) page='inicio';
     // Si la página requiere un permiso que no tienes, regresa a Inicio.
@@ -834,6 +867,73 @@
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
     else if(page==='usuarios' && can('users')){ loadUsers(); }
+    else if(page==='historial' && can('users')){ loadAudit(); loadWisphubLogs(); }
+  }
+
+  // ===== Historial (bitácora del panel + Wisphub) =====
+  let _auditT=null;
+  function auditBuscar(){ clearTimeout(_auditT); _auditT=setTimeout(loadAudit,350); }
+  function hace(ts){
+    const s=(Date.now()-new Date(ts))/1000;
+    if(s<60) return 'hace un momento';
+    if(s<3600) return 'hace '+Math.floor(s/60)+' min';
+    if(s<86400) return 'hace '+Math.floor(s/3600)+' h';
+    const d=new Date(ts);
+    return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+  }
+  async function loadAudit(){
+    const cont=document.getElementById('auditList'); if(!cont) return;
+    cont.innerHTML='<div style="color:#9ca3af;padding:16px 4px">Cargando…</div>';
+    try{
+      const u=document.getElementById('auditUser').value, q=document.getElementById('auditQ').value.trim();
+      const d=await (await fetchAuth('/admin/api/audit?limit=200'+(u?'&user='+encodeURIComponent(u):'')+(q?'&q='+encodeURIComponent(q):''))).json();
+      // opciones de usuario (solo la primera vez o si cambian)
+      const sel=document.getElementById('auditUser');
+      if(sel && d.usuarios && sel.options.length-1!==d.usuarios.length){
+        const actual=sel.value;
+        sel.innerHTML='<option value="">Todos los usuarios</option>'+d.usuarios.map(x=>'<option value="'+esc(x)+'">'+esc(x)+'</option>').join('');
+        sel.value=actual;
+      }
+      document.getElementById('auditResumen').textContent='Mostrando '+d.mostrando+' de '+d.total+' movimientos guardados';
+      if(!d.movimientos.length){ cont.innerHTML='<div style="color:#9ca3af;padding:16px 4px">Sin movimientos todavía.</div>'; return; }
+      cont.innerHTML=d.movimientos.map(m=>{
+        const color=m.ok?'#16a34a':'#dc2626';
+        const icono=m.ok?'✓':'✕';
+        return '<div style="display:flex;gap:12px;padding:11px 8px;border-bottom:1px solid #f1f3f5;align-items:flex-start">'
+          +'<span style="color:'+color+';font-weight:800;font-size:15px;line-height:1.5;flex:none;width:16px">'+icono+'</span>'
+          +'<div style="flex:1;min-width:0">'
+            +'<div style="font-size:14px;font-weight:600;color:#111827">'+esc(m.accion)+(m.ok?'':' <span style="color:#dc2626;font-weight:500">(falló · '+m.status+')</span>')+'</div>'
+            +(m.detalle?'<div style="font-size:12.5px;color:#6b7280;margin-top:2px;word-break:break-word">'+esc(m.detalle)+'</div>':'')
+            +'<div style="font-size:12px;color:#9ca3af;margin-top:3px">'
+              +'<b style="color:#4b5563">'+esc(m.name||m.user)+'</b>'+(m.user&&m.name?' (@'+esc(m.user)+')':'')
+              +' · '+hace(m.ts)+(m.ip?' · '+esc(m.ip):'')+(m.ms!=null?' · '+m.ms+' ms':'')
+            +'</div>'
+          +'</div></div>';
+      }).join('');
+    }catch(e){ cont.innerHTML='<div style="color:#dc2626;padding:16px 4px">No se pudo cargar el historial.</div>'; }
+  }
+  async function loadWisphubLogs(){
+    const cont=document.getElementById('wlList'); if(!cont) return;
+    cont.innerHTML='<div style="color:#9ca3af;padding:16px 4px">Cargando…</div>';
+    try{
+      const d=await (await fetchAuth('/admin/api/wisphub-logs')).json();
+      const chip=(t,v,c)=>'<div style="background:'+c+'12;border:1px solid '+c+'33;border-radius:10px;padding:8px 14px"><div style="font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em">'+t+'</div><div style="font-size:19px;font-weight:800;color:'+c+'">'+v+'</div></div>';
+      document.getElementById('wlStats').innerHTML=
+        chip('Exitosas',d.exitosas,'#16a34a')+chip('Fallidas',d.fallidas,d.fallidas?'#dc2626':'#6b7280')+chip('Tiempo promedio',d.promedioMs+' ms','#2563eb');
+      if(!d.llamadas.length){ cont.innerHTML='<div style="color:#9ca3af;padding:16px 4px">Todavía no hay llamadas registradas.</div>'; return; }
+      cont.innerHTML=d.llamadas.map(l=>{
+        const color=l.ok?'#16a34a':'#dc2626';
+        const lento=l.ms>3000;
+        return '<div style="display:flex;gap:12px;padding:10px 8px;border-bottom:1px solid #f1f3f5;align-items:center">'
+          +'<span style="color:'+color+';font-weight:800;flex:none;width:16px">'+(l.ok?'✓':'✕')+'</span>'
+          +'<div style="flex:1;min-width:0">'
+            +'<div style="font-size:13.5px;font-weight:600;color:#111827">'+esc(l.op||'consulta')+'</div>'
+            +'<div style="font-size:12px;color:#9ca3af">'+hace(l.ts)+' · HTTP '+l.status+(l.error?' · '+esc(l.error):'')+(l.por&&l.por!=='sistema'?' · por @'+esc(l.por):'')+'</div>'
+          +'</div>'
+          +'<span style="font-size:12.5px;font-weight:700;color:'+(lento?'#d97706':'#6b7280')+';flex:none">'+l.ms+' ms</span>'
+        +'</div>';
+      }).join('');
+    }catch(e){ cont.innerHTML='<div style="color:#dc2626;padding:16px 4px">No se pudieron cargar los registros.</div>'; }
   }
 
   // ===== Usuarios y permisos =====

@@ -41,6 +41,8 @@ app.use((req, res, next) => {
 // Guarda el cuerpo crudo (para verificar la firma del webhook de Meta) y baja el límite de 50mb→10mb
 app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.static('public'));
+// Bitácora del panel: registra cada acción que modifica algo (definida más abajo).
+app.use('/admin/api', (req, res, next) => auditar(req, res, next));
 
 // ── BLINDAJE: la red de seguridad para que el bot NUNCA se caiga ──
 // Un error no manejado (en cualquier parte) se registra pero NO tumba el proceso.
@@ -539,7 +541,7 @@ async function syncWisphubClients() {
     let data = null;
     const firstUrl = `${base}/api/clientes/?format=json&limit=500&estado=1`;
     for (const scheme of schemes) {
-      const res = await fetch(firstUrl, { headers: { 'Authorization': `${scheme} ${WISPHUB_API_KEY}` } });
+      const res = await wisphubFetch(firstUrl, { headers: { 'Authorization': `${scheme} ${WISPHUB_API_KEY}` } }, 'sync: primera página');
       if (res.ok) { authHeader = `${scheme} ${WISPHUB_API_KEY}`; data = await res.json(); console.log(`[Wisphub] Autenticado con esquema "${scheme}"`); break; }
       lastTxt = await res.text().catch(() => '');
       if (res.status !== 401 && res.status !== 403) break;
@@ -580,7 +582,7 @@ async function syncWisphubClients() {
       offset += items.length;
       pages++;
       if (count && offset >= count) { complete = true; break; } // llegamos al total
-      const res = await fetch(`${base}/api/clientes/?format=json&limit=${PAGE}&offset=${offset}&estado=1`, { headers: { 'Authorization': authHeader } });
+      const res = await wisphubFetch(`${base}/api/clientes/?format=json&limit=${PAGE}&offset=${offset}&estado=1`, { headers: { 'Authorization': authHeader } }, 'sync: clientes (offset ' + offset + ')');
       if (!res.ok) break; // ⚠️ se cortó a media paginación → NO es un sync completo
       data = await res.json();
     }
@@ -902,6 +904,94 @@ function cancelFolio(folio) {
   return ok;
 }
 
+// ==================== HISTORIAL / BITÁCORA ====================
+// Todo lo que se hace desde el panel (quién, qué, cuándo y con qué resultado)
+// y todas las llamadas a la API de Wisphub. Se guarda con el resto del estado.
+const AUDIT_MAX = 1000;          // movimientos del panel que conservamos
+const WISPHUB_LOG_MAX = 300;     // llamadas a Wisphub que conservamos
+let auditLog = [];               // [{ts, user, name, role, ip, accion, detalle, ok, ms}]
+let wisphubLog = [];             // [{ts, op, url, status, ok, ms, items, error, por}]
+
+// Nombre legible de cada acción del panel (método + ruta → qué hizo).
+const ACCIONES = [
+  [/^POST \/admin\/api\/broadcast$/, 'Envió un aviso masivo'],
+  [/^DELETE \/admin\/api\/broadcasts\//, 'Canceló un aviso programado'],
+  [/^PATCH \/admin\/api\/broadcasts\//, 'Modificó un aviso programado'],
+  [/^POST \/admin\/api\/incident$/, 'Cambió el Modo Incidencia'],
+  [/^POST \/admin\/api\/users$/, 'Creó un usuario del panel'],
+  [/^PATCH \/admin\/api\/users\//, 'Editó un usuario del panel'],
+  [/^DELETE \/admin\/api\/users\//, 'Eliminó un usuario del panel'],
+  [/^POST \/admin\/api\/products$/, 'Agregó un producto'],
+  [/^PATCH \/admin\/api\/products\//, 'Editó un producto'],
+  [/^DELETE \/admin\/api\/products\//, 'Eliminó un producto'],
+  [/^POST \/admin\/api\/plans$/, 'Agregó un plan'],
+  [/^PATCH \/admin\/api\/plans\//, 'Editó un plan'],
+  [/^DELETE \/admin\/api\/plans\//, 'Eliminó un plan'],
+  [/^POST \/admin\/api\/promo-banner$/, 'Creó un banner promocional'],
+  [/^PATCH \/admin\/api\/promo-banner\//, 'Editó el banner promocional'],
+  [/^DELETE \/admin\/api\/promo-banner\//, 'Eliminó un banner promocional'],
+  [/^POST \/admin\/api\/corte-templates$/, 'Creó una plantilla de corte'],
+  [/^PATCH \/admin\/api\/corte-templates\//, 'Editó/activó una plantilla de corte'],
+  [/^DELETE \/admin\/api\/corte-templates\//, 'Eliminó una plantilla de corte'],
+  [/^POST \/admin\/api\/corte-reminders\/run$/, 'Forzó el envío de recordatorios de corte'],
+  [/^PATCH \/admin\/api\/tickets\/.*$/, 'Actualizó un ticket de soporte'],
+  [/^DELETE \/admin\/api\/tickets\//, 'Eliminó un ticket'],
+  [/^POST \/admin\/api\/tickets\/.*\/notify$/, 'Notificó por WhatsApp a un cliente'],
+  [/^POST \/admin\/api\/clients$/, 'Agregó un cliente manual'],
+  [/^DELETE \/admin\/api\/clients\//, 'Eliminó un cliente manual'],
+  [/^POST \/admin\/api\/wisphub-sync$/, 'Sincronizó clientes con Wisphub'],
+  [/^POST \/admin\/api\/upload-image$/, 'Subió una imagen'],
+  [/^POST \/admin\/api\/send-message$/, 'Envió un anuncio (Telegram)'],
+  [/^POST \/admin\/api\/send-promotion$/, 'Envió una promoción (Telegram)'],
+  [/^POST \/admin\/api\/login$/, 'Inició sesión'],
+];
+function nombreAccion(metodo, ruta) {
+  const clave = metodo + ' ' + ruta;
+  for (const [rx, txt] of ACCIONES) if (rx.test(clave)) return txt;
+  return metodo + ' ' + ruta;
+}
+// Resumen corto y SIN datos sensibles de lo que mandó el usuario.
+const CAMPOS_OCULTOS = new Set(['token', 'password', 'newPassword', 'imageBase64', 'image', 'photo']);
+function resumenDetalle(req) {
+  const partes = [];
+  if (req.params && Object.keys(req.params).length) {
+    for (const [k, v] of Object.entries(req.params)) partes.push(`${k}=${String(v).slice(0, 40)}`);
+  }
+  const b = req.body || {};
+  for (const [k, v] of Object.entries(b)) {
+    if (CAMPOS_OCULTOS.has(k) || v == null) continue;
+    let txt;
+    if (typeof v === 'string') txt = v.length > 60 ? v.slice(0, 60) + '…' : v;
+    else if (typeof v === 'boolean' || typeof v === 'number') txt = String(v);
+    else if (Array.isArray(v)) txt = `[${v.length}]`;
+    else continue;
+    partes.push(`${k}: ${txt}`);
+    if (partes.length >= 6) break;
+  }
+  return partes.join(' · ');
+}
+function registrarAuditoria(entrada) {
+  auditLog.unshift(entrada);
+  if (auditLog.length > AUDIT_MAX) auditLog.length = AUDIT_MAX;
+  schedulePersist();
+}
+function registrarWisphub(entrada) {
+  wisphubLog.unshift({ ts: new Date().toISOString(), ...entrada });
+  if (wisphubLog.length > WISPHUB_LOG_MAX) wisphubLog.length = WISPHUB_LOG_MAX;
+}
+// Llamada a Wisphub instrumentada: mide, registra y devuelve la respuesta tal cual.
+async function wisphubFetch(url, opts, op, por) {
+  const t0 = Date.now();
+  try {
+    const r = await fetch(url, opts);
+    registrarWisphub({ op, url: String(url).split('?')[0], status: r.status, ok: r.ok, ms: Date.now() - t0, por: por || 'sistema' });
+    return r;
+  } catch (e) {
+    registrarWisphub({ op, url: String(url).split('?')[0], status: 0, ok: false, ms: Date.now() - t0, error: e.message, por: por || 'sistema' });
+    throw e;
+  }
+}
+
 // ==================== PERSISTENCIA DE ESTADO ====================
 // Toma una "foto" de todas las colecciones en memoria para guardarlas.
 function buildStateSnapshot() {
@@ -933,13 +1023,17 @@ function buildStateSnapshot() {
     corteActiveId: corteActiveId,
     welcomedClients: [...welcomedClients],
     welcomeSeeded: welcomeSeeded,
-    incident: incident
+    incident: incident,
+    auditLog: auditLog.slice(0, AUDIT_MAX),
+    wisphubLog: wisphubLog.slice(0, WISPHUB_LOG_MAX)
   };
 }
 
 // Restaura las colecciones desde lo guardado (al arrancar el servidor).
 function hydrateState(s) {
   if (!s || typeof s !== 'object') return;
+  if (Array.isArray(s.auditLog)) auditLog = s.auditLog.slice(0, AUDIT_MAX);
+  if (Array.isArray(s.wisphubLog)) wisphubLog = s.wisphubLog.slice(0, WISPHUB_LOG_MAX);
   const fill = (map, obj) => { if (obj) for (const [k, v] of Object.entries(obj)) map.set(k, v); };
   fill(clientProfiles, s.clientProfiles);
   fill(manualClients, s.manualClients);
@@ -4595,6 +4689,33 @@ app.post('/admin/api/login', (req, res) => {
 });
 
 // Middleware: verifica token y pone req.admin = { username, name, role, perms }
+// Bitácora automática: cualquier acción que MODIFIQUE algo desde el panel queda
+// registrada con quién la hizo, desde dónde y si salió bien. Se monta antes de las
+// rutas, así que cuando termina la respuesta ya sabemos el usuario (req.admin).
+function auditar(req, res, next) {
+  if (!['POST', 'PATCH', 'DELETE', 'PUT'].includes(req.method)) return next();
+  const t0 = Date.now();
+  const ruta = req.originalUrl.split('?')[0];
+  const detalle = resumenDetalle(req);
+  res.on('finish', () => {
+    const a = req.admin || {};
+    // El login fallido también se registra (útil para detectar intentos raros).
+    const usuario = a.username || (ruta === '/admin/api/login' ? String((req.body || {}).username || '?').toLowerCase() : 'anónimo');
+    registrarAuditoria({
+      ts: new Date().toISOString(),
+      user: usuario,
+      name: a.name || (ruta === '/admin/api/login' ? '' : 'Desconocido'),
+      role: a.role || '',
+      ip: clientIp(req),
+      accion: nombreAccion(req.method, ruta),
+      detalle,
+      ok: res.statusCode < 400,
+      status: res.statusCode,
+      ms: Date.now() - t0
+    });
+  });
+  next();
+}
 function verifyAdminToken(req, res, next) {
   const authHeader = req.headers.authorization;
   const token = req.body?.token || req.query.token || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : authHeader);
@@ -4628,6 +4749,34 @@ function requireAnyPermission(perms) {
   };
 }
 
+// ==================== HISTORIAL (solo permiso "users") ====================
+// Movimientos del panel: quién hizo qué, cuándo y si salió bien.
+app.get('/admin/api/audit', verifyAdminToken, requirePermission('users'), (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const usuario = String(req.query.user || '').trim().toLowerCase();
+  const limite = Math.min(parseInt(req.query.limit, 10) || 200, AUDIT_MAX);
+  let filas = auditLog;
+  if (usuario) filas = filas.filter(f => (f.user || '').toLowerCase() === usuario);
+  if (q) filas = filas.filter(f => `${f.accion} ${f.detalle} ${f.name} ${f.user}`.toLowerCase().includes(q));
+  res.json({
+    total: auditLog.length,
+    mostrando: Math.min(filas.length, limite),
+    usuarios: [...new Set(auditLog.map(f => f.user).filter(Boolean))].sort(),
+    movimientos: filas.slice(0, limite)
+  });
+});
+// Llamadas a la API de Wisphub (para ver si responde, cuánto tarda y si falla).
+app.get('/admin/api/wisphub-logs', verifyAdminToken, requireAnyPermission(['users', 'wisphub']), (req, res) => {
+  const ult = wisphubLog.slice(0, 50);
+  const oks = wisphubLog.filter(l => l.ok).length;
+  res.json({
+    total: wisphubLog.length,
+    exitosas: oks,
+    fallidas: wisphubLog.length - oks,
+    promedioMs: wisphubLog.length ? Math.round(wisphubLog.reduce((a, l) => a + (l.ms || 0), 0) / wisphubLog.length) : 0,
+    llamadas: ult
+  });
+});
 // API: datos del usuario logueado + catálogo de permisos
 app.get('/admin/api/me', verifyAdminToken, (req, res) => {
   res.json({ user: req.admin, allPermissions: ADMIN_PERMISSIONS, permLabels: ADMIN_PERM_LABELS });
@@ -4896,8 +5045,8 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
   if (digits.length >= 7 && WISPHUB_API_KEY) {
     const tel = digits.slice(-10);
     try {
-      const r = await fetch(`${WISPHUB_API_URL}/api/clientes/?format=json&limit=10&telefono=${tel}`,
-        { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } });
+      const r = await wisphubFetch(`${WISPHUB_API_URL}/api/clientes/?format=json&limit=10&telefono=${tel}`,
+        { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } }, 'buscar cliente por teléfono', req.admin && req.admin.username);
       if (r.ok) {
         const d = await r.json();
         const items = d.results || (Array.isArray(d) ? d : []);
@@ -5261,8 +5410,8 @@ async function getAllWisphubClientsCached(maxAgeMs = 10 * 60 * 1000) {
   const out = [];
   let offset = 0, count = null, pages = 0;
   while (pages < 30) {
-    const r = await fetch(`${WISPHUB_API_URL}/api/clientes/?format=json&limit=500&offset=${offset}`,
-      { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } });
+    const r = await wisphubFetch(`${WISPHUB_API_URL}/api/clientes/?format=json&limit=500&offset=${offset}`,
+      { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } }, 'todos los clientes (offset ' + offset + ')');
     if (!r.ok) break;
     const d = await r.json();
     if (count === null) count = d.count;
@@ -5401,8 +5550,8 @@ async function getInvoicesByClientCached(maxAgeMs = 10 * 60 * 1000) {
   const byId = {};
   let offset = 0, count = null, pages = 0;
   while (pages < 40) {
-    const r = await fetch(`${WISPHUB_API_URL}/api/facturas/?format=json&limit=500&offset=${offset}`,
-      { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } });
+    const r = await wisphubFetch(`${WISPHUB_API_URL}/api/facturas/?format=json&limit=500&offset=${offset}`,
+      { headers: { 'Authorization': `Api-Key ${WISPHUB_API_KEY}` } }, 'facturas (offset ' + offset + ')');
     if (!r.ok) break;
     const d = await r.json();
     if (count === null) count = d.count;
