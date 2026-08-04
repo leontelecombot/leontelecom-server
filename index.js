@@ -134,10 +134,28 @@ function permsOf(user) { return user.role === 'superadmin' ? ADMIN_PERMISSIONS.s
 
 // Crea el superadmin la primera vez (usuario "admin" con ADMIN_PASSWORD).
 function ensureSuperAdmin() {
-  if ([...adminUsers.values()].some(u => u.role === 'superadmin')) return;
+  if ([...adminUsers.values()].some(u => u.role === 'superadmin' && u.active !== false)) return;
   const { salt, hash } = hashAdminPassword(ADMIN_PASSWORD);
   adminUsers.set('admin', { username: 'admin', name: 'Administrador', role: 'superadmin', salt, hash, permissions: ADMIN_PERMISSIONS.slice(), active: true, createdAt: new Date().toISOString() });
   console.log('[admin] Superadmin creado (usuario: admin / contraseña: ADMIN_PASSWORD)');
+  schedulePersist();
+}
+
+// Rescate de acceso al panel. Con ADMIN_RESET=1 en el entorno, al arrancar se
+// restaura el usuario "admin" (lo crea si no existe, o le repone la contraseña y
+// lo reactiva) usando ADMIN_PASSWORD. Sirve para recuperar el panel si se borró el
+// usuario o se perdió la contraseña. Solo lo puede activar quien entra a Render.
+function rescatarAdmin() {
+  if (process.env.ADMIN_RESET !== '1') return;
+  const prev = adminUsers.get('admin') || {};
+  const { salt, hash } = hashAdminPassword(ADMIN_PASSWORD);
+  adminUsers.set('admin', {
+    ...prev, username: 'admin', name: prev.name || 'Administrador', role: 'superadmin',
+    salt, hash, permissions: ADMIN_PERMISSIONS.slice(), active: true,
+    createdAt: prev.createdAt || new Date().toISOString()
+  });
+  console.log('[admin] ⚠️ ADMIN_RESET activo → usuario "admin" restaurado con ADMIN_PASSWORD.');
+  console.log('[admin] ⚠️ QUITA la variable ADMIN_RESET de Render en cuanto puedas entrar.');
   schedulePersist();
 }
 
@@ -5755,7 +5773,8 @@ const port = Number(process.env.PORT || 3000);
   } catch (e) {
     console.error('[persistence] Error al iniciar:', e.message);
   }
-  ensureSuperAdmin(); // crea el usuario superadmin si no existe
+  ensureSuperAdmin();
+  rescatarAdmin();   // solo hace algo si ADMIN_RESET=1 // crea el usuario superadmin si no existe
 
   // 2) Guardado periódico de seguridad (por si algún cambio no disparó schedulePersist)
   setInterval(() => schedulePersist(), 30000);
