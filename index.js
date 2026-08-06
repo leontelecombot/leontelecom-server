@@ -2982,12 +2982,25 @@ function tituloCase(s) {
 // mandarse a nadie sin que nadie se entere.
 // Sin dato de facturas y sin saldo NO cuenta como deuda, igual que en finanzas: falla
 // hacia "no mandar", que es la dirección segura.
+// ¿La factura está sin pagar? Se buscaba el trozo "pagad" y se daba por pagada.
+// Hoy Wisphub manda 'Pagadas' y 'Pendiente de Pago', y con esos funciona bien — pero
+// "No Pagado" TAMBIÉN contiene "pagad", así que el día que cambiaran la etiqueta
+// dejaríamos de avisarle a quien debe, en silencio y sin que nadie se entere.
+// Por eso ahora la negación manda: primero se busca "no/sin pagad", y solo si no
+// está se acepta "pagad" como pagada. Vacío = sin dato = no cuenta como deuda
+// (mismo criterio de siempre; la deuda de verdad la delata el saldo o la suspensión).
+function facturaDebe(fact) {
+  const f = String(fact || '').toLowerCase().trim();
+  if (!f) return false;
+  if (/\b(no|sin)\s+pagad/.test(f)) return true;    // "No Pagado", "sin pagar"
+  return !f.includes('pagad');                       // "Pendiente de Pago", "Vencida"…
+}
 function clienteDebe(c) {
   const low = s => String(s || '').toLowerCase();
   const e = low(c && c.status);
   const saldo = parseFloat((c && c.saldo) || 0) || 0;
   const fact = String((c && c.estadoFacturas) || '');
-  return !!(e.includes('suspend') || saldo > 0 || (fact && !low(fact).includes('pagad')));
+  return !!(e.includes('suspend') || saldo > 0 || facturaDebe(fact));
 }
 
 // Último minuto del día en que se acepta mandar el aviso atrasado. Si la variable viene
@@ -5695,7 +5708,7 @@ app.get('/admin/api/cobranza', verifyAdminToken, requirePermission('clients'), a
       else if (e.includes('gratis')) gratis++;
       else otros++;
       if (activo) ingreso += parseFloat(c.precio_plan || 0) || 0;
-      const debe = e.includes('suspend') || saldo > 0 || (fact && !low(fact).includes('pagad'));
+      const debe = e.includes('suspend') || saldo > 0 || facturaDebe(fact);
       if (debe) { conAdeudo++; if (saldo > 0) saldoPend += saldo; }
       if (activo && c.fecha_corte) ciclo[c.fecha_corte] = (ciclo[c.fecha_corte] || 0) + 1;
       if (e.includes('suspend') || saldo > 0) {
