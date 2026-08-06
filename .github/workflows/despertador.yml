@@ -1,0 +1,73 @@
+
+# ============================================================================
+# DESPERTADOR — mantiene despierto el bot de León Telecom en Render (plan GRATIS)
+#
+# POR QUÉ EXISTE
+# En el plan gratuito, Render duerme la instancia tras ~15 min sin tráfico. El aviso
+# de fecha de corte sale a las 10:00 de México: si a esa hora nadie le había escrito
+# al bot, el servidor estaba dormido, el barrido no corría y ESE DÍA NADIE RECIBÍA SU
+# AVISO — sin que quedara ni un error. Este workflow le pega a /health para que a las
+# 10:00 el servidor ya esté despierto.
+#
+# POR QUÉ NO LO DEJAMOS DESPIERTO 24/7
+# Render regala ~750 horas de instancia al mes y un mes tiene ~730: tenerlo despierto
+# todo el día se come la cuota COMPLETA (y si algún día se agrega otro servicio free,
+# se pasa y lo apagan). Por eso solo se cubre la franja que no se puede fallar:
+#   09:40–11:00 de México  → la ventana del aviso de las 10:00, con margen antes y después
+#   + 14:00 y 17:00        → segundas oportunidades: el barrido ahora acepta mandar hasta
+#                            las 20:00 si en la mañana no pudo, y estos pings le dan
+#                            chance de intentarlo aunque no haya tráfico de clientes.
+# Costo: ~1 h 35 min diarios de la franja + ~30 min de los dos pings sueltos ≈ 63 h al
+# mes. Queda cuota de sobra para el tráfico normal de los clientes durante el día.
+#
+# HORAS: GitHub Actions programa TODO en UTC. México ya no cambia de horario desde 2022,
+# así que siempre es UTC-6 → 16:00 UTC = 10:00 en México, todo el año, sin ajustes.
+#
+# OJO 1: GitHub APAGA los workflows programados si el repositorio pasa 60 DÍAS SIN
+#        COMMITS (avisa por correo antes de hacerlo). Si el bot lleva tiempo sin
+#        cambios, haz cualquier commit o vuelve a habilitarlo en la pestaña Actions.
+# OJO 2: los cron de GitHub NO son puntuales: suelen atrasarse de 5 a 15 min y en horas
+#        pico se pueden saltar una corrida. Por eso son varios pings cada 10 min y no
+#        uno solo a las 10:00 en punto.
+# OJO 3: el archivo tiene que estar en la rama por defecto (main) para que el cron corra.
+# OJO 4: aquí NO va ningún token ni contraseña. /health es público y solo responde
+#        {"ok":true}; QUIÉN recibe el aviso lo decide el servidor, no este workflow.
+# OJO 5: el repo es PRIVADO, así que estos minutos salen de la cuota de Actions
+#        (~2000 min/mes en el plan gratis). Son ~15 corridas al día de ~1 min ≈ 450
+#        min/mes: cabe, pero si algún día se agregan más workflows, revisa la cuota.
+# ============================================================================
+name: Despertador (que Render no duerma a las 10:00)
+
+on:
+  schedule:
+    - cron: '40,50 15 * * *'             # 09:40 y 09:50 México — calentar antes de la hora
+    - cron: '0,10,20,30,40,50 16 * * *'  # 10:00 a 10:50 México — la hora del aviso
+    - cron: '0 17 * * *'                 # 11:00 México — cierre de la franja
+    - cron: '0 20 * * *'                 # 14:00 México — segunda oportunidad
+    - cron: '0 23 * * *'                 # 17:00 México — última oportunidad del día
+  workflow_dispatch:                     # botón manual, para probarlo cuando quieras
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    # A propósito NO hay bloque "concurrency": estos pings son independientes y baratos,
+    # y agrupándolos un job lento haría que GitHub CANCELARA el siguiente ping — justo
+    # el que necesitábamos para despertar la instancia.
+    timeout-minutes: 10   # holgado: el peor caso de curl con reintentos son ~7 min
+    steps:
+      - name: Despertar el bot (/health)
+        run: |
+          set -euo pipefail
+          URL="https://leontelecom-server.onrender.com/health"
+          # Una instancia dormida tarda ~30-60 s en levantar: por eso el --max-time
+          # generoso y los reintentos (Render contesta 502/503 mientras arranca).
+          # Si aun así no responde, el job FALLA a propósito para que GitHub mande el
+          # correo y alguien se entere el mismo día, no cuando reclame un cliente.
+          codigo=$(curl -sS -o /tmp/salud.txt -w '%{http_code}' \
+                     --max-time 90 --retry 4 --retry-delay 15 --retry-all-errors \
+                     -H 'User-Agent: despertador-leontelecom' "$URL")
+          echo "HTTP $codigo — $(cat /tmp/salud.txt)"
+          test "$codigo" = "200"

@@ -201,6 +201,7 @@
   <button class="nav-item" data-page="avisos" data-perm="broadcast" onclick="goTo('avisos')">📢 Avisos y mensajes</button>
   <button class="nav-item" data-page="clientes" data-perm="clients" onclick="goTo('clientes')">👥 Clientes</button>
   <button class="nav-item" data-page="cobranza" data-perm="clients" onclick="goTo('cobranza')">💰 Cobranza</button>
+  <button class="nav-item" data-page="cortes" data-perm="clients" onclick="goTo('cortes')">📅 Avisos de corte</button>
   <button class="nav-item" data-page="soporte" data-perm="reports" onclick="goTo('soporte')">🛠️ Soporte</button>
   <button class="nav-item" data-page="planes" data-perm="products" onclick="goTo('planes')">📶 Planes</button>
   <button class="nav-item" data-page="productos" data-perm="products" onclick="goTo('productos')">🛍️ Productos</button>
@@ -512,6 +513,49 @@
           <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 14px" onclick="exportMorososCSV()">📊 Excel</button>
         </div>
         <div id="cobMorosos" style="max-height:460px;overflow:auto"></div>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<!-- ===== PÁGINA: Avisos de corte ===== -->
+<section class="page" id="page-cortes">
+
+  <!-- Aviso grande cuando algo impide que los recordatorios salgan solos -->
+  <div class="wrap" style="margin:22px auto 16px"><div id="crBanner"></div></div>
+
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">📅</span> Avisos de corte de HOY <span id="crAge" style="font-size:.76em;font-weight:400;color:var(--muted);margin-left:6px"></span></div>
+      <div class="card-body">
+        <div id="crResumen" style="font-size:.95em;line-height:1.6;background:var(--brand-soft);border:1px solid #e0d5fa;border-radius:12px;padding:13px 15px">Cargando…</div>
+        <div class="kpis" id="crKpis" style="margin-top:16px"></div>
+
+        <h4 style="margin:24px 0 8px;font-size:.95em">✅ Sin aviso porque ya están al corriente <span id="crOmitCount" style="font-weight:400;color:var(--muted)"></span></h4>
+        <p style="font-size:.82em;color:var(--muted);margin-bottom:10px">
+          Estos clientes cortan mañana pero <b>no</b> recibieron el mensaje, porque en Wisphub no tienen adeudo
+          (el mismo criterio que usa el reporte de <b>Cobranza</b>: sin saldo, factura pagada y servicio no suspendido).
+        </p>
+        <div id="crOmitNota"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+          <input type="text" id="crFilter" placeholder="🔎 Filtrar nombre o número…" style="flex:1;min-width:170px" oninput="renderCorteOmitidos()">
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 14px" onclick="loadCorteStats()">🔄 Actualizar</button>
+          <button class="btn btn-edit btn-sm" style="width:auto;padding:9px 14px" onclick="exportCorteOmitidosCSV()">📊 Excel</button>
+        </div>
+        <div id="crOmitidos" style="max-height:420px;overflow:auto"><div class="empty">Cargando…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">📊</span> Últimos días <span style="font-size:.76em;font-weight:400;color:var(--muted);margin-left:6px">¿corrió el aviso todos los días?</span></div>
+      <div class="card-body">
+        <p style="font-size:.82em;color:var(--muted);margin-bottom:12px">
+          Un día en <b style="color:var(--danger)">rojo</b> es un día en que el aviso <b>no salió</b>: nadie recibió su recordatorio de corte ese día.
+        </p>
+        <div id="crDias" style="overflow-x:auto"><div class="empty">Cargando…</div></div>
       </div>
     </div>
   </div>
@@ -843,7 +887,7 @@
   }
 
   // ===== Navegación por páginas (menú superior) =====
-  const PAGES = ['inicio','ejecutivo','avisos','clientes','cobranza','soporte','planes','productos','usuarios','historial'];
+  const PAGES = ['inicio','ejecutivo','avisos','clientes','cobranza','cortes','soporte','planes','productos','usuarios','historial'];
   function goTo(page, fromHistory){
     if(!PAGES.includes(page)) page='inicio';
     // Si la página requiere un permiso que no tienes, regresa a Inicio.
@@ -864,6 +908,7 @@
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); loadPromoBanner(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
     else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); }
+    else if(page==='cortes' && can('clients')){ loadCorteStats(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
     else if(page==='usuarios' && can('users')){ loadUsers(); }
@@ -1465,6 +1510,123 @@
     const rows = [['Cliente','Numero','Estado','Saldo','Corte','Plan'],
       ...(COB_DATA.morosos||[]).map(m => [m.name, m.phone, m.estado, m.saldo, m.fechaCorte, m.plan])];
     downloadCSV(rows, 'cobranza_morosos.csv');
+  }
+
+  // ===== Avisos de corte: qué pasó hoy y en los últimos días =====
+  let CR_DATA = null;
+  function crDia(f){
+    const p=String(f||'').split('-');
+    if(p.length!==3) return f||'—';
+    return new Date(+p[0], +p[1]-1, +p[2]).toLocaleDateString('es-MX',{weekday:'short',day:'2-digit',month:'short'});
+  }
+  function crHace(iso){
+    if(!iso) return 'sin sincronizar';
+    const h=(Date.now()-new Date(iso))/3600000;
+    if(isNaN(h)) return 'sin sincronizar';
+    return h<1 ? 'de hace '+Math.max(1,Math.round(h*60))+' min' : 'de hace '+Math.round(h)+' h';
+  }
+  async function loadCorteStats(){
+    const cont=document.getElementById('crOmitidos');
+    try{
+      // OJO: fetchAuth devuelve el Response CRUDO, no el JSON ya leído. Sin este segundo
+      // await la pantalla se llena de "undefined" (ya pasó una vez en este panel).
+      const d=await (await fetchAuth('/admin/api/corte-reminders/stats')).json();
+      if(d.error){ document.getElementById('crResumen').textContent=d.error; cont.innerHTML='<div class="empty">'+esc(d.error)+'</div>'; return; }
+      CR_DATA=d;
+      document.getElementById('crAge').textContent='· consultado a las '+new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})
+        +' · datos de Wisphub '+crHace(d.wisphubAl);
+
+      // Banner: lo que impide que el aviso salga solo (primero lo más grave).
+      const b=document.getElementById('crBanner');
+      if(!d.habilitado){
+        b.innerHTML='<div class="status-bar cut" style="margin:0"><span><span class="status-dot"></span>Los avisos de corte están <b>APAGADOS</b>: el bot no los manda solo. Para encenderlos hay que poner <b>CORTE_REMINDER_ENABLED=true</b> en Render y reiniciar el servicio.</span></div>';
+      } else if(!d.plantillaConfigurada){
+        b.innerHTML='<div class="status-bar repair" style="margin:0"><span><span class="status-dot"></span>Falta configurar la plantilla de WhatsApp: mientras tanto no sale ningún aviso de corte.</span></div>';
+      } else if(d.parcialHoy){
+        b.innerHTML='<div class="status-bar repair" style="margin:0"><span><span class="status-dot"></span>La corrida de hoy <b>quedó a medias</b> (se reinició el servidor mientras enviaba). Ya salieron '+d.notificados+' avisos; abajo está a quién le falta.</span></div>';
+      } else if(!d.corridaHoy && !d.pendienteHoy){
+        b.innerHTML='<div class="status-bar repair" style="margin:0"><span><span class="status-dot"></span>Hoy <b>no ha corrido</b> el aviso de corte (le tocaba a las '+esc(d.hora||'')+' h). Revisa "Últimos días" aquí abajo.</span></div>';
+      } else b.innerHTML='';
+
+      // Sin la lista de Wisphub en memoria TODOS los conteos salen en 0, y eso no
+      // significa que no se le haya avisado a nadie: significa que no hay con qué contar.
+      // Decirlo así evita un susto (y una decisión) a partir de números falsos.
+      if(!d.clientesCargados){
+        document.getElementById('crResumen').innerHTML =
+          '<b>Todavía no se pueden contar los avisos de hoy.</b> '
+          + (d.sincronizando
+              ? 'La lista de clientes se está sincronizando con Wisphub en este momento; vuelve a intentar en un minuto.'
+              : 'El servidor no tiene cargada la lista de clientes de Wisphub'+(d.wisphubError?' ('+esc(d.wisphubError)+')':'')+'.')
+          + ' <button class="btn btn-edit btn-sm" style="width:auto;padding:5px 11px;margin-left:6px" onclick="loadCorteStats()">Reintentar</button>';
+        document.getElementById('crKpis').innerHTML='';
+        document.getElementById('crOmitCount').textContent='';
+        document.getElementById('crOmitNota').innerHTML='';
+        cont.innerHTML='<div class="empty">Sin la lista de clientes cargada no se puede saber a quién se le saltó el aviso.</div>';
+        renderCorteDias();
+        return;
+      }
+
+      // "Sigue sin aviso" solo alarma si el aviso YA corrió; antes de las 10:00 esos
+      // clientes no son una falla, es que todavía no les toca.
+      const yaCorrio = d.corridaHoy || d.parcialHoy;
+      document.getElementById('crResumen').innerHTML =
+        (d.corridaHoy
+          ? 'Hoy el aviso corrió a las <b>'+esc(d.horaCorrida||'—')+'</b> h'+(d.forzadaHoy?' (a mano, desde el panel)':'')+(d.corridas>1?' · '+d.corridas+' corridas':'')+'. '
+          : (d.pendienteHoy ? 'Hoy el aviso <b>todavía no corre</b> (le toca a las '+esc(d.hora||'')+' h). ' : 'Hoy el aviso <b>no ha corrido</b>. '))
+        + 'Del corte de <b>'+esc(crDia(d.manana))+'</b> ('+d.total+' cliente'+(d.total===1?'':'s')+'): se notificó de su fecha de corte a <b>'+d.notificados+'</b> y a <b>'+d.omitidosPago+'</b> no se les notificó porque ya están marcados como pagados.'
+        + (d.sinAviso ? (yaCorrio
+            ? ' <b style="color:var(--danger)">'+d.sinAviso+'</b> deben y siguen sin recibir su aviso.'
+            : ' Faltan <b>'+d.sinAviso+'</b> por avisar cuando corra.') : '');
+
+      document.getElementById('crKpis').innerHTML =
+        cobKpi('📨', d.notificados, 'Sí recibieron el aviso', 'g') +
+        cobKpi('✅', d.omitidosPago, 'Sin aviso: ya pagaron', 'b') +
+        cobKpi('⚠️', d.sinAviso, yaCorrio?'Deben y siguen sin aviso':'Pendientes de aviso', 'p') +
+        cobKpi('🚫', d.fallidos, 'Envíos fallidos hoy', 'p') +
+        cobKpi('👥', d.total, 'Cortan mañana', 'b') +
+        cobKpi('🕒', d.corridaHoy ? (d.horaCorrida||'—')+' h' : '—', 'Hora de la corrida', 'g');
+
+      document.getElementById('crOmitCount').textContent = d.omitidosPago ? '('+d.omitidosPago+')' : '';
+      // La lista viene topada: hay que decirlo, si no parecería que faltan clientes.
+      document.getElementById('crOmitNota').innerHTML = d.omitidosTruncados
+        ? '<div style="font-size:.8em;color:var(--warn);margin-bottom:10px">Se muestran los primeros '+d.omitidosMax+' de '+d.omitidosPago+'.</div>' : '';
+      renderCorteOmitidos();
+      renderCorteDias();
+    }catch(e){ cont.innerHTML='<div class="empty">Error al cargar los avisos de corte.</div>'; }
+  }
+  function renderCorteOmitidos(){
+    if(!CR_DATA) return;
+    const q=(document.getElementById('crFilter')?.value||'').toLowerCase();
+    const todos=CR_DATA.omitidos||[];
+    const list=todos.filter(m=>!q||(m.name||'').toLowerCase().includes(q)||(m.phone||'').includes(q));
+    const el=document.getElementById('crOmitidos');
+    if(!list.length){ el.innerHTML='<div class="empty">'+(todos.length?'Ningún cliente coincide con el filtro.':'Hoy no se saltó a nadie: a todos los que cortan mañana les tocaba el aviso.')+'</div>'; return; }
+    el.innerHTML='<table class="data-table"><thead><tr><th>Cliente</th><th>Número</th><th>Plan</th></tr></thead><tbody>'
+      + list.map(m=>'<tr><td>'+esc(m.name||'—')+'</td><td class="muted">'+esc(m.phone||'—')+'</td><td style="font-size:.82em">'+esc(m.plan||'—')+'</td></tr>').join('')
+      + '</tbody></table>';
+  }
+  function renderCorteDias(){
+    if(!CR_DATA) return;
+    const el=document.getElementById('crDias'), dias=CR_DATA.dias||[];
+    if(!dias.length){ el.innerHTML='<div class="empty">Sin datos todavía.</div>'; return; }
+    el.innerHTML='<table class="data-table"><thead><tr><th>Día</th><th>Corrida</th><th>Notificados</th><th>Ya pagaron</th><th>Fallidos</th></tr></thead><tbody>'
+      + dias.map(x=>{
+          let badge, fondo='';
+          if(x.corrio) badge='<span class="badge badge-active" style="text-transform:none">✔ '+esc(x.hora||'')+' h'+(x.forzada?' · manual':'')+(x.corridas>1?' ·'+x.corridas+'x':'')+'</span>';
+          else if(x.parcial) badge='<span class="badge badge-aviso" style="text-transform:none">⚠ quedó a medias</span>';
+          else if(x.pendiente) badge='<span class="badge badge-aviso" style="text-transform:none">⏳ programado</span>';
+          else if(x.sinDatos) badge='<span class="badge badge-src-bot" style="text-transform:none">sin registro</span>';
+          else if(!CR_DATA.habilitado) badge='<span class="badge badge-src-bot" style="text-transform:none">apagado</span>';
+          else { badge='<span class="badge" style="background:var(--danger-bg);color:var(--danger);text-transform:none">⛔ NO corrió</span>'; fondo=' style="background:#fff5f5"'; }
+          const g=v=>x.corrio?v:'—';
+          return '<tr'+fondo+'><td>'+esc(crDia(x.fecha))+'</td><td>'+badge+'</td><td>'+g(x.notificados)+'</td><td>'+g(x.omitidosPago)+'</td><td>'+g(x.fallidos)+'</td></tr>';
+        }).join('')
+      + '</tbody></table>';
+  }
+  function exportCorteOmitidosCSV(){
+    if(!CR_DATA) return;
+    const rows=[['Cliente','Numero','Plan','Corte'], ...(CR_DATA.omitidos||[]).map(m=>[m.name,m.phone,m.plan,CR_DATA.manana])];
+    downloadCSV(rows,'corte_omitidos_por_pago.csv');
   }
 
   // ===== Utilidades de exportación =====

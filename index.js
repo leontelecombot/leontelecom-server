@@ -368,6 +368,15 @@ const CASE_LOG_MAX = 400;
 let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matutino enviado
 let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
+// Bitácora de corridas del aviso de corte: una línea por día, para ver de un vistazo
+// qué días SÍ salieron los avisos y cuáles se saltaron. Hace falta porque en Render
+// gratis la instancia duerme: si nadie la despertaba a las 10:00, ese día nadie recibía
+// nada y no quedaba ni un error. [{fecha, at, ok, sent, failed, alCorriente, motivo}]
+let corteRunLog = [];
+const CORTE_RUN_LOG_MAX = 90; // ~3 meses: alcanza para ver huecos sin inflar el estado
+// Cuándo pidió el barrido el último refresco de Wisphub. NO se persiste a propósito: si
+// el servidor reinicia queremos que lo reintente de inmediato.
+let _corteLastSyncTry = 0;
 
 // --- Modo Incidencia (falla masiva) ---
 // Cuando el admin lo activa desde el panel, el bot AVISA a quien reporte una falla y
@@ -1037,6 +1046,7 @@ function buildStateSnapshot() {
     lastDigestDate: lastDigestDate,
     corteReminders: corteReminders,
     lastCorteRunDate: lastCorteRunDate,
+    corteRunLog: corteRunLog.slice(0, CORTE_RUN_LOG_MAX),
     corteTemplates: corteTemplates,
     corteActiveId: corteActiveId,
     welcomedClients: [...welcomedClients],
@@ -1091,6 +1101,7 @@ function hydrateState(s) {
   if (typeof s.lastDigestDate === 'string') lastDigestDate = s.lastDigestDate;
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
+  if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
   if (typeof s.corteActiveId === 'string') corteActiveId = s.corteActiveId;
   if (Array.isArray(s.welcomedClients)) welcomedClients = new Set(s.welcomedClients.map(String));
@@ -2889,6 +2900,12 @@ async function sweepMorningDigest() {
 // Un día antes del corte, se avisa a cada cliente por PLANTILLA de utilidad
 // (llega aunque no haya chateado con el bot en 24h), personalizado con su nombre.
 const CORTE_REMINDER_TIME = process.env.CORTE_REMINDER_TIME || '10:00'; // hora de México
+// Hasta qué hora (México) se acepta mandar el aviso cuando el barrido no pudo correr a
+// su hora. 20:00 = cierre de atención entre semana de León Telecom (BUSINESS_HOURS):
+// más tarde el cliente ya no puede preguntarle nada a nadie, así que el aviso solo lo
+// angustia — y mandar plantillas de noche a decenas de personas es la forma más rápida
+// de que reporten el número como spam y Meta nos baje la calidad.
+const CORTE_REMINDER_LIMIT = process.env.CORTE_REMINDER_LIMIT || '20:00'; // hora de México
 // APAGADO por defecto: los avisos de corte NO se envían solos hasta el lanzamiento
 // oficial del bot. Para activarlos: poner CORTE_REMINDER_ENABLED=true en Render.
 // (La prueba manual desde el panel con force=true sí funciona aunque esté apagado.)
@@ -2956,20 +2973,110 @@ function tituloCase(s) {
   ).join(' ');
 }
 
+// ¿Este cliente DEBE? Es EXACTAMENTE el mismo criterio del reporte de finanzas
+// (/admin/api/cobranza). A propósito no se inventa otro: si el panel dijera una cosa y
+// el WhatsApp otra, los números no cuadrarían y no se podría confiar en ninguno.
+// OJO con los nombres: finanzas lee el objeto CRUDO de Wisphub (estado, estado_facturas)
+// y aquí leemos el mapa ya sincronizado, que los guarda en camelCase (status,
+// estadoFacturas). Equivocarse ahí daría "no debe" para TODOS y el aviso dejaría de
+// mandarse a nadie sin que nadie se entere.
+// Sin dato de facturas y sin saldo NO cuenta como deuda, igual que en finanzas: falla
+// hacia "no mandar", que es la dirección segura.
+function clienteDebe(c) {
+  const low = s => String(s || '').toLowerCase();
+  const e = low(c && c.status);
+  const saldo = parseFloat((c && c.saldo) || 0) || 0;
+  const fact = String((c && c.estadoFacturas) || '');
+  return !!(e.includes('suspend') || saldo > 0 || (fact && !low(fact).includes('pagad')));
+}
+
+// Último minuto del día en que se acepta mandar el aviso atrasado. Si la variable viene
+// mal escrita se usa el default (20:00), y si alguien pusiera un tope ANTERIOR a la hora
+// de envío se vuelve a la ventana corta de 30 min: así ningún typo deja al barrido sin
+// ventana ni le abre una absurda.
+function corteTopeMinutos(objetivo) {
+  const tope = parseTimeToMinutes(CORTE_REMINDER_LIMIT, 1200);
+  return tope > objetivo ? tope : objetivo + 30;
+}
+
+// Deja constancia de la corrida. Devuelve true solo si escribió una línea NUEVA: los
+// abortos se reevalúan cada rato y sin este filtro llenarían la bitácora (y el
+// WhatsApp del admin) con la misma queja repetida.
+function registrarCorridaCorte(e) {
+  if (e.motivo && corteRunLog.some(r => r.fecha === e.fecha && r.motivo === e.motivo)) return false;
+  corteRunLog.unshift({ at: new Date().toISOString(), ...e, motivo: e.motivo || '' });
+  if (corteRunLog.length > CORTE_RUN_LOG_MAX) corteRunLog.length = CORTE_RUN_LOG_MAX;
+  schedulePersist();
+  return true;
+}
+
+// Días de los últimos <dias> sin constancia de una corrida buena. Cada hueco es un
+// grupo de clientes que cortó sin recibir su aviso. No cuenta los días anteriores a la
+// primera corrida registrada: ahí todavía no existía esta bitácora y serían huecos falsos.
+function huecosCorte(dias = 7) {
+  if (!corteRunLog.length) return [];
+  const primera = corteRunLog[corteRunLog.length - 1].fecha;
+  if (!primera) return [];
+  const buenos = new Set(corteRunLog.filter(r => r.ok).map(r => r.fecha));
+  const out = [];
+  for (let i = 1; i <= dias; i++) {
+    const d = mexicoDateStr(new Date(Date.now() - i * 86400000));
+    if (d < primera) break;
+    if (!buenos.has(d)) out.push(d);
+  }
+  return out;
+}
+
 // force=true (desde el panel) corre ya, sin esperar la hora — el dedup evita repetir.
 async function sweepCorteReminders(force = false) {
   try {
     if (!CORTE_REMINDER_ENABLED && !force) return null;
     if (!WHATSAPP_AVISO_TEMPLATE || !WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN) return null;
-    if (!wisphubClients.size) return null;
+    // NADA de escribirle a clientes con el estado a medio cargar. Si persistence.load()
+    // falla o tarda, corteReminders y lastCorteRunDate quedan VACÍOS y este barrido
+    // creería que hoy no ha mandado nada → reenviaría a todos los de mañana. Es el
+    // mismo seguro que ya usa la bienvenida (welcomeReady = true justo tras hidratar).
+    // Aplica también al botón del panel: ahí el riesgo de duplicar es el mismo.
+    if (!welcomeReady) return { error: 'El estado guardado aún no se cargó (o falló al cargar). No se envía nada para no repetir avisos ya enviados.' };
     const today = mexicoDateStr();
     if (!force) {
       if (lastCorteRunDate === today) return null;
       const objetivo = parseTimeToMinutes(CORTE_REMINDER_TIME);
       const { minutesOfDay } = mexicoNow();
-      // Ventana de 30 min a partir de la hora configurada
-      if (minutesOfDay < objetivo || minutesOfDay >= objetivo + 30) return null;
+      // Ventana LARGA (de la hora configurada al tope de la tarde) en vez de los 30 min
+      // de antes: en Render gratis la instancia duerme, y si entre 10:00 y 10:30 nadie
+      // le escribía al bot, ese día NADIE recibía su aviso y ni siquiera quedaba un
+      // error. Ahora sale en cuanto el servidor despierte, mientras al cliente todavía
+      // le da tiempo de pagar.
+      if (minutesOfDay < objetivo || minutesOfDay >= corteTopeMinutos(objetivo)) return null;
     }
+
+    // Datos FRESCOS antes de escribirle a nadie: el sync de rutina es cada 6 h y en ese
+    // hueco cabe de sobra el pago de ayer. Avisarle de corte a quien ya pagó es justo el
+    // error que no nos podemos permitir, así que vale la pena el costo (3 llamadas a
+    // Wisphub, ~4 s) antes de mandar nada.
+    // Si Wisphub está caído no tiene caso machacarlo cada 5 min durante diez horas (ni
+    // llenar la bitácora y el WhatsApp del admin): se reintenta cada 25 min, que en la
+    // ventana de 10:00 a 20:00 son ~20 oportunidades, de sobra.
+    if (!force && Date.now() - _corteLastSyncTry < 25 * 60000) return null;
+    const fresco = await syncWisphubClients();
+    // Se cruzó con el sync de rutina: NO armamos el freno (no le pegamos a Wisphub) para
+    // que el siguiente tick, dentro de 5 min, lo vuelva a intentar enseguida.
+    if (fresco && fresco.skipped) return { error: 'Hay una sincronización de Wisphub en curso; se reintenta solo en unos minutos.' };
+    if (wisphubSyncError || !lastWisphubComplete || !wisphubClients.size) {
+      // Lista fallida o a medias = mandaríamos avisos con datos de quién sabe cuándo, o
+      // dejaríamos fuera a medio pueblo. NO marcamos el día como corrido, así que se
+      // reintenta dentro de la ventana. Mandar tarde se perdona; mandar mal, no.
+      if (!force) _corteLastSyncTry = Date.now(); // el freno se arma solo si SÍ fallamos
+      const motivo = wisphubSyncError ? `Wisphub falló (${wisphubSyncError})`
+        : (fresco && fresco.error) ? `Wisphub no respondió (${fresco.error})`
+        : 'la lista de Wisphub llegó incompleta';
+      if (registrarCorridaCorte({ fecha: today, ok: false, motivo, forzada: !!force })) {
+        alertAdmin('corte-datos', `Avisos de corte detenidos: ${motivo}. Se reintenta solo cada 25 min hasta las ${CORTE_REMINDER_LIMIT}.`);
+      }
+      return { error: `Datos de Wisphub no confiables (${motivo}). No se envió nada.` };
+    }
+
     lastCorteRunDate = today;
     schedulePersist();
 
@@ -2978,11 +3085,22 @@ async function sweepCorteReminders(force = false) {
     // "jueves 16 de julio" (sin la coma que mete Intl entre el día de la semana y la fecha).
     const bonita = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, weekday: 'long', day: 'numeric', month: 'long' }).format(mananaDate).replace(',', '');
 
-    let sent = 0, failed = 0, yaEnviados = 0;
+    // Foto de la lista ANTES de empezar a enviar: el bucle tarda ~300 ms por cliente y
+    // si a media corrida entra un sync (que hace wisphubClients.clear()), recorrer el
+    // Map vivo se cortaría en silencio y media lista se quedaría sin aviso.
+    // Aquí mismo se saca de la lista a quien YA PAGÓ: ese no debe recibir nada.
+    const candidatos = [];
+    let alCorriente = 0;
     for (const [phone, c] of wisphubClients.entries()) {
+      const fc = parseFechaCorte(c.fechaCorte);
+      if (!fc || fc !== manana) continue;
+      if (!clienteDebe(c)) { alCorriente++; continue; }
+      candidatos.push([phone, c, fc]);
+    }
+
+    let sent = 0, failed = 0, yaEnviados = 0;
+    for (const [phone, c, fc] of candidatos) {
       try {
-        const fc = parseFechaCorte(c.fechaCorte);
-        if (!fc || fc !== manana) continue;
         const key = `${phone}|${fc}`;
         if (corteReminders[key]) { yaEnviados++; continue; }
         const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
@@ -2998,6 +3116,11 @@ async function sweepCorteReminders(force = false) {
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
         sent++;
+        // Guardar de a poco DURANTE el envío, no solo al final: si el proceso se muere a
+        // media corrida (Render se duerme, un redespliegue), lo ya enviado se quedaría
+        // sin registrar y una corrida manual posterior lo REPETIRÍA — justo el incidente
+        // de mensajes duplicados que ya vivimos. Así lo expuesto son 10 envíos, no todos.
+        if (sent % 10 === 0) schedulePersist();
         await new Promise(r => setTimeout(r, 300)); // pausa para no saturar la API
       } catch (e) { failed++; }
     }
@@ -3007,8 +3130,24 @@ async function sweepCorteReminders(force = false) {
       if (new Date(v).getTime() < old) delete corteReminders[k];
     }
     schedulePersist();
-    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos`);
-    return { manana, sent, failed, yaEnviados };
+    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente`);
+    // Que el filtro se coma a TODOS es señal de que el criterio "debe" no está leyendo lo
+    // que creemos (ojo: en el criterio de finanzas "No Pagado" CONTIENE "pagad", así que
+    // cuenta como al corriente; si Wisphub usa ese texto, el filtro se apoya solo en el
+    // saldo). Falla hacia "no mandar", que es lo seguro, pero en silencio nadie se
+    // enteraría hasta que un cliente reclamara que lo cortaron sin avisar.
+    if (!candidatos.length && alCorriente) {
+      alertAdmin('corte-filtro', `Hoy NINGÚN cliente pasó el filtro de deuda: los ${alCorriente} con corte el ${manana} salieron todos "al corriente". Revisa saldo y estado de facturas en el panel antes de dar ese cero por bueno.`);
+    }
+    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, candidatos: candidatos.length, forzada: !!force });
+    // Si AYER no quedó constancia, hubo gente que cortó sin recibir su aviso. Se avisa
+    // SOLO el día siguiente al hueco (no los 7 días que el hueco sigue apareciendo en la
+    // lista), para que la alerta signifique algo y no se vuelva ruido que nadie lee.
+    const huecos = huecosCorte(7);
+    if (huecos[0] === mexicoDateStr(new Date(Date.now() - 86400000))) {
+      alertAdmin('corte-hueco', `Sin avisos de corte el/los día(s): ${huecos.join(', ')}. Revisa el despertador de GitHub Actions (parece que Render se durmió).`);
+    }
+    return { manana, sent, failed, yaEnviados, alCorriente };
   } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 
@@ -5323,25 +5462,119 @@ app.get('/admin/api/history/:chatId', verifyAdminToken, requirePermission('clien
 });
 
 // API: Vista previa de recordatorios de corte (quién recibiría el aviso mañana)
-app.get('/admin/api/corte-reminders', verifyAdminToken, (req, res) => {
+// Lleva permiso 'clients' como sus vecinas (cobranza, historial, plantillas de corte):
+// ahora devuelve saldo y estado de facturas de cada cliente, y eso no lo debe ver
+// cualquier usuario del panel, solo quien ya tiene acceso a datos de clientes.
+app.get('/admin/api/corte-reminders', verifyAdminToken, requirePermission('clients'), (req, res) => {
   const mananaDate = new Date(Date.now() + 24 * 3600 * 1000);
   const manana = mexicoDateStr(mananaDate);
   const lista = [];
+  let alCorriente = 0, aEnviar = 0;
   for (const [phone, c] of wisphubClients.entries()) {
     const fc = parseFechaCorte(c.fechaCorte);
-    if (fc === manana) lista.push({ name: c.name, phone, plan: c.plan || '', fechaCorte: c.fechaCorte, yaEnviado: !!corteReminders[`${phone}|${fc}`] });
+    if (fc !== manana) continue;
+    // debe=false → ya pagó y NO se le manda nada (mismo criterio que Cobranza).
+    const debe = clienteDebe(c);
+    const yaEnviado = !!corteReminders[`${phone}|${fc}`];
+    if (!debe) alCorriente++; else if (!yaEnviado) aEnviar++;
+    lista.push({ name: c.name, phone, plan: c.plan || '', fechaCorte: c.fechaCorte, yaEnviado, debe, saldo: c.saldo, estadoFacturas: c.estadoFacturas || '' });
   }
   res.json({
-    manana, total: lista.length,
-    habilitado: CORTE_REMINDER_ENABLED, hora: CORTE_REMINDER_TIME,
+    manana, total: lista.length, aEnviar, alCorriente,
+    habilitado: CORTE_REMINDER_ENABLED, hora: CORTE_REMINDER_TIME, tope: CORTE_REMINDER_LIMIT,
     plantillaConfigurada: !!WHATSAPP_AVISO_TEMPLATE,
     corridaHoy: lastCorteRunDate === mexicoDateStr(),
+    // Con qué datos se está mirando esto: si no están completos, el barrido no envía.
+    datosCompletos: !!lastWisphubComplete && !wisphubSyncError,
+    ultimoSync: lastWisphubSync,
+    // Constancia de las corridas y de los días que se saltaron.
+    corridas: corteRunLog.slice(0, 30),
+    huecos: huecosCorte(14),
     lista: lista.slice(0, 200)
   });
 });
 
+// API: Tablero del aviso de corte — a cuántos se les avisó HOY, a cuántos NO porque ya
+// pagaron (con nombres) y si el barrido corrió cada uno de los últimos días. Solo lee.
+app.get('/admin/api/corte-reminders/stats', verifyAdminToken, requirePermission('clients'), (req, res) => {
+  try {
+    const hoy = mexicoDateStr();
+    const manana = mexicoDateStr(new Date(Date.now() + 24 * 3600 * 1000));
+    const OMIT_MAX = 300;
+
+    // Lo de HOY se cuenta EN VIVO contra corteReminders (los envíos de verdad), no con
+    // los contadores de la corrida: si alguien forzó una corrida temprano, la automática
+    // reportaría "0 enviados" aunque la gente sí quedó avisada.
+    let total = 0, notificados = 0, omitidosPago = 0, sinAviso = 0;
+    const omitidos = [];
+    for (const [phone, c] of wisphubClients.entries()) {
+      if (parseFechaCorte(c.fechaCorte) !== manana) continue;
+      total++;
+      if (!clienteDebe(c)) {
+        omitidosPago++;
+        if (omitidos.length < OMIT_MAX) omitidos.push({ name: c.name || '', phone, plan: c.plan || '' });
+        continue;
+      }
+      if (corteReminders[`${phone}|${manana}`]) notificados++; else sinAviso++;
+    }
+
+    const filaHoy = corteRunLog.find(x => x && x.fecha === hoy && x.ok) || null;
+    const corridasHoy = corteRunLog.filter(x => x && x.fecha === hoy && x.ok).length;
+    const objetivo = parseTimeToMinutes(CORTE_REMINDER_TIME);
+    const { minutesOfDay } = mexicoNow();
+    const hhmm = iso => { try { return new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso)); } catch (_) { return ''; } };
+    // El día más viejo con registro: antes de eso la bitácora no existía, así que un día
+    // sin corrida NO es un hueco de verdad y no hay que pintarlo de rojo.
+    const masViejo = corteRunLog.reduce((a, x) => (x && x.fecha && (!a || x.fecha < a)) ? x.fecha : a, null);
+
+    // Un renglón por día AUNQUE no haya corrido: el día vacío es justo el que hay que ver.
+    const dias = [];
+    for (let i = 0; i < 14; i++) {
+      const d = mexicoDateStr(new Date(Date.now() - i * 24 * 3600 * 1000));
+      const f = corteRunLog.find(x => x && x.fecha === d && x.ok) || null;
+      dias.push({
+        fecha: d, corrio: !!f,
+        corridas: corteRunLog.filter(x => x && x.fecha === d && x.ok).length,
+        hora: f ? hhmm(f.at) : null, forzada: !!(f && f.forzada),
+        notificados: f ? ((f.sent || 0) + (f.yaEnviados || 0)) : 0,
+        omitidosPago: f ? (f.alCorriente || 0) : 0,
+        fallidos: f ? (f.failed || 0) : 0,
+        sinDatos: !f && (!masViejo || d < masViejo),
+        pendiente: d === hoy && !f && CORTE_REMINDER_ENABLED && minutesOfDay < objetivo,
+        // Salieron avisos pero no quedó constancia: se reinició el servidor a media
+        // corrida (en Render gratis pasa) y quedó gente sin su aviso.
+        parcial: d === hoy && !f && notificados > 0,
+      });
+    }
+
+    res.json({
+      hoy, manana,
+      habilitado: CORTE_REMINDER_ENABLED, hora: CORTE_REMINDER_TIME,
+      plantillaConfigurada: !!(WHATSAPP_AVISO_TEMPLATE && WHATSAPP_PHONE_NUMBER_ID && WHATSAPP_ACCESS_TOKEN),
+      clientesCargados: wisphubClients.size > 0,
+      sincronizando: !!_wisphubSyncing,
+      wisphubError: wisphubSyncError || '',
+      wisphubAl: lastWisphubSync || null,
+      corridaHoy: !!filaHoy, horaCorrida: filaHoy ? hhmm(filaHoy.at) : null,
+      forzadaHoy: !!(filaHoy && filaHoy.forzada), corridas: corridasHoy,
+      pendienteHoy: !filaHoy && CORTE_REMINDER_ENABLED && minutesOfDay < objetivo,
+      parcialHoy: !filaHoy && notificados > 0,
+      total, notificados, omitidosPago, sinAviso,
+      fallidos: filaHoy ? (filaHoy.failed || 0) : 0,
+      omitidos, omitidosTruncados: omitidosPago > OMIT_MAX, omitidosMax: OMIT_MAX,
+      dias,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'No se pudo cargar el tablero de avisos de corte.' });
+  }
+});
+
 // API: Forzar la corrida de recordatorios de corte AHORA (para probar)
-app.post('/admin/api/corte-reminders/run', verifyAdminToken, async (req, res) => {
+// Este botón MANDA WHATSAPPS A CLIENTES REALES y no pedía ningún permiso: cualquier
+// usuario del panel, aunque solo tuviera 'productos', podía dispararlo. Se exige
+// 'broadcast' o 'clients' (superadmin/admin pasan siempre) para no quitarle el botón a
+// quien hoy sí lo usa.
+app.post('/admin/api/corte-reminders/run', verifyAdminToken, requireAnyPermission(['broadcast', 'clients']), async (req, res) => {
   const r = await sweepCorteReminders(true);
   res.json(r || { error: 'No se pudo correr (¿plantilla o Wisphub sin configurar?)' });
 });
@@ -5788,7 +6021,13 @@ const port = Number(process.env.PORT || 3000);
   // 3c) Resumen matutino de casos pendientes al asesor (al abrir la oficina)
   setInterval(() => sweepMorningDigest().catch(() => {}), 60000);
 
-  // 3d) Recordatorio de fecha de corte (un día antes, por plantilla de utilidad)
+  // 3d) Recordatorio de fecha de corte (un día antes, por plantilla de utilidad).
+  // Primer intento a los 45 s: en Render gratis la instancia despierta con el primer
+  // ping y puede volver a dormirse pronto, así que esperar hasta 5 min al intervalo era
+  // justo lo que hacía que se saltara un día. Es inofensivo: para cuando este timer se
+  // registra el estado YA está hidratado, y las guardas de adentro (ya corrió hoy,
+  // ventana, dedup) impiden que mande nada de más.
+  setTimeout(() => sweepCorteReminders().catch(() => {}), 45000);
   setInterval(() => sweepCorteReminders().catch(() => {}), 5 * 60000);
 
   // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
