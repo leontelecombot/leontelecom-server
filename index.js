@@ -77,6 +77,9 @@ const FIBER_PLAN_MEDIA_URL = process.env.FIBER_PLAN_MEDIA_URL ||
 const WIRELESS_PLAN_MEDIA_URL = process.env.WIRELESS_PLAN_MEDIA_URL ||
   (SERVER_BASE_URL ? `${SERVER_BASE_URL}/images/planesinalambrico.jpeg` : '');
 const LEON_CONTACT_NUMBER = process.env.LEON_CONTACT_NUMBER || '951 169 7346';
+// Dirección física real de la oficina. Antes NO existía en el código y el bot la
+// inventaba; ahora es la única verdad que puede dar.
+const OFFICE_ADDRESS = process.env.OFFICE_ADDRESS || 'Carretera Internacional, San Pablo Huitzo, a un costado del Oxxo, pasando el puente';
 const STORE_URL = process.env.STORE_URL || 'https://tienda.leontelecom.com';
 const AGENT_NOTIFY_CHAT_ID = process.env.AGENT_NOTIFY_CHAT_ID || '';
 const AGENT_NOTIFY_WEBHOOK_URL = process.env.AGENT_NOTIFY_WEBHOOK_URL || '';
@@ -243,15 +246,15 @@ const NEIGHBORHOODS = {
 // Zona horaria de Oaxaca: America/Mexico_City. Valores en minutos desde medianoche.
 const BUSINESS_TZ = 'America/Mexico_City';
 const BUSINESS_HOURS = {
-  0: [[600, 840]],               // Domingo 10:00–14:00
-  1: [[600, 900], [960, 1200]],  // Lunes   10:00–15:00 y 16:00–20:00
-  2: [[600, 900], [960, 1200]],  // Martes
-  3: [[600, 900], [960, 1200]],  // Miércoles
-  4: [[600, 900], [960, 1200]],  // Jueves
-  5: [[600, 900], [960, 1200]],  // Viernes
-  6: [[600, 900], [960, 1080]]   // Sábado  10:00–15:00 y 16:00–18:00
+  0: [],                 // Domingo CERRADO
+  1: [[600, 1200]],      // Lunes    10:00–20:00 (corrido)
+  2: [[600, 1200]],      // Martes
+  3: [[600, 1200]],      // Miércoles
+  4: [[600, 1200]],      // Jueves
+  5: [[600, 1200]],      // Viernes
+  6: [[600, 1200]]       // Sábado
 };
-const BUSINESS_HOURS_SUMMARY = 'Lun a Vie 10:00–15:00 y 16:00–20:00, Sáb 10:00–15:00 y 16:00–18:00, Dom 10:00–14:00';
+const BUSINESS_HOURS_SUMMARY = 'Lunes a Sábado de 10:00 a.m. a 8:00 p.m. (domingo cerrado)';
 const DAY_NAMES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 // Hora actual en la zona de Oaxaca (Render corre en UTC, por eso lo calculamos así)
@@ -300,6 +303,65 @@ function isHoursRequest(text) {
     || (/\b(abren|cierran|atienden)\b/.test(v) && /\?|hora|dia/.test(v));
 }
 
+// ¿El cliente pide el TELÉFONO / número de CONTACTO de la oficina? (NO su propio número)
+// Igual que isHoursRequest: se resuelve con el dato REAL sin pasar por el modelo chico
+// (que inventa números). Guarda contra falsos positivos como "mi número de cliente" o
+// "cambié de número".
+function isContactoRequest(text) {
+  const v = normalizeText(text);
+  // GUARDAS: estos NO piden el teléfono de la oficina aunque mencionen "numero"/"tel".
+  if (isTechnicalIssue(v) || isOutageReport(v) || isPlanRequest(v) || isCoverageRequest(v)) return false;
+  if (/\btelcel|movistar|at&?t|att|bait|unefon|izzi|totalplay|megacable|dish|sky|television|tv\b/.test(v)) return false;
+  // Se refiere al número DEL CLIENTE, no al de la oficina.
+  if (/\bnum(?:ero)?\s+de\s+(cliente|contrato|cuenta|folio|referencia|servicio|medidor)\b/.test(v)) return false;
+  if (/\bmi\s+(numero|telefono|tel|celular|cel|whats\w*|linea)\b/.test(v)) return false;
+  if (/\b(cambi\w*|actualiz\w*|equivoc\w*|erron\w*|registr\w*)\b[\s\w]*\b(numero|telefono|celular)\b/.test(v)) return false;
+  // Token de teléfono ANCLADO (no 'tel\w*' que caía con telcel/television).
+  const TEL = '(numero|telefono|telefonos|whats\\w*|celular)';
+  // "a dónde / a qué número llamo / marco / me comunico"
+  if (/\b(a donde|a que numero|a que telefono)\b[\s\w]*\b(llamo|llamar|marco|marcar|le llamo|los llamo|me comunico|comunicarme)\b/.test(v)) return true;
+  // número/teléfono/whatsapp PARA llamar/marcar/contactar/comunicarme
+  if (new RegExp('\\b' + TEL + '\\b[\\s\\w]*\\b(para|de)\\b[\\s\\w]*\\b(llamar|marcar|contact\\w*|comunicar\\w*|atencion)\\b').test(v)) return true;
+  // número/teléfono/whatsapp DE la oficina/ustedes/contacto (frase adyacente, no suelta)
+  if (new RegExp('\\b' + TEL + '\\b\\s+(de\\s+)?(la\\s+)?(oficina|contacto|atencion|ustedes|leon\\s*telecom)\\b').test(v)) return true;
+  if (/\b(oficina|contacto|atencion|ustedes|leon\s*telecom)\b\s+(numero|telefono|whats\w*)\b/.test(v)) return true;
+  // "me pasas / me das / cuál es su número/teléfono/whatsapp/contacto", "tienen whatsapp"
+  if (new RegExp('\\b(me\\s+(pas\\w*|d[aá]s?|compart\\w*|proporcion\\w*|facilit\\w*)|puedes?\\s+(pasar\\w*|dar\\w*|compartir\\w*)|cual\\s+es\\s+(su|tu)|tienen|cuentan\\s+con)\\b[\\s\\w]*\\b(' + TEL + '|contacto)\\b').test(v)) return true;
+  return false;
+}
+
+// ¿El cliente pregunta DÓNDE está / la DIRECCIÓN de la oficina? La dirección NO existe
+// en el código: JAMÁS inventarla. Respondemos con el TELÉFONO REAL para confirmarla.
+// Guarda contra reportes técnicos, pagos y solicitudes de migración/cambio de domicilio.
+function isUbicacionRequest(text) {
+  const v = normalizeText(text);
+  // GUARDAS: cobertura, instalación, falla, pago, migración y datos del propio cliente
+  // NO son "dónde está la oficina", aunque digan "domicilio/direccion".
+  if (isTechnicalIssue(v) || isCoverageRequest(v) || isMigrationRequest(text)) return false;
+  if (/\b(pago|pagar|comprobante|deposito|transferencia|recibo)\b/.test(v)) return false;
+  if (/\b(instal\w*|agend\w*|contrat\w*|cubre|cubren|cobertura|llega|servicio)\b/.test(v)) return false;
+  if (/\ba\s+domicilio\b/.test(v)) return false;                       // "instalación a domicilio"
+  if (/\bmi\s+(direccion|domicilio|casa)\b/.test(v)) return false;     // el cliente DANDO su domicilio
+  if (/\bdireccion\s+ip\b/.test(v)) return false;                      // dato técnico
+  if (/\b(cambi\w*|mover|mudar\w*|mudanza|migr\w*|traslad\w*)\b/.test(v) && /\b(domicilio|direccion|casa|servicio)\b/.test(v)) return false;
+  const OFI = '(oficina|oficinas|local|sucursal|ustedes|empresa|negocio|leon\\s*telecom)';
+  // dirección/domicilio/ubicación DE la oficina (exige el contexto de oficina)
+  if (new RegExp('\\b(direccion|domicilio|ubicacion|ubicad\\w*)\\b[\\s\\w]*\\b' + OFI + '\\b').test(v)) return true;
+  if (new RegExp('\\b' + OFI + '\\b[\\s\\w]*\\b(direccion|domicilio|ubicacion|ubicad\\w*)\\b').test(v)) return true;
+  // "cuál es su dirección/ubicación", "su domicilio" (posesivo hacia la empresa)
+  if (/\bcual\s+es\s+(su|la)\s+(direccion|ubicacion|domicilio)\b/.test(v)) return true;
+  if (/\bsu\s+(direccion|domicilio|ubicacion)\b/.test(v)) return true;
+  // "cómo llego/llegar", "mapa", "google maps", "croquis" a la oficina/ustedes
+  if (/\b(como llego|como llegar|mapa|google maps|croquis|ubicacion de la oficina)\b/.test(v)) return true;
+  // "dónde están ubicados / se localizan" (sin objeto técnico) = dónde está la oficina
+  if (/\bdonde\b/.test(v) && /\b(ubicad\w*|localizad\w*)\b/.test(v)
+      && !/\b(modem|router|antena|cable|poste|equipo|caja|nap|roseta|ip|medidor)\b/.test(v)) return true;
+  // "dónde están / queda / se encuentran / se ubican" + oficina/ustedes/sucursal
+  if (/\b(donde|en donde|adonde)\b[\s\w]*\b(estan|esta|queda|quedan|se encuentran|se ubican|los encuentro)\b/.test(v)
+      && new RegExp('\\b' + OFI + '\\b').test(v)) return true;
+  return false;
+}
+
 // ¿El cliente pide una PRÓRROGA / más tiempo o plazo para pagar? Es una decisión
 // que solo puede tomar una persona, así que lo mandamos directo con un asesor.
 // Preciso a propósito: exige contexto de PAGO + señal de aplazamiento (evita falsos
@@ -325,9 +387,7 @@ function buildBusinessHoursMessage() {
     abierto ? '🟢 Ahorita estamos ABIERTOS para atención con un asesor.' : `🔴 Ahorita estamos fuera de horario. Volvemos ${describeNextOpening()}.`,
     '',
     '🕒 Horario de atención (asesores):',
-    '• Lunes a Viernes: 10:00 – 15:00 y 16:00 – 20:00',
-    '• Sábado: 10:00 – 15:00 y 16:00 – 18:00',
-    '• Domingo: 10:00 – 14:00',
+    `• ${BUSINESS_HOURS_SUMMARY}`,
     '',
     'Yo, el asistente virtual, te atiendo las 24 horas. 🤖'
   ].join('\n');
@@ -1675,7 +1735,10 @@ async function callAI(systemContent, userContent, options = {}) {
           model: AI_MODEL || 'claude-haiku-4-5-20251001',
           max_tokens: options.maxTokens || 512,
           system: systemContent,
-          messages: [{ role: 'user', content: userContent }],
+          // Los turnos previos van como mensajes REALES, no como texto dentro del
+          // prompt: un modelo entiende muchísimo mejor una conversación de ida y
+          // vuelta que un bloque de "Cliente: ... Leo: ...".
+          messages: [...(Array.isArray(options.history) ? options.history : []), { role: 'user', content: userContent }],
           temperature
         }),
         signal: controller.signal
@@ -1696,8 +1759,10 @@ async function callAI(systemContent, userContent, options = {}) {
         model: AI_MODEL,
         messages: [
           { role: 'system', content: systemContent },
+          ...(Array.isArray(options.history) ? options.history : []),   // turnos reales
           { role: 'user', content: userContent }
         ],
+        max_tokens: options.maxTokens || 512,   // antes se ignoraba en esta rama
         temperature
       }),
       signal: controller.signal
@@ -1730,9 +1795,17 @@ async function callMainAI(chatId, userText) {
 
   const profile = getProfile(chatId);
   const history = getHistory(chatId);
-  const recentMsgs = history.messages.slice(-10)
-    .map(m => `${m.role === 'user' ? 'Cliente' : 'Leo'}: ${m.text}`)
-    .join('\n');
+  // El mensaje actual del usuario ya se guardó en el historial (handleChatMessage lo
+  // añade antes de llamar aquí). Lo quitamos del arreglo de turnos previos para no
+  // mandarlo dos veces: va aparte como userContent en callAI.
+  const prevTurns = history.messages.slice(-12);
+  if (prevTurns.length && prevTurns[prevTurns.length - 1].role === 'user' &&
+      prevTurns[prevTurns.length - 1].text === userText) prevTurns.pop();
+  const turnos = prevTurns.slice(-8).map(m => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: String(m.text || '').slice(0, 800),
+  }));
+
 
   const clientName = nameOf(profile);
   const clientLocation = profile?.location || null;
@@ -1767,11 +1840,28 @@ async function callMainAI(chatId, userText) {
     'ACCESORIOS Y PRODUCTOS (se venden en la oficina): Roku, cables HDMI/USB-C/Lightning, adaptadores USB, memorias USB, TINTA HP para impresora, mouse, base enfriadora, soporte de TV, reflectores solares, tiras LED, luminarios.',
     'REGLA: si preguntan por un accesorio/producto (tinta, cable, roku, memoria, etc.), NUNCA digas que no lo tenemos; invítalos a escribir "productos" para ver el catálogo con fotos y precios.',
     '',
+    'DATOS DE CONTACTO Y OFICINA (los ÚNICOS verdaderos; jamás inventes otros):',
+    `Teléfono y WhatsApp de contacto: ${LEON_CONTACT_NUMBER}. Es el ÚNICO número. Si piden "el número", "el teléfono" o "el número de la oficina", da EXACTAMENTE este; nunca inventes ni cambies un dígito.`,
+    `Dirección de la oficina: ${OFFICE_ADDRESS}. Es la única dirección; si la piden, dala tal cual, nunca inventes otra calle ni referencia.`,
+    `Horario de atención: ${BUSINESS_HOURS_SUMMARY}.`,
+    'Zonas con cobertura: SOLO Huitzo, Telixtlahuaca y Suchilquitongo.',
+    '',
+    'REGLA DE ORO — NO INVENTES DATOS: solo puedes dar información que aparezca en ESTE prompt (teléfono, dirección, horario, zonas, planes, precios, cámaras, productos). Está PROHIBIDO inventar teléfonos, direcciones, precios o promociones. Si te piden un dato que NO está aquí, di que un asesor lo confirma o da el teléfono oficial; NUNCA lo adivines.',
+    `El único teléfono que puedes dar es ${LEON_CONTACT_NUMBER}; si escribes cualquier otro número, es un error grave.`,
+    'MENSAJES CORTOS O AMBIGUOS: si el mensaje es breve o poco claro ("es de un hotel", "pero ese num", "y eso", "sí"), apóyate en los mensajes previos para entender a qué se refiere. NO cambies de tema ni ofrezcas planes o zonas que nadie pidió; si aún no queda claro, haz UNA sola pregunta corta para aclarar.',
+    '',
     clientName ? `Nombre del cliente: ${clientName}` : '',
     clientLocation ? `Zona del cliente: ${clientLocation}` : '',
     '',
-    'HISTORIAL RECIENTE:',
-    recentMsgs || '(primera interacción)',
+    turnos.length ? 'La conversación previa va como mensajes reales; toma en cuenta el hilo completo, no solo el último mensaje.' : '(Es la primera interacción con este cliente.)',
+    '',
+    'EJEMPLOS DE CÓMO RESPONDER (imita el estilo; usa SIEMPRE este formato JSON, sin markdown):',
+    `Cliente: "pero ese num es whatsapp?" -> {"message":"Sí, el ${LEON_CONTACT_NUMBER} es nuestro número de contacto y también WhatsApp. ¿Te ayudo con algo más?","action":null,"location":null,"neighborhood":null,"urgent":false}`,
+    'Cliente: "es de un hotel" -> {"message":"Perfecto, para un hotel podemos ayudarte con internet o con cámaras de seguridad. ¿Qué necesitas: internet, cámaras, o ambos?","action":null,"location":null,"neighborhood":null,"urgent":false}',
+    'Cliente: "tienen paquetes de TV por cable?" -> {"message":"Nos enfocamos en internet (fibra y antena), cámaras de seguridad y venta de accesorios; no manejamos TV ni cable. ¿Te interesa alguno de esos?","action":null,"location":null,"neighborhood":null,"urgent":false}',
+    'Cliente: "venden tinta para impresora?" -> {"message":"Sí, manejamos tinta HP y varios accesorios en la oficina. Escribe la palabra productos y te muestro el catálogo con fotos y precios.","action":null,"location":null,"neighborhood":null,"urgent":false}',
+    'Cliente: "quiero poner cámaras en mi negocio" -> {"message":"Con gusto te ayudo con las cámaras de seguridad.","action":"show_cameras","location":null,"neighborhood":null,"urgent":false}',
+    'Cliente: "y si somos muchos en la casa" -> {"message":"Nuestros planes rinden bien para varios equipos a la vez. ¿Cuántas personas o dispositivos serían, para recomendarte el plan ideal?","action":null,"location":null,"neighborhood":null,"urgent":false}',
     '',
     'INSTRUCCIONES DE RESPUESTA:',
     'LEE BIEN el mensaje completo y responde de forma natural y útil (no como robot). Responde con JSON puro (sin texto extra):',
@@ -1795,7 +1885,7 @@ async function callMainAI(chatId, userText) {
   ].filter(Boolean).join('\n');
 
   try {
-    const response = await callAI(systemPrompt, userText, { temperature: 0.6, maxTokens: 300 });
+    const response = await callAI(systemPrompt, userText, { temperature: 0.45, maxTokens: 320, history: turnos });
     if (!response) return null;
     const match = response.match(/\{[\s\S]*?\}/);
     if (match) {
@@ -3834,6 +3924,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (isHoursRequest(text)) {
       addMessageToHistory(chatId, 'bot', 'horario');
       await sendMsg(chatId, buildBusinessHoursMessage());
+      return;
+    }
+
+    // Pide el TELÉFONO / número de contacto → dar el número REAL (nunca dejar que la IA
+    // lo invente). Va aquí, junto al horario: emergencias, pagos y comprobantes ya se
+    // resolvieron y retornaron más arriba, así que no les robamos el mensaje.
+    if (isContactoRequest(text)) {
+      const _msg = `📞 Con gusto. El número de contacto de León Telecom es *${LEON_CONTACT_NUMBER}*. También por aquí mismo puedo ayudarte. 🙌`;
+      await sendMsg(chatId, _msg);   // sendMsg ya guarda en el historial
+      return;
+    }
+
+    // Pregunta por la DIRECCIÓN / ubicación de la oficina → dar la dirección REAL
+    // (OFFICE_ADDRESS), nunca dejar que la IA la invente.
+    if (isUbicacionRequest(text)) {
+      const _msg = `📍 Nuestra oficina está en: *${OFFICE_ADDRESS}*.\nHorario: ${BUSINESS_HOURS_SUMMARY}. Cualquier duda, al ${LEON_CONTACT_NUMBER}. 🙌`;
+      await sendMsg(chatId, _msg);   // sendMsg ya guarda en el historial
       return;
     }
 
