@@ -246,15 +246,15 @@ const NEIGHBORHOODS = {
 // Zona horaria de Oaxaca: America/Mexico_City. Valores en minutos desde medianoche.
 const BUSINESS_TZ = 'America/Mexico_City';
 const BUSINESS_HOURS = {
-  0: [[600, 840]],       // Domingo  10:00–14:00
-  1: [[600, 1200]],      // Lunes    10:00–20:00 (corrido)
-  2: [[600, 1200]],      // Martes
-  3: [[600, 1200]],      // Miércoles
-  4: [[600, 1200]],      // Jueves
-  5: [[600, 1200]],      // Viernes
-  6: [[600, 1200]]       // Sábado
+  0: [[600, 840]],               // Domingo   10:00–14:00
+  1: [[600, 900], [960, 1200]],  // Lunes     10:00–15:00 y 16:00–20:00
+  2: [[600, 900], [960, 1200]],  // Martes
+  3: [[600, 900], [960, 1200]],  // Miércoles
+  4: [[600, 900], [960, 1200]],  // Jueves
+  5: [[600, 900], [960, 1200]],  // Viernes
+  6: [[600, 900], [960, 1080]]   // Sábado    10:00–15:00 y 16:00–18:00
 };
-const BUSINESS_HOURS_SUMMARY = 'Lunes a Sábado de 10:00 a.m. a 8:00 p.m., Domingo de 10:00 a.m. a 2:00 p.m.';
+const BUSINESS_HOURS_SUMMARY = 'Lunes a Viernes de 10:00 a.m. a 3:00 p.m. y de 4:00 a 8:00 p.m., Sábado de 10:00 a.m. a 3:00 p.m. y de 4:00 a 6:00 p.m., Domingo de 10:00 a.m. a 2:00 p.m.';
 const DAY_NAMES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 // Hora actual en la zona de Oaxaca (Render corre en UTC, por eso lo calculamos así)
