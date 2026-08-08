@@ -631,9 +631,13 @@ async function syncWisphubClients() {
       const res = await wisphubFetch(firstUrl, { headers: { 'Authorization': `${scheme} ${WISPHUB_API_KEY}` } }, 'sync: primera página');
       if (res.ok) { authHeader = `${scheme} ${WISPHUB_API_KEY}`; data = await res.json(); console.log(`[Wisphub] Autenticado con esquema "${scheme}"`); break; }
       lastTxt = await res.text().catch(() => '');
-      if (res.status !== 401 && res.status !== 403) break;
+      if (res.status !== 401 && res.status !== 403) {
+        // 5xx o similar: el servidor de WISPHUB está fallando. No es la llave.
+        const esHtml = /<!DOCTYPE|<html/i.test(lastTxt);
+        throw new Error(`Wisphub respondió error ${res.status}${esHtml ? ' (página de error de su servidor)' : ': ' + lastTxt.slice(0, 120)}. La llave está bien; es una falla del lado de Wisphub y se reintenta solo.`);
+      }
     }
-    if (!authHeader) throw new Error(`Auth falló: ${lastTxt.slice(0, 200)}`);
+    if (!authHeader) throw new Error('Wisphub rechazó la llave de API (401/403). Hay que revisar WISPHUB_API_KEY en Render.');
 
     wisphubClients.clear();
     let synced = 0, revisados = 0, pages = 0, offset = 0;
@@ -687,7 +691,12 @@ async function syncWisphubClients() {
   } catch (e) {
     wisphubSyncError = e.message;
     console.error('[Wisphub] Sync error:', e.message);
-    alertAdmin('wisphub', `Falló la sincronización con Wisphub: ${e.message}`);
+    alertAdmin('wisphub', [
+      'Falló la sincronización con Wisphub.',
+      `Motivo: ${String(e.message || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 220)}`,
+      `El bot sigue trabajando con la última lista buena (${wisphubClients.size} clientes en memoria).`,
+      'Se reintenta solo cada 6 horas; no hay que hacer nada salvo que se repita todo el día.',
+    ].join('\n'));
     return { synced: 0, error: e.message };
   } finally {
     _wisphubSyncing = false;
@@ -1113,7 +1122,12 @@ function buildStateSnapshot() {
     welcomeSeeded: welcomeSeeded,
     incident: incident,
     auditLog: auditLog.slice(0, AUDIT_MAX),
-    wisphubLog: wisphubLog.slice(0, WISPHUB_LOG_MAX)
+    wisphubLog: wisphubLog.slice(0, WISPHUB_LOG_MAX),
+    // Copia de seguridad de la lista de clientes: si Render reinicia mientras Wisphub
+    // está caído, el bot arrancaba SIN NINGÚN cliente (no reconocía a nadie, ni corte,
+    // ni estados de cuenta). Con esto restaura la última lista buena y sigue operando.
+    wisphubClientes: Object.fromEntries(wisphubClients),
+    wisphubClientesAl: lastWisphubSync || null
   };
 }
 
@@ -1121,6 +1135,12 @@ function buildStateSnapshot() {
 function hydrateState(s) {
   if (!s || typeof s !== 'object') return;
   if (Array.isArray(s.auditLog)) auditLog = s.auditLog.slice(0, AUDIT_MAX);
+  // Lista de Wisphub de respaldo: solo si la memoria está vacía (el sync real manda).
+  if (s.wisphubClientes && typeof s.wisphubClientes === 'object' && !wisphubClients.size) {
+    for (const [k, v] of Object.entries(s.wisphubClientes)) wisphubClients.set(k, v);
+    if (s.wisphubClientesAl) lastWisphubSync = s.wisphubClientesAl;
+    if (wisphubClients.size) console.log(`[Wisphub] Lista restaurada del respaldo: ${wisphubClients.size} clientes (del ${String(s.wisphubClientesAl || '').slice(0, 16)})`);
+  }
   if (Array.isArray(s.wisphubLog)) wisphubLog = s.wisphubLog.slice(0, WISPHUB_LOG_MAX);
   const fill = (map, obj) => { if (obj) for (const [k, v] of Object.entries(obj)) map.set(k, v); };
   fill(clientProfiles, s.clientProfiles);
