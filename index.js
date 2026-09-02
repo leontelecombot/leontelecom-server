@@ -573,16 +573,30 @@ function updateCase(caseId, fields) {
 }
 
 // Marca como atendidos/recibidos los casos pendientes de un cliente.
-function markCases(clientId, status) {
+// `agente` queda anotado para poder decir DESPUÉS quién atendió el caso, en vez
+// de un "otro asesor" que obliga a preguntar por el grupo. Es opcional: los
+// casos marcados antes de esto simplemente no lo traen.
+function markCases(clientId, status, agente = '') {
   try {
     const num = String(clientId).replace(/\D/g, '');
     let n = 0;
     for (const c of caseLog) {
-      if (c.clientId === num && c.status === 'pendiente') { c.status = status; n++; }
+      if (c.clientId === num && c.status === 'pendiente') {
+        c.status = status;
+        if (agente) c.porAgente = String(agente).replace(/\D/g, '');
+        n++;
+      }
     }
     if (n) schedulePersist();
     return n;
   } catch (e) { return 0; }
+}
+
+// Quién gestionó por última vez el caso de este cliente ('' si no se sabe).
+function quienGestiono(clientId) {
+  const num = String(clientId).replace(/\D/g, '');
+  for (const c of caseLog) if (c.clientId === num && c.porAgente) return c.porAgente;
+  return '';
 }
 
 // Fecha 'YYYY-MM-DD' en zona horaria de Oaxaca (el server corre en UTC).
@@ -2617,6 +2631,25 @@ async function notifyOtherAgents(exceptAgent, text) {
     }
   }
 }
+/**
+ * Cómo se nombra a un asesor en los avisos entre asesores.
+ *
+ * Antes decían solo "otro asesor", y con varios en el equipo eso no ayudaba:
+ * había que preguntar por el grupo quién había tomado el caso. Ahora va el
+ * número, y el nombre delante si el bot lo conoce (lo guarda solo, del perfil
+ * de WhatsApp, la primera vez que ese asesor le escribe).
+ *
+ * El número se muestra siempre, aunque haya nombre: es lo que sirve para
+ * buscarlo en la agenda o marcarle.
+ */
+function describeAgent(num) {
+  const limpio = _normAgentNum(num);
+  if (!limpio) return 'otro asesor';
+  const perfil = getProfile(limpio);
+  const nombre = perfil?.name && perfil.name !== 'Usuario' ? perfil.name : '';
+  return nombre ? `${nombre} (${limpio})` : limpio;
+}
+
 // ¿Qué asesor está atendiendo (relay) a este cliente? '' si ninguno.
 function agentHandling(clientId) {
   const c = String(clientId);
@@ -2795,14 +2828,14 @@ async function handleAgentCommand(agentNumber, text) {
     if (otro && otro !== agentNumber) {
       const cName = nameOf(getProfile(clientId), clientId);
       await sendWhatsAppMessage(agentNumber,
-        `🙋 *${cName}* (${clientId}) ya lo está atendiendo otro asesor. Si necesitas tomarlo tú, pídele que lo cierre con *LIBERAR ${clientId}*.`);
+        `🙋 *${cName}* (${clientId}) ya lo está atendiendo *${describeAgent(otro)}*. Si necesitas tomarlo tú, pídele que lo cierre con *LIBERAR ${clientId}*.`);
       return;
     }
 
     pauseChat(clientId, 4);
     agentActiveCases.set(agentNumber, clientId);
     pendingAgentRequests.delete(clientId); // ya lo está atendiendo un asesor
-    markCases(clientId, 'atendido');
+    markCases(clientId, 'atendido', agentNumber);
     schedulePersist();
     const clientProfile = getProfile(clientId);
     const clientName = nameOf(clientProfile, clientId);
@@ -2821,7 +2854,7 @@ async function handleAgentCommand(agentNumber, text) {
     });
     // Avisa a los demás asesores que este caso ya fue tomado (sus botones ya no aplican).
     await notifyOtherAgents(agentNumber,
-      `🔒 El caso de *${clientName}* (${clientId}) ya fue *tomado por otro asesor*.\nLos botones de ese caso ya no aplican. 🙅`);
+      `🔒 El caso de *${clientName}* (${clientId}) ya fue *tomado por ${describeAgent(agentNumber)}*.\nLos botones de ese caso ya no aplican. 🙅`);
     return;
   }
 
@@ -2832,7 +2865,7 @@ async function handleAgentCommand(agentNumber, text) {
     unpauseChat(clientId);
     agentActiveCases.delete(agentNumber);
     pendingAgentRequests.delete(clientId);
-    markCases(clientId, 'atendido');
+    markCases(clientId, 'atendido', agentNumber);
     schedulePersist();
     try {
       await sendWhatsAppMessage(clientId,
@@ -2851,13 +2884,18 @@ async function handleAgentCommand(agentNumber, text) {
     // Si OTRO asesor ya lo está atendiendo, no lo tocamos (él lo cierra).
     const dueño = agentHandling(clientId);
     if (dueño && dueño !== agentNumber) {
-      await sendWhatsAppMessage(agentNumber, `🔒 *${cName}* (${clientId}) ya lo está atendiendo otro asesor. No hice nada.`);
+      await sendWhatsAppMessage(agentNumber, `🔒 *${cName}* (${clientId}) ya lo está atendiendo *${describeAgent(dueño)}*. No hice nada.`);
       return;
     }
     // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
-    const marcados = markCases(clientId, 'recibido');
+    const marcados = markCases(clientId, 'recibido', agentNumber);
     if (!marcados && !pendingAgentRequests.has(clientId)) {
-      await sendWhatsAppMessage(agentNumber, `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por otro asesor.`);
+      // Si quedó anotado quién lo gestionó, se dice; si es un caso viejo de
+      // antes de que se guardara, se queda en el genérico de siempre.
+      const quien = quienGestiono(clientId);
+      await sendWhatsAppMessage(agentNumber, quien
+        ? `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por *${describeAgent(quien)}*.`
+        : `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por otro asesor.`);
       return;
     }
     pendingAgentRequests.delete(clientId);
@@ -2867,7 +2905,7 @@ async function handleAgentCommand(agentNumber, text) {
     } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
     await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
     // Avisa a los demás asesores que este caso ya fue gestionado.
-    await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por otro asesor.`);
+    await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por *${describeAgent(agentNumber)}*.`);
     return;
   }
 
