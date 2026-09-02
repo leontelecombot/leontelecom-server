@@ -426,6 +426,20 @@ const statedTitular = new Map(); // cliente dijo "a nombre de X" -> chatId -> { 
 let caseLog = []; // [{id, ts, clientId, name, type, resumen, imageUrl, docUrl, offHours, status}]
 const CASE_LOG_MAX = 400;
 let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matutino enviado
+/*
+ * Última vez que CADA asesor le escribió al bot (número → ISO).
+ *
+ * WhatsApp solo deja mandarle mensajes normales a quien te escribió en las
+ * últimas 24 h. Esa cuenta la reinicia SOLO lo que el asesor manda: que el bot
+ * le escriba no sirve de nada. Por eso hay que saber cuándo fue la última vez,
+ * para poder tocarle el hombro ANTES de que se cierre la ventana en vez de
+ * descubrirlo cuando ya se perdió un aviso.
+ *
+ * Se persiste: Render reinicia seguido, y si esto se perdiera el bot no sabría
+ * si la ventana está por cerrarse.
+ */
+let agentLastInbound = new Map(); // num → ISO del último mensaje del asesor
+let agentPingSent = new Map();    // num → ISO del último recordatorio enviado (uno por ventana)
 let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
 // Bitácora de corridas del aviso de corte: una línea por día, para ver de un vistazo
@@ -840,6 +854,14 @@ async function sendWhatsAppTemplate(to, message, opts = {}) {
   const components = [];
   if (opts.imageUrl) components.push({ type: 'header', parameters: [{ type: 'image', image: { link: opts.imageUrl } }] });
   components.push({ type: 'body', parameters: [{ type: 'text', text: param }] });
+  // Botón de respuesta rápida. Solo funciona si la plantilla aprobada en Meta
+  // YA trae ese botón definido; si no, Meta rechaza el envío.
+  if (opts.buttonPayload) {
+    components.push({
+      type: 'button', sub_type: 'quick_reply', index: '0',
+      parameters: [{ type: 'payload', payload: String(opts.buttonPayload) }]
+    });
+  }
   const res = await fetch(`https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
@@ -1113,6 +1135,8 @@ function buildStateSnapshot() {
     promoBanners: promoBanners,
     caseLog: caseLog.slice(0, CASE_LOG_MAX),
     lastDigestDate: lastDigestDate,
+    agentLastInbound: mapToObj(agentLastInbound),
+    agentPingSent: mapToObj(agentPingSent),
     corteReminders: corteReminders,
     lastCorteRunDate: lastCorteRunDate,
     corteRunLog: corteRunLog.slice(0, CORTE_RUN_LOG_MAX),
@@ -1179,6 +1203,8 @@ function hydrateState(s) {
   if (s.pendingAgentRequests) for (const [k, v] of Object.entries(s.pendingAgentRequests)) pendingAgentRequests.set(k, { ...v, since: new Date(v.since) });
   if (Array.isArray(s.caseLog)) caseLog = s.caseLog.slice(0, CASE_LOG_MAX);
   if (typeof s.lastDigestDate === 'string') lastDigestDate = s.lastDigestDate;
+  if (s.agentLastInbound && typeof s.agentLastInbound === 'object') agentLastInbound = new Map(Object.entries(s.agentLastInbound));
+  if (s.agentPingSent && typeof s.agentPingSent === 'object') agentPingSent = new Map(Object.entries(s.agentPingSent));
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
@@ -3001,6 +3027,73 @@ async function deliverPendingCases(agentNumber) {
 
 // Al abrir la oficina: resumen de los casos que siguen pendientes (sobre todo
 // los que llegaron fuera de horario y se pudieron perder entre los chats).
+// ==================== MANTENER ABIERTA LA VENTANA DE 24 H ====================
+// Plantilla propia para este recordatorio (debe traer UN botón de respuesta
+// rápida). Si no está configurada, se usa la de avisos, que llega igual pero
+// sin botón: entonces hay que contestarle al bot a mano para reabrir.
+const WHATSAPP_VENTANA_TEMPLATE = process.env.WHATSAPP_VENTANA_TEMPLATE || '';
+const VENTANA_MS = 24 * 3600 * 1000;
+const VENTANA_AVISAR_ANTES_MS = 2 * 3600 * 1000; // tocarle el hombro 2 h antes
+
+/**
+ * Le recuerda al asesor que toque el botón antes de que se cierre su ventana.
+ *
+ * El problema de fondo: WhatsApp solo deja mandar avisos normales a quien te
+ * escribió en las últimas 24 h, y esa cuenta la reinicia SOLO lo que el asesor
+ * manda. Que el bot le escriba no cuenta. Así que si pasa un día sin que él le
+ * escriba al bot, los avisos de clientes empiezan a rebotar.
+ *
+ * La plantilla por sí sola tampoco reabre nada — pero el TOQUE del botón sí,
+ * porque para WhatsApp eso es un mensaje del asesor. De ahí que el recordatorio
+ * lleve botón: un toque y quedan otras 24 h.
+ *
+ * Es preventivo; el reintento con plantilla al fallar un aviso sigue estando
+ * como red por debajo.
+ */
+async function sweepAgentWindow() {
+  try {
+    if (!AGENT_WHATSAPP_NUMBERS.length) return;
+    // Nunca de madrugada: un recordatorio a las 3 a.m. nadie lo va a tocar y
+    // solo despierta a alguien. Entre 8:00 y 21:00 de México.
+    const { minutesOfDay } = mexicoNow();
+    if (minutesOfDay < 480 || minutesOfDay > 1260) return;
+
+    const ahora = Date.now();
+    for (const num of AGENT_WHATSAPP_NUMBERS) {
+      const ultimo = agentLastInbound.get(num);
+      // Sin dato = nunca ha escrito, o se perdió en un reinicio. Se asume lo
+      // peor (ventana cerrada) y se le avisa: equivocarse hacia el aviso de más
+      // cuesta un mensaje; equivocarse al revés cuesta perder el de un cliente.
+      const quedaAbierta = ultimo ? (new Date(ultimo).getTime() + VENTANA_MS) - ahora : -1;
+      if (quedaAbierta > VENTANA_AVISAR_ANTES_MS) continue;
+
+      // Como mucho un recordatorio al día, aunque nunca conteste.
+      const previo = agentPingSent.get(num);
+      if (previo && ahora - new Date(previo).getTime() < VENTANA_MS) continue;
+
+      const horas = quedaAbierta > 0 ? Math.max(1, Math.round(quedaAbierta / 3600000)) : 0;
+      const texto = horas > 0
+        ? `Hola 👋 Para seguir recibiendo los avisos de clientes al instante, toca el botón de abajo. Tu conexión con el bot se cierra en ~${horas} h y después los avisos se retrasan.`
+        : 'Hola 👋 Tu conexión con el bot se cerró, así que los avisos de clientes te van a llegar tarde. Toca el botón de abajo para reactivarla ahora.';
+
+      try {
+        if (WHATSAPP_VENTANA_TEMPLATE) {
+          await sendWhatsAppTemplate(num, texto, { templateName: WHATSAPP_VENTANA_TEMPLATE, buttonPayload: 'VENTANA_OK' });
+        } else {
+          // Sin plantilla propia: la de avisos llega, pero sin botón. Se le pide
+          // que conteste cualquier cosa, que para WhatsApp vale igual que el toque.
+          await sendWhatsAppTemplate(num, `${texto} (Responde cualquier cosa a este chat.)`);
+        }
+        agentPingSent.set(num, new Date().toISOString());
+        schedulePersist();
+        console.log(`[ventana] Recordatorio enviado a ${num} (quedaban ${horas} h)`);
+      } catch (e) {
+        console.error('[ventana] No se pudo enviar el recordatorio a', num, ':', e.message);
+      }
+    }
+  } catch (e) { console.error('[ventana] sweep error:', e.message); }
+}
+
 async function sweepMorningDigest() {
   try {
     if (!AGENT_WHATSAPP_NUMBERS.length && !(AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE)) return;
@@ -4838,6 +4931,19 @@ app.post('/webhook/whatsapp', async (req, res) => {
   // Métrica: cuenta conversaciones únicas por día (no cuenta a los asesores).
   if (!isAgentNumber(from)) { try { trackConversation(from); } catch (_) {} }
 
+  /*
+   * Cada vez que un asesor escribe (lo que sea: texto, botón, foto), WhatsApp
+   * reabre la ventana de 24 h para poder mandarle avisos normales. Se anota
+   * aquí para saber cuándo está por cerrarse y avisarle antes, y se borra el
+   * recordatorio pendiente porque ya no hace falta.
+   */
+  if (isAgentNumber(from)) {
+    const num = _normAgentNum(from);
+    agentLastInbound.set(num, new Date().toISOString());
+    agentPingSent.delete(num);
+    schedulePersist();
+  }
+
   // Save WhatsApp profile name if we don't know this client yet
   if (contactName && contactName !== 'Usuario') {
     const existing = getProfile(from);
@@ -4893,6 +4999,27 @@ app.post('/webhook/whatsapp', async (req, res) => {
   }
 
   // Handle interactive button/list replies (user tapped a button)
+  /*
+   * Botón de una PLANTILLA. Llega distinto a los botones normales: como
+   * `type: 'button'` con `button.payload`, no como `type: 'interactive'`.
+   * No estaba contemplado, así que un toque en una plantilla se ignoraba por
+   * completo. Importa ahora que el recordatorio de ventana usa un botón.
+   */
+  if (msg.type === 'button') {
+    const payload = msg.button?.payload || msg.button?.text || '';
+    console.log(`[WhatsApp] Botón de plantilla: "${payload}" from=${from}`);
+    if (payload === 'VENTANA_OK') {
+      // El toque en sí ya reabrió la ventana (arriba se anotó el inbound).
+      await sendWhatsAppMessage(from, '👍 Listo, seguirás recibiendo los avisos al instante durante las próximas 24 horas.');
+      return;
+    }
+    if (payload) {
+      if (isAgentNumber(from)) await handleAgentCommand(from, payload);
+      else await handleChatMessage(from, payload, sendWhatsAppMessage);
+    }
+    return;
+  }
+
   if (msg.type === 'interactive') {
     const itype = msg.interactive?.type;
     let replyId = '';
@@ -6191,6 +6318,9 @@ const port = Number(process.env.PORT || 3000);
 
   // 3c) Resumen matutino de casos pendientes al asesor (al abrir la oficina)
   setInterval(() => sweepMorningDigest().catch(() => {}), 60000);
+  // Ventana de 24 h del asesor: se revisa cada 30 min (no hace falta más fino,
+  // el aviso sale con 2 h de anticipación).
+  setInterval(() => sweepAgentWindow().catch(() => {}), 30 * 60000);
 
   // 3d) Recordatorio de fecha de corte (un día antes, por plantilla de utilidad).
   // Primer intento a los 45 s: en Render gratis la instancia despierta con el primer
