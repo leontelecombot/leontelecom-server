@@ -2538,11 +2538,35 @@ function agentQueue(num, fn) {
   return next;
 }
 
-// Envía un mensaje a TODOS los números de asesor configurados.
+// Avisa a TODOS los asesores. Si el envío normal falla, reintenta con plantilla.
+//
+// Sin ese plan B se perdían avisos en silencio: WhatsApp solo deja mandar
+// mensajes normales a quien te escribió en las últimas 24 h, así que si el
+// asesor llevaba un día sin hablarle al bot, Meta rechazaba el aviso, el error
+// se quedaba en la consola y nadie se enteraba. Pasó de verdad: un cliente
+// escribió a las 5 de la tarde y el asesor no supo hasta las 10 de la mañana
+// siguiente, cuando el resumen matutino —que sí tenía este plan B— lo rescató.
+//
+// La plantilla no admite botones, así que en ese caso se explica cómo responder
+// por texto (el bot ya entiende RECIBIDO / ATENDER escritos a mano).
 async function sendToAllAgents(text, media = [], opts = {}) {
   await Promise.all(AGENT_WHATSAPP_NUMBERS.map(num => agentQueue(num, async () => {
     try { await sendWhatsAppMessage(num, text, media, opts); }
-    catch (e) { console.error('[notify wa]', num, e.message); }
+    catch (e) {
+      console.warn('[notify wa] Envío normal falló a', num, '(¿ventana de 24h?), probando plantilla:', e.message);
+      try {
+        await sendWhatsAppTemplate(num, `${text}\n\nResponde: RECIBIDO [número] o ATENDER [número].`);
+        console.log('[notify wa] Rescatado por plantilla a', num);
+      } catch (e2) {
+        // Si TAMBIÉN falló la plantilla (p. ej. WHATSAPP_AVISO_TEMPLATE sin
+        // configurar), el aviso se perdería sin que nadie lo note: justo lo que
+        // causó este problema. Al menos que quede a la vista.
+        console.error('[notify wa] Plantilla también falló a', num, ':', e2.message);
+        alertAdmin('aviso-no-entregado',
+          `No pude avisarte de un caso por WhatsApp (${num}). Falló el envío normal y también la plantilla. ` +
+          `El caso NO se perdió: está en el panel y en el resumen de mañana. Revisa WHATSAPP_AVISO_TEMPLATE.`);
+      }
+    }
   })));
 }
 // Reenvía un documento a TODOS los asesores.
@@ -2557,7 +2581,14 @@ async function notifyOtherAgents(exceptAgent, text) {
   const ex = _normAgentNum(exceptAgent);
   for (const num of AGENT_WHATSAPP_NUMBERS) {
     if (num === ex) continue;
-    try { await sendWhatsAppMessage(num, text); } catch (e) { console.error('[notify other]', num, e.message); }
+    try { await sendWhatsAppMessage(num, text); }
+    catch (e) {
+      // Mismo plan B que en sendToAllAgents: sin esto, el asesor que lleva más
+      // de 24 h sin escribirle al bot nunca se entera de que otro ya tomó el caso.
+      console.warn('[notify other] Envío normal falló a', num, '(¿ventana de 24h?), probando plantilla:', e.message);
+      try { await sendWhatsAppTemplate(num, text); }
+      catch (e2) { console.error('[notify other] Plantilla también falló a', num, ':', e2.message); }
+    }
   }
 }
 // ¿Qué asesor está atendiendo (relay) a este cliente? '' si ninguno.
