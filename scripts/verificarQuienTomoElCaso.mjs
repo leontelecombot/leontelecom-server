@@ -2,9 +2,9 @@
  * Decir QUIÉN tomó el caso, no "otro asesor".
  *
  * Con un solo asesor daba igual. Con varios, "lo tomó otro asesor" obliga a
- * preguntar por el grupo quién fue. Ahora va el número —y el nombre delante
- * si el bot lo conoce, que lo guarda solo del perfil de WhatsApp la primera
- * vez que ese asesor le escribe.
+ * preguntar por el grupo quién fue. Ahora va el número, que es con lo que se
+ * le busca en la agenda o se le marca. A propósito NO va el nombre, aunque el
+ * bot lo tenga guardado: se pidió así.
  *
  * Se comprueba también algo que importa más: que ninguno de esos mensajes
  * salga hacia un CLIENTE. Son avisos entre asesores; mandarle a un cliente el
@@ -40,52 +40,49 @@ function extraerFuncion(nombre, tipo = 'function') {
 }
 
 // ── describeAgent: cómo se nombra a un asesor ───────────────────────────────
-function armarDescribeAgent(perfiles) {
+function armarDescribeAgent() {
   const cuerpo = extraerFuncion('describeAgent');
-  return new Function('_normAgentNum', 'getProfile',
+  return new Function('_normAgentNum',
     `${cuerpo}; return describeAgent;`
-  )(
-    (raw) => String(raw || '').replace(/\D/g, ''),
-    (num) => perfiles[num] || null
-  );
+  )((raw) => String(raw || '').replace(/\D/g, ''));
 }
 
-console.log('\n=== 1. CON NOMBRE CONOCIDO: NOMBRE Y NÚMERO ===');
+console.log('\n=== 1. DICE EL NÚMERO, NO UN NOMBRE ===');
 {
-  const d = armarDescribeAgent({ '5219511697346': { name: 'Manuel' } });
+  const d = armarDescribeAgent();
   const r = d('5219511697346');
-  /Manuel/.test(r) ? OK('pone el nombre') : MAL('sin nombre: ' + r);
-  /5219511697346/.test(r) ? OK('y el número, que es con lo que se le marca') : MAL('sin número: ' + r);
+  /el asesor con el número/.test(r) ? OK('lo nombra por su número') : MAL('dice: ' + r);
+  /5219511697346/.test(r) ? OK('y el número está completo') : MAL('sin número: ' + r);
 }
 
-console.log('\n=== 2. SIN NOMBRE: AL MENOS EL NÚMERO ===');
+console.log('\n=== 2. NO SE CUELA NINGÚN NOMBRE ===');
 {
-  const d = armarDescribeAgent({});
-  const r = d('5219511697346');
-  r === '5219511697346' ? OK('cae al número solo') : MAL('devolvió: ' + r);
+  // Se pidió expresamente que no aparezcan nombres, aunque el bot los tenga
+  // guardados del perfil de WhatsApp.
+  const cuerpo = extraerFuncion('describeAgent');
+  !/getProfile|\.name/.test(cuerpo)
+    ? OK('la función ni siquiera consulta nombres')
+    : MAL('sigue leyendo el nombre del perfil');
 }
 
-console.log('\n=== 3. "Usuario" NO CUENTA COMO NOMBRE ===');
+console.log('\n=== 3. LIMPIA LO QUE NO SEAN DÍGITOS ===');
 {
-  // Es el relleno que pone WhatsApp cuando no hay nombre de perfil: mostrarlo
-  // sería peor que no mostrar nada.
-  const d = armarDescribeAgent({ '5219511697346': { name: 'Usuario' } });
-  const r = d('5219511697346');
-  !/Usuario/.test(r) ? OK('no muestra el relleno "Usuario"') : MAL('lo mostró: ' + r);
+  const d = armarDescribeAgent();
+  /521 9511697346|5219511697346/.test(d('+52 1 951 169 7346'))
+    ? OK('un número con espacios y + sale limpio') : MAL('salió: ' + d('+52 1 951 169 7346'));
 }
 
 console.log('\n=== 4. NÚMERO INVÁLIDO: NO REVIENTA ===');
 {
-  const d = armarDescribeAgent({});
-  const r = d('');
-  r === 'otro asesor' ? OK('cae al genérico de siempre, sin romperse') : MAL('devolvió: ' + r);
+  const d = armarDescribeAgent();
+  d('') === 'otro asesor' ? OK('cae al genérico de siempre, sin romperse') : MAL('devolvió: ' + d(''));
 }
 
 console.log('\n=== 5. LOS MENSAJES YA NO DICEN "otro asesor" A SECAS ===');
 {
   const casos = [
     ['ya lo está atendiendo', 'cuando pides un caso que otro tiene'],
-    ['ya fue \\*tomado por', 'cuando alguien toma un caso (aviso a los demás)'],
+    ['ya fue tomado por', 'cuando alguien toma un caso (aviso a los demás)'],
     ['ya fue \\*marcado como recibido\\*', 'cuando alguien lo marca recibido'],
   ];
   for (const [patron, desc] of casos) {

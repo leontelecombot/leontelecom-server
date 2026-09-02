@@ -2636,18 +2636,15 @@ async function notifyOtherAgents(exceptAgent, text) {
  *
  * Antes decían solo "otro asesor", y con varios en el equipo eso no ayudaba:
  * había que preguntar por el grupo quién había tomado el caso. Ahora va el
- * número, y el nombre delante si el bot lo conoce (lo guarda solo, del perfil
- * de WhatsApp, la primera vez que ese asesor le escribe).
+ * número, que es con lo que se le busca en la agenda o se le marca.
  *
- * El número se muestra siempre, aunque haya nombre: es lo que sirve para
- * buscarlo en la agenda o marcarle.
+ * A propósito NO se muestra el nombre, aunque el bot lo tenga guardado: se
+ * pidió así, y el número es el dato que de verdad sirve para localizarlo.
  */
 function describeAgent(num) {
   const limpio = _normAgentNum(num);
   if (!limpio) return 'otro asesor';
-  const perfil = getProfile(limpio);
-  const nombre = perfil?.name && perfil.name !== 'Usuario' ? perfil.name : '';
-  return nombre ? `${nombre} (${limpio})` : limpio;
+  return `el asesor con el número *${limpio}*`;
 }
 
 // ¿Qué asesor está atendiendo (relay) a este cliente? '' si ninguno.
@@ -2828,7 +2825,7 @@ async function handleAgentCommand(agentNumber, text) {
     if (otro && otro !== agentNumber) {
       const cName = nameOf(getProfile(clientId), clientId);
       await sendWhatsAppMessage(agentNumber,
-        `🙋 *${cName}* (${clientId}) ya lo está atendiendo *${describeAgent(otro)}*. Si necesitas tomarlo tú, pídele que lo cierre con *LIBERAR ${clientId}*.`);
+        `🙋 *${cName}* (${clientId}) ya lo está atendiendo ${describeAgent(otro)}. Si necesitas tomarlo tú, pídele que lo cierre con *LIBERAR ${clientId}*.`);
       return;
     }
 
@@ -2854,7 +2851,7 @@ async function handleAgentCommand(agentNumber, text) {
     });
     // Avisa a los demás asesores que este caso ya fue tomado (sus botones ya no aplican).
     await notifyOtherAgents(agentNumber,
-      `🔒 El caso de *${clientName}* (${clientId}) ya fue *tomado por ${describeAgent(agentNumber)}*.\nLos botones de ese caso ya no aplican. 🙅`);
+      `🔒 El caso de *${clientName}* (${clientId}) ya fue tomado por ${describeAgent(agentNumber)}.\nLos botones de ese caso ya no aplican. 🙅`);
     return;
   }
 
@@ -2884,7 +2881,7 @@ async function handleAgentCommand(agentNumber, text) {
     // Si OTRO asesor ya lo está atendiendo, no lo tocamos (él lo cierra).
     const dueño = agentHandling(clientId);
     if (dueño && dueño !== agentNumber) {
-      await sendWhatsAppMessage(agentNumber, `🔒 *${cName}* (${clientId}) ya lo está atendiendo *${describeAgent(dueño)}*. No hice nada.`);
+      await sendWhatsAppMessage(agentNumber, `🔒 *${cName}* (${clientId}) ya lo está atendiendo ${describeAgent(dueño)}. No hice nada.`);
       return;
     }
     // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
@@ -2894,7 +2891,7 @@ async function handleAgentCommand(agentNumber, text) {
       // antes de que se guardara, se queda en el genérico de siempre.
       const quien = quienGestiono(clientId);
       await sendWhatsAppMessage(agentNumber, quien
-        ? `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por *${describeAgent(quien)}*.`
+        ? `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por ${describeAgent(quien)}.`
         : `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por otro asesor.`);
       return;
     }
@@ -2905,7 +2902,7 @@ async function handleAgentCommand(agentNumber, text) {
     } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
     await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
     // Avisa a los demás asesores que este caso ya fue gestionado.
-    await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por *${describeAgent(agentNumber)}*.`);
+    await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por ${describeAgent(agentNumber)}.`);
     return;
   }
 
