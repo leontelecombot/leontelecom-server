@@ -7,6 +7,19 @@ const multer = require('multer');
 const { analyzePaymentReceipt } = require('./utils/imageAnalysis');
 const dataManager = require('./utils/dataManager');
 const persistence = require('./utils/persistence');
+const stripeLeon = require('./utils/stripeLeon');
+const wisphubReactivar = require('./utils/wisphubReactivar');
+
+/*
+ * MAQUETA — cobro automático con tarjeta/OXXO.
+ *
+ * Solo este número ve el botón de pagar con tarjeta y puede usarlo; para todos
+ * los demás clientes el flujo sigue siendo exactamente el de siempre
+ * (transferencia/depósito + comprobante por foto, revisado por un asesor).
+ * ⚠️ Quitar este candado —o convertirlo en una lista— cuando se decida abrir
+ * el cobro con tarjeta a más clientes.
+ */
+const TELEFONO_PILOTO_STRIPE = '529516549145';
 
 // Compresión de imágenes: se carga PEREZOSAMENTE (solo al primer upload), para no
 // pesar en el arranque ni en la memoria del servidor cuando no se usa.
@@ -1165,9 +1178,32 @@ function buildStateSnapshot() {
     // está caído, el bot arrancaba SIN NINGÚN cliente (no reconocía a nadie, ni corte,
     // ni estados de cuenta). Con esto restaura la última lista buena y sigue operando.
     wisphubClientes: Object.fromEntries(wisphubClients),
-    wisphubClientesAl: lastWisphubSync || null
+    wisphubClientesAl: lastWisphubSync || null,
+    // La CLABE de cada cliente: se guarda porque no puede cambiar nunca.
+    stripeClientes: Object.fromEntries(stripeClientes),
+    // Para cazar pagos dobles entre canales tras un reinicio de Render.
+    stripePagosRecientes: Object.fromEntries(stripePagosRecientes),
+    stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX)
   };
 }
+
+/*
+ * Qué cliente de Stripe es cada teléfono, y qué CLABE se le entregó.
+ *
+ * Se persiste con el resto del estado porque la CLABE tiene que ser la MISMA
+ * para siempre: el cliente ya la anotó en su banco. Si esto se perdiera en un
+ * reinicio, la búsqueda en Stripe es el respaldo, pero esa búsqueda tarda en
+ * indexar y podría crear un cliente duplicado con otra CLABE. El registro es lo
+ * que hace que eso no pase nunca.
+ */
+const stripeClientes = new Map();
+stripeLeon.usarRegistro({
+  obtener: (tel) => stripeClientes.get(String(tel)) || null,
+  guardar: (tel, datos) => {
+    stripeClientes.set(String(tel), datos);
+    schedulePersist();
+  },
+});
 
 // Restaura las colecciones desde lo guardado (al arrancar el servidor).
 function hydrateState(s) {
@@ -1180,6 +1216,17 @@ function hydrateState(s) {
     if (wisphubClients.size) console.log(`[Wisphub] Lista restaurada del respaldo: ${wisphubClients.size} clientes (del ${String(s.wisphubClientesAl || '').slice(0, 16)})`);
   }
   if (Array.isArray(s.wisphubLog)) wisphubLog = s.wisphubLog.slice(0, WISPHUB_LOG_MAX);
+  if (s.stripeClientes && typeof s.stripeClientes === 'object') {
+    for (const [k, v] of Object.entries(s.stripeClientes)) stripeClientes.set(String(k), v);
+  }
+  if (Array.isArray(s.stripeRegistrosPendientes)) {
+    stripeRegistrosPendientes = s.stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX);
+  }
+  if (s.stripePagosRecientes && typeof s.stripePagosRecientes === 'object') {
+    for (const [k, v] of Object.entries(s.stripePagosRecientes)) {
+      if (Array.isArray(v)) stripePagosRecientes.set(String(k), v);
+    }
+  }
   const fill = (map, obj) => { if (obj) for (const [k, v] of Object.entries(obj)) map.set(k, v); };
   fill(clientProfiles, s.clientProfiles);
   fill(manualClients, s.manualClients);
@@ -3129,6 +3176,49 @@ async function sweepAgentWindow() {
   } catch (e) { console.error('[ventana] sweep error:', e.message); }
 }
 
+/**
+ * Quita de la lista los pagos que alguien ya registró en Wisphub.
+ *
+ * Se pregunta por el estado real en vez de confiar en la memoria: la oficina
+ * puede marcar una factura desde el panel de Wisphub sin que este sistema se
+ * entere. Si no se comprobara, la lista de la mañana repetiría cosas ya hechas
+ * y en pocos días nadie la leería.
+ *
+ * Si Wisphub no contesta, se conserva la lista tal cual: es mejor pedir de más
+ * que perder el rastro de un pago que ya entró.
+ */
+async function depurarRegistrosPendientes() {
+  if (!stripeRegistrosPendientes.length) return [];
+  if (!WISPHUB_API_KEY) return stripeRegistrosPendientes;
+
+  const vivos = [];
+  for (const r of stripeRegistrosPendientes) {
+    // El saldo a favor no tiene factura que consultar: se queda hasta que
+    // alguien lo aplique, y se suelta solo a los 30 días para no crecer sin fin.
+    if (r.tipo !== 'factura' || !r.factura) {
+      if (Date.now() - r.cuando < 30 * 24 * 3600 * 1000) vivos.push(r);
+      continue;
+    }
+    try {
+      const res = await wisphubFetch(`${WISPHUB_API_URL}/api/facturas/${r.factura}/?format=json`,
+        { headers: { Authorization: `Api-Key ${WISPHUB_API_KEY}` } }, 'digest: revisar factura');
+      if (!res.ok) { vivos.push(r); continue; }
+      const f = await res.json();
+      const yaPagada = String(f.estado || '').toLowerCase().includes('pagada');
+      if (!yaPagada) vivos.push(r);
+      else console.log(`[digest] factura ${r.factura} ya fue registrada, sale de la lista`);
+    } catch (e) {
+      console.warn('[digest] no se pudo revisar la factura', r.factura, '·', e.message);
+      vivos.push(r);
+    }
+  }
+  if (vivos.length !== stripeRegistrosPendientes.length) {
+    stripeRegistrosPendientes = vivos;
+    schedulePersist();
+  }
+  return vivos;
+}
+
 async function sweepMorningDigest() {
   try {
     if (!AGENT_WHATSAPP_NUMBERS.length && !(AGENT_NOTIFY_CHAT_ID && TELEGRAM_API_BASE)) return;
@@ -3145,23 +3235,58 @@ async function sweepMorningDigest() {
 
     const cutoff = Date.now() - 36 * 3600 * 1000; // casos de las últimas 36 horas
     const pend = caseLog.filter(c => c.status === 'pendiente' && new Date(c.ts).getTime() >= cutoff);
-    if (!pend.length) return; // sin pendientes, no molestamos
+
+    /*
+     * Antes de pedir que marquen facturas, se comprueba cuáles YA se marcaron.
+     *
+     * Alguien pudo haberlo hecho ayer desde el panel de Wisphub sin pasar por
+     * aquí. Pedirle a la oficina que vuelva a marcar algo ya hecho es la forma
+     * más rápida de que dejen de leer la lista, y entonces se pierde la que sí
+     * importaba.
+     */
+    const registros = await depurarRegistrosPendientes();
+    if (!pend.length && !registros.length) return; // nada que reportar, no molestamos
 
     const fmtHora = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
     const lines = pend.slice(0, 15).map(c =>
       `${CASE_TYPE_EMOJI[c.type] || '•'}${c.offHours ? ' 🌙' : ''} *${c.name}* (${c.clientId}) — ${fmtHora.format(new Date(c.ts))}\n   ${c.resumen.slice(0, 140)}`
     );
-    const msg = [
-      `☀️ ¡Buenos días! Tienes *${pend.length} caso${pend.length === 1 ? '' : 's'} pendiente${pend.length === 1 ? '' : 's'}*:`,
-      '(🌙 = llegó fuera de horario)',
+    /*
+     * Los pagos que entraron solos y que alguien tiene que registrar.
+     *
+     * Va con el monto y el número de factura para que sea buscar y marcar, no
+     * investigar. Y se dice POR QUÉ urge: con la factura pendiente, a alguien
+     * que ya pagó le siguen llegando avisos de corte y lo pueden volver a
+     * suspender.
+     */
+    const facturas = registros.filter((r) => r.tipo === 'factura');
+    const aFavor = registros.filter((r) => r.tipo === 'afavor');
+    const bloqueRegistros = !registros.length ? [] : [
       '',
-      ...lines,
-      pend.length > 15 ? `…y ${pend.length - 15} más.` : '',
+      `💰 *${registros.length} pago${registros.length === 1 ? '' : 's'} por registrar en Wisphub*`,
+      '(ya se les reactivó el servicio; falta marcar su factura o su saldo a favor)',
       '',
-      'Toca *📥 Ver casos* para bajarlos uno por uno con sus botones, o responde *RECIBIDO [número]* / *ATENDER [número]*.'
-    ].filter(Boolean).join('\n');
-    await sendAgentMessageSafe(msg, { buttons: [{ id: 'PENDIENTES', title: '📥 Ver casos' }] });
-    console.log(`[digest] Resumen matutino enviado: ${pend.length} casos pendientes`);
+      ...facturas.slice(0, 12).map((r) =>
+        `🧾 *${r.nombre}* — factura *#${r.factura}* · $${Number(r.total).toFixed(2)}`),
+      ...aFavor.slice(0, 6).map((r) =>
+        `⭐ *${r.nombre}* — $${Number(r.total).toFixed(2)} a favor (no debía nada)`),
+      ...registros.filter((r) => r.tipo === 'ambiguo').slice(0, 6).map((r) =>
+        `❓ *${r.nombre}* (${r.telefono}) — pagó, pero tiene varios servicios\n     ${r.detalle || ''}`),
+      registros.length > 18 ? `…y ${registros.length - 18} más.` : '',
+      '',
+      '⚠️ Mientras no se marquen, esos clientes siguen apareciendo con deuda y les pueden volver a cortar.',
+    ].filter(Boolean);
+
+    const encabezado = pend.length
+      ? [`☀️ ¡Buenos días! Tienes *${pend.length} caso${pend.length === 1 ? '' : 's'} pendiente${pend.length === 1 ? '' : 's'}*:`,
+         '(🌙 = llegó fuera de horario)', '', ...lines,
+         pend.length > 15 ? `…y ${pend.length - 15} más.` : '', '',
+         'Toca *📥 Ver casos* para bajarlos uno por uno con sus botones, o responde *RECIBIDO [número]* / *ATENDER [número]*.']
+      : ['☀️ ¡Buenos días! No hay casos pendientes de clientes.'];
+
+    const msg = [...encabezado, ...bloqueRegistros].filter(Boolean).join('\n');
+    await sendAgentMessageSafe(msg, pend.length ? { buttons: [{ id: 'PENDIENTES', title: '📥 Ver casos' }] } : {});
+    console.log(`[digest] Resumen matutino enviado: ${pend.length} casos · ${registros.length} pagos por registrar`);
   } catch (e) { console.error('[digest] sweep error:', e.message); }
 }
 
@@ -3880,12 +4005,158 @@ async function handleChatMessage(chatId, text, sendMsg) {
       await sendMsg(chatId, 'Cuando realices tu pago, mándanos tu *comprobante* (foto o PDF) por aquí y lo registramos. 🙌');
       return;
     }
-    // Intención de pago (o el "PAGAR" que sugiere el recordatorio de corte) → 2 botones.
+    // MAQUETA: pagar con tarjeta/OXXO por Stripe, sin mandar comprobante. Repite
+    // el candado del número piloto por si alguien manda el id del botón a mano.
+    if (_pt === 'pago_tarjeta') {
+      // Se repite el candado por si alguien manda el id del botón a mano: el
+      // menú es una sugerencia, esto es la puerta.
+      if (!stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+        await sendMsg(chatId, 'Esa opción todavía no está disponible para tu cuenta. Usa depósito/transferencia y manda tu comprobante como de costumbre. 🙌');
+        return;
+      }
+      try {
+        const c = wisphubClients.get(normalizePhone(chatId)) || {};
+
+        /*
+         * El monto sale de las FACTURAS PENDIENTES, no del campo `saldo`.
+         *
+         * `saldo` parece lo obvio y no lo es: en la instalación de León Telecom
+         * viene en 0.00 para 286 de cada 300 clientes, y negativo (saldo a
+         * favor) para otros 11. Cobrando por ahí, el botón le respondía "no veo
+         * saldo pendiente" a casi todo el mundo y la tarjeta no servía para
+         * nadie.
+         *
+         * La deuda de verdad es la suma de `total` de las facturas en estado
+         * Pendiente. Si Wisphub no contesta, se cae al plan del cliente antes
+         * que dejarlo sin poder pagar.
+         */
+        let monto = 0;
+        let deTexto = '';
+        try {
+          const d = await wisphubReactivar.deudaDelCliente(c.usuario || '');
+          monto = d.total;
+          deTexto = d.facturas.length > 1 ? ` (${d.facturas.length} mensualidades)` : '';
+        } catch (e) {
+          console.warn('[stripe-leon] no se pudo leer la deuda de', normalizePhone(chatId), '·', e.message);
+        }
+        if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;   // respaldo: su plan
+
+        if (monto <= 0) {
+          await sendMsg(chatId, 'No veo un saldo pendiente en tu cuenta ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏');
+          return;
+        }
+        const pago = await stripeLeon.generarLinkPago({
+          telefono: normalizePhone(chatId), monto, nombre: c.name, urlBase: SERVER_BASE_URL,
+        });
+        await sendMsg(chatId,
+          `💳 Aquí puedes pagar en línea, sin salir de tu casa:\n\n`
+          + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${deTexto}\n`
+          + `• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n`
+          + `• *Total: $${pago.total.toFixed(2)}*\n\n`
+          + `${pago.url}\n\n`
+          + `Puedes pagar con *tarjeta* o pedir tu *ficha para OXXO*. En cuanto se confirme te avisamos por aquí y tu servicio se reactiva solo — no hace falta comprobante.\n\n`
+          + `⏱️ Tienes 30 minutos para abrir el link. Si sacas ficha de OXXO, esa sí te dura varios días.\n\n`
+          + `⚠️ Si ya sacaste ficha de OXXO, *no transfieras además a tu CLABE*: se te cobraría dos veces.\n\n`
+          + `Si prefieres pagar como siempre, por depósito o transferencia directa, sigue siendo gratis: solo mándanos tu comprobante. 🙌`);
+      } catch (e) {
+        console.error('[stripe-leon] generando link:', e.message);
+        await sendMsg(chatId, 'No pude generar el link de pago ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
+      }
+      return;
+    }
+    /*
+     * "Otras formas": horario y datos de pago juntos.
+     *
+     * Existe porque con el cobro en línea encendido ya no caben cuatro botones.
+     * Nada se pierde: lo que antes eran dos opciones aquí es una sola respuesta
+     * con las dos cosas.
+     */
+    if (_pt === 'pago_otras') {
+      await sendMsg(chatId, buildBusinessHoursMessage() + '\n\n🏢 En oficina puedes pagar en *efectivo* o con *tarjeta* (presencial). ¡Te esperamos!');
+      const imgOtras = SERVER_BASE_URL ? [`${SERVER_BASE_URL}/images/metodosdepago.jpeg`] : [];
+      await sendMsg(chatId, '💳 Y estos son nuestros *datos de pago vigentes* (depósito o transferencia):', imgOtras);
+      await sendMsg(chatId, 'Si pagas por aquí, mándanos tu *comprobante* (foto o PDF) y lo registramos. 🙌');
+      return;
+    }
+    /*
+     * La CLABE fija del cliente.
+     *
+     * A diferencia del link —que vence en 32 minutos— esta cuenta es suya para
+     * siempre: la anota una vez en su banco y cada mes deposita ahí. Es la
+     * opción que de verdad le sirve a quien paga en ventanilla o por
+     * transferencia desde su app, que es como paga casi todo el pueblo.
+     */
+    if (_pt === 'pago_clabe') {
+      if (!stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+        await sendMsg(chatId, 'Esa opción todavía no está disponible para tu cuenta. Usa depósito/transferencia y manda tu comprobante como de costumbre. 🙌');
+        return;
+      }
+      try {
+        const tel = normalizePhone(chatId);
+        const c = wisphubClients.get(tel);
+
+        /*
+         * Solo a clientes de verdad.
+         *
+         * Antes bastaba con escribirle "pagar" al bot: con la lista abierta a
+         * todos, cualquiera obtenía una cuenta bancaria permanente y podía
+         * transferirle dinero a León Telecom que no se puede aplicar a ningún
+         * servicio. Ese dinero entra, no tiene dueño, y alguien tiene que
+         * devolverlo a mano.
+         *
+         * Si la lista de Wisphub está vacía —arrancó con Wisphub caído— se
+         * prefiere no entregar nada: es mejor un "ahorita no puedo" que una
+         * cuenta suelta.
+         */
+        if (!c || !c.name) {
+          await sendMsg(chatId, !wisphubClients.size
+            ? 'Ahorita no puedo consultar tu cuenta. Intenta en un rato, o paga como siempre por depósito/transferencia. 🙏'
+            : 'No encuentro un servicio a nombre de este número. Si eres cliente y ves esto, escríbele a un asesor para que lo revisemos. 🙏');
+          return;
+        }
+
+        const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name });
+        await sendMsg(chatId,
+          `🏦 Esta es *tu cuenta personal* para pagar tu internet:\n\n`
+          + `*CLABE:* ${datos.clabe}\n`
+          + (datos.banco ? `*Banco:* ${datos.banco}\n` : '')
+          + (datos.beneficiario ? `*A nombre de:* ${datos.beneficiario}\n` : '')
+          + `\nGuárdala en tu banco: *es tuya y no cambia nunca*. Cada mes transfiere ahí el monto de tu plan y tu pago se registra solo — no hace falta que mandes comprobante.\n\n`
+          + `Si transfieres desde tu app del banco, dala de alta una vez como cuenta frecuente y ya.\n\n`
+          + `Si vas a ventanilla y te preguntan a nombre de quién va, enséñales esta pantalla: la cuenta la administra el banco que procesa nuestros pagos. 🙌`);
+      } catch (e) {
+        console.error('[stripe-leon] CLABE:', e.message);
+        await sendMsg(chatId, 'No pude generar tu cuenta ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
+      }
+      return;
+    }
+    // Intención de pago (o el "PAGAR" que sugiere el recordatorio de corte) → botones.
     if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago)/.test(_pt)) {
-      await sendMsg(chatId, '💳 ¿Cómo quieres pagar? Elige una opción:', [], { buttons: [
-        { id: 'pago_horario', title: '🏢 Horario en oficina' },
-        { id: 'pago_datos', title: '💳 Datos de pago' }
-      ] });
+      /*
+       * WhatsApp solo muestra TRES botones y `sendWhatsAppMessage` corta el
+       * resto sin avisar. Por eso el menú se arma completo según el caso en vez
+       * de ir empujando opciones: con cuatro, la cuarta simplemente no
+       * aparecería y nadie sabría por qué.
+       *
+       * Los títulos también se cortan a 20 caracteres, así que van cortos a
+       * propósito.
+       */
+      // El cobro en línea se ofrece según el interruptor COBRO_LINEA_ACTIVO, no
+      // por una comparación fija: así se amplía o se apaga desde las variables
+      // de entorno, sin tocar código ni volver a desplegar. Vacío = solo el piloto.
+      const botonesPago = stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)
+        ? [
+          // La CLABE va primero: es la que de verdad le sirve a quien paga por
+          // transferencia o en ventanilla, que es como paga casi todo el pueblo.
+          { id: 'pago_clabe', title: '🏦 Mi CLABE fija' },
+          { id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' },
+          { id: 'pago_otras', title: '🏢 Otras formas' },
+        ]
+        : [
+          { id: 'pago_horario', title: '🏢 Horario en oficina' },
+          { id: 'pago_datos', title: '💳 Datos de pago' },
+        ];
+      await sendMsg(chatId, '💳 ¿Cómo quieres pagar? Elige una opción:', [], { buttons: botonesPago });
       return;
     }
 
@@ -4916,6 +5187,426 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ==================== WHATSAPP WEBHOOK ====================
+
+/*
+ * MAQUETA — webhook de Stripe. Confirma que el pago de la mensualidad de un
+ * cliente piloto entró de verdad, y avisa por WhatsApp sin que un asesor tenga
+ * que revisar un comprobante a mano.
+ *
+ * Vive en la MISMA plataforma de Stripe que Aforo: un aviso con `account`
+ * (evento.account) viene de OTRA cuenta conectada firmando con el mismo
+ * secreto del endpoint, no de la nuestra — se ignora, igual que en
+ * aforo/server.js. Sin este filtro, cualquier organizador de Aforo con acceso
+ * a su propio Stripe podría fabricar un aviso que reactive gratis a un cliente
+ * de León Telecom.
+ */
+/*
+ * Avisos de Stripe ya procesados, para no repetir el trabajo cuando Stripe
+ * reintenta. Se limpia solo: un aviso de hace más de un día ya no va a volver.
+ */
+const stripeVistos = new Map();
+setInterval(() => {
+  const limite = Date.now() - 24 * 3600 * 1000;
+  for (const [id, t] of stripeVistos) if (t < limite) stripeVistos.delete(id);
+}, 3600 * 1000).unref();
+
+/*
+ * Los pagos recientes de cada teléfono.
+ *
+ * Existe para cazar el PAGO DOBLE ENTRE CANALES, que es fácil de hacer sin
+ * mala intención: el cliente saca su ficha de OXXO el lunes, se impacienta y el
+ * martes transfiere a su CLABE, y el miércoles alguien va y paga la ficha. Los
+ * dos pagos entran de verdad y son dos cargos reales.
+ *
+ * No se bloquea nada: hay motivos legítimos para pagar dos veces en un mes (dos
+ * mensualidades atrasadas, o un vecino que paga sin avisar). Se detecta y se
+ * avisa, que es lo que permite devolverle su dinero a alguien antes de que se
+ * enoje, en vez de enterarse cuando reclama.
+ */
+/*
+ * Las facturas que la oficina todavía tiene que marcar como pagadas.
+ *
+ * La API de Wisphub no permite marcarlas (`estado` es de solo lectura y no hay
+ * endpoint de pagos), así que el cliente paga, se reconecta solo, pero su
+ * factura sigue apareciendo como deuda. Eso no es cosmética: con la factura
+ * pendiente le siguen llegando recordatorios de corte y en el siguiente ciclo
+ * es candidato a que lo vuelvan a suspender. Marcarla es lo que hace que la
+ * reconexión se sostenga.
+ *
+ * Se junta aquí y se entrega en el resumen matutino, en una sola pasada. Los
+ * avisos sueltos de madrugada se pierden entre sí; una lista a la hora de
+ * abrir, no.
+ */
+let stripeRegistrosPendientes = [];   // [{ factura, total, nombre, telefono, idServicio, cuando, tipo }]
+const REGISTRO_PENDIENTE_MAX = 200;
+
+function anotarRegistroPendiente(reg) {
+  // Sin duplicar: el mismo pago puede llegar por dos avisos de Stripe.
+  const clave = `${reg.tipo}:${reg.factura || reg.telefono}`;
+  if (stripeRegistrosPendientes.some((r) => `${r.tipo}:${r.factura || r.telefono}` === clave)) return;
+  stripeRegistrosPendientes.push({ ...reg, cuando: Date.now() });
+  if (stripeRegistrosPendientes.length > REGISTRO_PENDIENTE_MAX) {
+    stripeRegistrosPendientes = stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX);
+  }
+  schedulePersist();
+}
+
+const stripePagosRecientes = new Map();   // telefono -> [{ monto, cuando, canal, ref }]
+const VENTANA_DUPLICADO_MS = 20 * 24 * 3600 * 1000;
+
+function registrarPagoYRevisarDoble({ telefono, monto, canal, ref }) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (!tel) return null;
+  const ahora = Date.now();
+  const previos = (stripePagosRecientes.get(tel) || []).filter((p) => ahora - p.cuando < VENTANA_DUPLICADO_MS);
+  const sospechoso = previos.find((p) => p.ref !== ref);
+  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref });
+  stripePagosRecientes.set(tel, previos.slice(-6));
+  schedulePersist();
+  return sospechoso || null;
+}
+
+/*
+ * Le avisa a la oficina qué quedó pendiente de registrar en Wisphub.
+ *
+ * La API de Wisphub NO permite marcar una factura como pagada: `estado` es de
+ * solo lectura y no existe ningún endpoint de pagos (se buscaron nueve). O sea
+ * que el dinero entra, el cliente se reconecta solo, pero la factura sigue
+ * apareciendo como deuda hasta que alguien la marque a mano.
+ *
+ * Eso NO puede quedarse en un log. Una factura cobrada que sigue viéndose
+ * pendiente le manda recordatorios de corte a alguien que ya pagó, y acaba
+ * cortándolo. Por eso cada caso así genera un aviso con el número de factura,
+ * para que sea un clic y no una investigación.
+ */
+function avisarRegistroPendiente(w, telefono) {
+  if (!w || !w.cliente) return;
+  const quien = `${w.cliente.nombre} (servicio ${w.cliente.idServicio}, tel ${telefono})`;
+
+  /*
+   * Un teléfono con varios servicios y ninguno claramente el que se pagó.
+   *
+   * Hay 26 teléfonos así en el padrón. Aquí NO se adivina: si se elige mal, el
+   * cliente sigue cortado y su dinero queda abonado a otra cuenta. Va derecho a
+   * una persona, con la lista de servicios para que elija.
+   */
+  if (w.ambiguo) {
+    const cuales = (w.serviciosPosibles || [])
+      .map((x) => `#${x.idServicio} ${x.nombre} (${x.estado})`).join(' · ');
+    alertAdmin('wisphub-ambiguo',
+      `⚠️ PAGO SIN APLICAR de ${telefono}: ese teléfono tiene varios servicios y no se sabe cuál pagó.\n${cuales}\nAplícalo a mano y reactiva el que corresponda.`);
+    anotarRegistroPendiente({ tipo: 'ambiguo', factura: null, total: 0,
+      nombre: w.cliente.nombre, telefono, idServicio: w.cliente.idServicio,
+      detalle: cuales });
+    return;
+  }
+
+  if (w.registroManual && w.registroManual.length) {
+    const cuales = w.registroManual.map((r) => `#${r.factura} ($${Number(r.total).toFixed(2)})`).join(', ');
+    alertAdmin('wisphub-registro', `${quien} PAGÓ. Marca a mano en Wisphub: ${cuales}`);
+    for (const r of w.registroManual) {
+      anotarRegistroPendiente({ tipo: 'factura', factura: r.factura, total: Number(r.total) || 0,
+        nombre: w.cliente.nombre, telefono, idServicio: w.cliente.idServicio, usuario: w.cliente.usuario });
+    }
+  }
+  if (w.aFavor && w.sobrante > 0.01) {
+    alertAdmin('wisphub-afavor', `${quien} pagó $${w.sobrante.toFixed(2)} y NO debía nada. Aplícalo como saldo a favor.`);
+    anotarRegistroPendiente({ tipo: 'afavor', factura: null, total: w.sobrante,
+      nombre: w.cliente.nombre, telefono, idServicio: w.cliente.idServicio, usuario: w.cliente.usuario });
+  }
+  // Una avería de verdad (no "todavía debe", que es la regla funcionando).
+  if (w.avisos.some((a) => /No se pudo reactivar|Error hablando|no se pudo confirmar/i.test(a))) {
+    alertAdmin('wisphub-reactivar', `${quien} pagó pero algo falló: ${w.avisos.join(' · ')}`);
+  }
+}
+
+app.post('/webhook/stripe', async (req, res) => {
+  const secreto = (process.env.STRIPE_WEBHOOK_SECRET_LEON || '').trim();
+  if (!secreto) { console.error('[stripe-leon] falta STRIPE_WEBHOOK_SECRET_LEON'); return res.status(500).json({ error: 'Webhook sin configurar.' }); }
+  if (!stripeLeon.verificarFirma(req.rawBody, req.headers['stripe-signature'], secreto)) {
+    console.warn('[stripe-leon] firma inválida desde', req.ip);
+    return res.status(400).json({ error: 'Firma inválida.' });
+  }
+
+  let evento;
+  try { evento = JSON.parse(req.rawBody); }
+  catch { return res.status(400).json({ error: 'Cuerpo ilegible.' }); }
+
+  if (evento.account) {
+    console.warn('[stripe-leon] aviso de otra cuenta conectada, ignorado:', evento.account);
+    return res.json({ recibido: true, ignorado: 'cuenta-conectada' });
+  }
+
+  try {
+    const o = (evento.data && evento.data.object) || {};
+    /*
+     * ── PAGO EN OXXO ────────────────────────────────────────────────────────
+     *
+     * OXXO NO llega como `checkout.session.completed` pagado. Llegan dos
+     * avisos distintos y separados por días:
+     *
+     *   completed + payment_status 'unpaid'  → se generó la ficha
+     *   async_payment_succeeded              → el cliente ya pagó en la tienda
+     *   async_payment_failed                 → la ficha venció sin pagarse
+     *
+     * Sin este bloque, quien pagaba en OXXO no recibía confirmación NUNCA y
+     * seguía suspendido con su ticket en la mano. El bot le ofrece OXXO en el
+     * menú, así que no escucharlo era prometer algo que no pasaba.
+     */
+    if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
+        && evento.type === 'checkout.session.completed' && o.payment_status === 'unpaid') {
+      const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
+      if (tel) {
+        await sendWhatsAppMessage(tel,
+          '🧾 Ya se generó tu ficha de pago. Llévala a OXXO y págala en caja.\n\n'
+          + 'En cuanto la tienda reporte el pago te avisamos por aquí y tu servicio se reactiva solo. '
+          + 'Puede tardar unas horas después de pagar. *No mandes comprobante*, nosotros lo vemos.').catch(() => {});
+      }
+      return res.json({ recibido: true, ficha: true });
+    }
+
+    if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
+        && evento.type === 'checkout.session.async_payment_failed') {
+      const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
+      if (tel) {
+        await sendWhatsAppMessage(tel,
+          '⚠️ Tu ficha de pago venció sin pagarse, así que tu servicio sigue pendiente. '
+          + 'Escribe *pagar* para generar otra, o paga como siempre por depósito. 🙏').catch(() => {});
+      }
+      return res.json({ recibido: true, fichaVencida: true });
+    }
+
+    if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
+        && (evento.type === 'checkout.session.async_payment_succeeded'
+            || (evento.type === 'checkout.session.completed' && o.payment_status === 'paid'))) {
+      /*
+       * Stripe reintenta el MISMO aviso si tardamos en contestar —es su
+       * garantía de entrega, no un error— así que sin este candado el cliente
+       * recibiría dos "ya quedó" por el mismo pago. Hoy eso solo es feo; el día
+       * que esto además le registre el pago a Wisphub, sería abonarle dos veces.
+       */
+      if (stripeVistos.has(o.id)) {
+        console.log('[stripe-leon] aviso repetido de', o.id, '— ya estaba procesado, se ignora');
+        return res.json({ recibido: true, repetido: true });
+      }
+      stripeVistos.set(o.id, Date.now());
+
+      // `telefono` es del DUEÑO del servicio; `pagadoPor`, de quien sacó la
+      // tarjeta. Casi siempre son el mismo, pero cuando no lo son hay que
+      // abonarle al dueño y avisarle a los dos: quien pagó necesita su acuse, y
+      // el dueño necesita saber que ya quedó (a lo mejor ni estaba enterado).
+      const telefono = String(o.metadata.telefono || '').replace(/\D/g, '');
+      const pagadoPor = String(o.metadata.pagadoPor || telefono).replace(/\D/g, '');
+      if (telefono) {
+        markCases(telefono, 'recibido', 'stripe-auto');
+        const doble = registrarPagoYRevisarDoble({
+          telefono, monto: (o.amount_total || 0) / 100,
+          canal: o.payment_status === 'paid' ? 'tarjeta' : 'oxxo',
+          ref: o.payment_intent || o.id,
+        });
+        if (doble) {
+          alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
+        }
+        const duenio = wisphubClients.get(telefono) || {};
+        /*
+         * Cada aviso va en su propio try: si el WhatsApp del dueño falla, el de
+         * quien pagó SÍ tiene que salir igual. El dinero ya entró; lo último que
+         * queremos es que además nadie se entere.
+         */
+        try {
+          await sendWhatsAppMessage(telefono,
+            '✅ Recibimos el pago de tu servicio — quedó confirmado automáticamente, no hace falta comprobante. ¡Gracias! 🙌'
+            + (pagadoPor !== telefono ? '\n\n(Lo pagó otra persona por ti.)' : ''));
+        } catch (e) { console.error('[stripe-leon] no salió el aviso al dueño', telefono, e.message); }
+
+        if (pagadoPor && pagadoPor !== telefono) {
+          markCases(pagadoPor, 'recibido', 'stripe-auto');
+          try {
+            await sendWhatsAppMessage(pagadoPor,
+              `✅ Listo, tu pago se aplicó al servicio de *${duenio.name || telefono}*. Quedó confirmado automáticamente. ¡Gracias! 🙌`);
+          } catch (e) { console.error('[stripe-leon] no salió el aviso a quien pagó', pagadoPor, e.message); }
+        }
+        /*
+         * Si el cliente aceptó el cobro automático, aquí se recuerda con qué
+         * tarjeta. Se guarda junto a su registro, que ya es el lugar donde vive
+         * su cliente de Stripe.
+         *
+         * Solo si `guardarTarjeta` dice que sí: esa marca viene del link, y el
+         * link solo la trae cuando el cliente pasó por el aviso y aceptó.
+         */
+        if (o.metadata.guardarTarjeta === 'si' && o.customer) {
+          try {
+            const reg = stripeClientes.get(telefono) || {};
+            stripeClientes.set(telefono, {
+              ...reg,
+              clienteId: String(o.customer),
+              autoDesde: new Date().toISOString(),
+              // El método de pago se resuelve al cobrar: aquí solo se anota que
+              // este cliente aceptó. Guardar el id de la tarjeta ahora sería
+              // guardar uno que puede caducar antes del próximo mes.
+              cobroAutomatico: true,
+            });
+            schedulePersist();
+            console.log('[stripe-leon] cobro automático activado para', telefono);
+          } catch (e) { console.error('[stripe-leon] no se pudo guardar el cobro automático:', e.message); }
+        }
+        /*
+         * Reconectar al cliente. Va DESPUÉS del aviso, no antes: el dinero ya
+         * entró y su confirmación no puede depender de que Wisphub conteste.
+         * `aplicarPago` nunca lanza; devuelve qué pudo hacer y qué no.
+         */
+        try {
+          /*
+           * Se abona la MENSUALIDAD, no el total cobrado. `amount_total` trae
+           * el cargo por servicio sumado, y ese no es dinero de León Telecom:
+           * aplicarlo a la factura la abonaría de más y marcaría cada pago
+           * como "pagó de más".
+           */
+          const mensualidad = Number(o.metadata.mensualidad || 0) / 100 || (o.amount_total || 0) / 100;
+          const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id });
+          if (w.reactivado) {
+            console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
+            await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+          }
+          if (w.avisos.length) console.warn('[wisphub]', telefono, '·', w.avisos.join(' · '));
+
+          /*
+           * Pagó, pero no alcanzó. Hay que DECÍRSELO: si no, se queda esperando
+           * una reconexión que no va a llegar y acaba hablando a la oficina,
+           * que es justo el trabajo que veníamos a quitar.
+           */
+          if (w.ambiguo) {
+            // Tiene varios contratos: no podemos saber cuál pagó sin preguntarle.
+            await sendWhatsAppMessage(telefono,
+              '✅ Recibimos tu pago, gracias. Como tienes *más de un servicio* con nosotros, '
+              + 'un asesor va a aplicarlo al que corresponde en un momento. Si es urgente, dinos cuál es. 🙏').catch(() => {});
+          } else if (!w.reactivado && w.deudaRestante > 0.01 && w.cliente && w.cliente.estado !== 'Activo') {
+            await sendWhatsAppMessage(telefono,
+              `✅ Recibimos tu pago. Todavía queda un saldo de *$${w.deudaRestante.toFixed(2)}*, `
+              + 'y por eso el servicio sigue suspendido. En cuanto se cubra se reactiva solo. 🙏').catch(() => {});
+          }
+          avisarRegistroPendiente(w, telefono);
+        } catch (e) { console.error('[wisphub] reactivación:', e.message); }
+        console.log('[stripe-leon] pago confirmado · servicio', telefono, '· pagado por', pagadoPor, '· sesión', o.id);
+      } else {
+        // Un pago sin teléfono no se puede abonar a nadie: que no se pierda en silencio.
+        console.error('[stripe-leon] ¡pago sin teléfono en metadata!', o.id);
+        alertAdmin('stripe-leon', `Entró un pago (${o.id}) sin teléfono en el metadata: no se pudo abonar a ningún cliente. Revísalo a mano en Stripe.`);
+      }
+    }
+    /*
+     * ── EL DEPÓSITO A LA CLABE ──────────────────────────────────────────────
+     *
+     * Una transferencia SPEI a la CLABE fija del cliente NO produce un
+     * `checkout.session.completed`: ahí no hubo checkout ninguno, el cliente
+     * entró a su banco y mandó dinero. Llega por aquí, como un movimiento del
+     * saldo de ese Customer.
+     *
+     * Sin este bloque, el cliente que usa su CLABE —que es justo la forma que
+     * más va a usar la gente del pueblo— transfiere y el bot nunca le dice
+     * nada. Se quedaría esperando su confirmación y acabaría mandando el
+     * comprobante a mano, que es lo que veníamos a quitar.
+     */
+    if (evento.type === 'customer_cash_balance_transaction.created' && o.type === 'funded') {
+      const clienteId = String(o.customer || '');
+      // De vuelta del cliente de Stripe al teléfono: el registro es el mapa.
+      let telefono = '';
+      for (const [tel, datos] of stripeClientes) {
+        if (datos && datos.clienteId === clienteId) { telefono = tel; break; }
+      }
+
+      if (stripeVistos.has(o.id)) {
+        console.log('[stripe-leon] depósito repetido de', o.id, '— se ignora');
+        return res.json({ recibido: true, repetido: true });
+      }
+      stripeVistos.set(o.id, Date.now());
+
+      const centavos = (o.net_amount != null ? o.net_amount : ((o.funded && o.funded.bank_transfer && o.funded.bank_transfer.amount) || 0));
+      const pesos = (Number(centavos) || 0) / 100;
+
+      if (telefono) {
+        markCases(telefono, 'recibido', 'stripe-clabe');
+
+        /*
+         * BARRER EL SALDO. Sin esto el dinero no le llega a León Telecom.
+         *
+         * Una transferencia a la CLABE cae en el saldo del cliente DENTRO de
+         * Stripe y ahí se queda: no rebota sola. Hay que cobrarla, y ese cobro
+         * es el que la parte entre León y la comisión.
+         *
+         * Va antes del aviso a propósito: si el barrido falla hay que decirlo,
+         * no mandar un "ya quedó" sobre dinero que no se movió.
+         */
+        let barrido = null;
+        try {
+          const reg = stripeClientes.get(telefono) || {};
+          let deuda = 0;
+          try {
+            const c = wisphubClients.get(telefono) || {};
+            if (c.usuario) deuda = (await wisphubReactivar.deudaDelCliente(c.usuario)).total;
+          } catch (e) { console.warn('[stripe-leon] sin deuda para calcular comisión:', e.message); }
+
+          barrido = await stripeLeon.cobrarDelSaldo({
+            clienteId: reg.clienteId || o.customer, deposito: pesos, deuda,
+            telefono, nombre: (wisphubClients.get(telefono) || {}).name, referencia: o.id,
+          });
+          console.log('[stripe-leon] saldo barrido ·', telefono,
+            '· a León $' + barrido.aLeonTelecom.toFixed(2), '· comisión $' + barrido.comision.toFixed(2));
+          if (barrido.sinComision) {
+            console.warn('[stripe-leon] sin comisión: depositó justo su plan, sin el cargo ·', telefono);
+          }
+        } catch (e) {
+          /*
+           * El dinero está a salvo en el saldo del cliente: no se pierde, pero
+           * tampoco le llegó a León. Alguien tiene que barrerlo a mano.
+           */
+          console.error('[stripe-leon] NO se pudo barrer el saldo de', telefono, '·', e.message);
+          alertAdmin('stripe-saldo', `Entró una transferencia de $${pesos.toFixed(2)} de ${telefono} y NO se pudo mover a la cuenta de León Telecom: ${e.message}. El dinero está en Stripe, hay que barrerlo a mano.`);
+        }
+        const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id });
+        if (doble) {
+          alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
+        }
+        try {
+          await sendWhatsAppMessage(telefono,
+            `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado automáticamente, no hace falta comprobante. ¡Gracias! 🙌`);
+        } catch (e) { console.error('[stripe-leon] no salió el aviso del depósito a', telefono, e.message); }
+        try {
+          const w = await wisphubReactivar.aplicarPago({ telefono, monto: pesos, referencia: o.id });
+          if (w.reactivado) {
+            console.log('[wisphub] servicio reactivado por depósito ·', telefono, '· tarea', w.tareaId);
+            await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+          }
+          if (w.avisos.length) console.warn('[wisphub]', telefono, '·', w.avisos.join(' · '));
+          if (w.ambiguo) {
+            await sendWhatsAppMessage(telefono,
+              '✅ Recibimos tu transferencia, gracias. Como tienes *más de un servicio* con nosotros, '
+              + 'un asesor va a aplicarla al que corresponde en un momento. Si es urgente, dinos cuál es. 🙏').catch(() => {});
+          } else if (!w.reactivado && w.deudaRestante > 0.01 && w.cliente && w.cliente.estado !== 'Activo') {
+            await sendWhatsAppMessage(telefono,
+              `✅ Recibimos tu transferencia. Todavía queda un saldo de *$${w.deudaRestante.toFixed(2)}*, `
+              + 'y por eso el servicio sigue suspendido. En cuanto se cubra se reactiva solo. 🙏').catch(() => {});
+          }
+          avisarRegistroPendiente(w, telefono);
+        } catch (e) { console.error('[wisphub] reactivación:', e.message); }
+        console.log('[stripe-leon] depósito a CLABE ·', telefono, '· $' + pesos.toFixed(2), '·', o.id);
+      } else {
+        /*
+         * Entró dinero a una CLABE que no está en el registro. Puede ser un
+         * cliente de antes de que existiera el registro, o una CLABE vieja. El
+         * dinero está a salvo en Stripe, pero NO se puede abonar solo: que
+         * alguien lo revise antes de que el cliente reclame que ya pagó.
+         */
+        console.error('[stripe-leon] ¡depósito de un cliente desconocido!', clienteId, o.id);
+        alertAdmin('stripe-leon', `Entró una transferencia de $${pesos.toFixed(2)} al cliente de Stripe ${clienteId}, que no está en el registro: no se pudo abonar a nadie. Revísalo a mano en Stripe.`);
+      }
+      return res.json({ recibido: true });
+    }
+  } catch (e) { console.error('[stripe-leon] webhook:', e.message); }
+
+  // Siempre 200: un error nuestro no debe hacer que Stripe reintente sin fin.
+  res.json({ recibido: true });
+});
 
 // GET: Meta webhook verification challenge
 app.get('/webhook/whatsapp', (req, res) => {

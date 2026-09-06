@@ -7,3 +7,7 @@ yarn-error.log*
 .DS_Store
 # Persistencia local (en producción se usa PostgreSQL)
 data/
+
+# Llave de Stripe para revisar-stripe.mjs. NUNCA se sube.
+.stripe-key
+.wisphub-key
