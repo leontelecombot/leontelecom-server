@@ -5126,6 +5126,19 @@ async function handleChatMessage(chatId, text, sendMsg) {
   }
 }
 
+/*
+ * A dónde regresa el cliente después de dar sus datos en Stripe.
+ *
+ * Antes el `return_url` apuntaba a la raíz del servidor, que contesta JSON.
+ * Alguien terminaba de llenar un formulario largo con su RFC y su cuenta de
+ * banco, y aterrizaba en `{"ok":true,"service":"leontelecom-server"}`. Cualquiera
+ * pensaría que falló, y lo primero que haría es hablar preguntando si su
+ * información se perdió.
+ */
+const sinCacheCobro = (_req, res, next) => { res.setHeader('Cache-Control', 'no-cache'); next(); };
+app.get('/cuenta-cobro', sinCacheCobro, (_req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'cuenta-cobro.html'), { cacheControl: false }));
+
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'leontelecom-server' });
 });

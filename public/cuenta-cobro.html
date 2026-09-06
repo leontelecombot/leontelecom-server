@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Cuenta de cobro · León Telecom</title>
+<style>
+  :root{
+    --azul:#1E5AA8; --azul-claro:#2E7BD6; --tinta:#12181F; --cuerpo:#3D4753;
+    --apag:#6B7684; --papel:#F6F8FB; --tarjeta:#FFFFFF; --linea:#DFE5EC;
+    --bien:#1B7F4C; --ojo:#B45309;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--papel);
+    color:var(--cuerpo);min-height:100vh;display:grid;place-items:center;padding:28px 20px;-webkit-font-smoothing:antialiased}
+  .caja{max-width:520px;width:100%;background:var(--tarjeta);border:1px solid var(--linea);
+    border-radius:16px;padding:34px 32px;box-shadow:0 18px 44px -24px rgba(18,24,31,.25)}
+  .marca{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--azul);font-weight:800;margin-bottom:20px}
+  .paloma{width:52px;height:52px;border-radius:50%;background:#E7F4EC;display:grid;place-items:center;margin-bottom:18px}
+  .paloma svg{stroke:var(--bien);stroke-width:2.5;fill:none;stroke-linecap:round;stroke-linejoin:round}
+  h1{font-size:23px;line-height:1.25;color:var(--tinta);margin-bottom:12px;letter-spacing:-.3px}
+  p{font-size:15px;line-height:1.65;margin-bottom:14px}
+  strong{color:var(--tinta)}
+  .nota{background:var(--papel);border:1px solid var(--linea);border-radius:11px;padding:15px 17px;margin:18px 0 0}
+  .nota h2{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--apag);margin-bottom:9px;font-weight:700}
+  .nota p{font-size:14px;margin:0}
+  .pie{margin-top:24px;padding-top:16px;border-top:1px solid var(--linea);font-size:13px;color:var(--apag)}
+  ul{margin:8px 0 0 20px} li{font-size:14px;line-height:1.7;margin-bottom:4px}
+</style>
+</head>
+<body>
+<div class="caja">
+  <div class="marca">León Telecom</div>
+
+  <div class="paloma">
+    <svg width="26" height="26" viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg>
+  </div>
+
+  <h1>Listo, recibimos tus datos</h1>
+
+  <p>
+    Tu cuenta de cobro quedó ligada. <strong>Stripe va a revisar la información</strong>
+    y en cuanto la apruebe, los pagos de tus clientes empiezan a caer directo en la cuenta
+    bancaria que registraste.
+  </p>
+
+  <p>
+    Esa revisión suele tardar poco, pero a veces Stripe pide algún documento extra.
+    Si pasa, te llega un correo directo de ellos.
+  </p>
+
+  <div class="nota">
+    <h2>Qué sigue</h2>
+    <ul>
+      <li>Nosotros te avisamos en cuanto esté aprobada.</li>
+      <li>Nada cambia para tus clientes hasta que lo activemos juntos.</li>
+      <li>El dinero de cada pago te llega íntegro, sin descuentos de nuestra parte.</li>
+    </ul>
+  </div>
+
+  <div class="pie">
+    Ya puedes cerrar esta pestaña. Si algo no te cuadró, escríbenos y lo revisamos.
+  </div>
+</div>
+</body>
+</html>
