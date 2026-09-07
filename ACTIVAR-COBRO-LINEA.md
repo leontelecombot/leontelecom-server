@@ -184,9 +184,12 @@ Cuando la auditoría encuentra dinero del que nadie estaba enterado, además de
 moverlo le avisa al cliente y aplica el pago, porque para él ya había pagado y
 no había pasado nada.
 
-Desde el panel: `GET /admin/api/stripe/rezagados` para ver qué hay atorado, y
-`POST /admin/api/stripe/barrer` (con `?auditar=1` para revisar a todos) para no
-tener que esperar los 10 minutos cuando alguien llama diciendo "ya transferí".
+En el panel de administración, dentro de **Cobranza**, hay una tarjeta *Cobro en
+línea* que enseña cuánto dinero está atorado, de quién, desde cuándo y por qué,
+con un botón para buscarlo y moverlo al momento sin esperar los 10 minutos
+(cuando alguien llama diciendo "ya transferí"). Por API son
+`GET /admin/api/stripe/estado`, `GET /admin/api/stripe/rezagados` y
+`POST /admin/api/stripe/barrer` (con `?auditar=1` para revisar a todos).
 
 **Contracargos y devoluciones.** Antes no se escuchaban: el banco se llevaba el
 dinero y el sistema seguía creyendo que ese mes estaba pagado. Ahora llegan al
@@ -249,13 +252,13 @@ se entera, o el cliente paga y sigue cortado.
 node verificar-cobro-leon.mjs     #  79 comprobaciones del módulo de cobro
 node verificar-webhook-leon.mjs   #  38 del cableado en index.js
 node verificar-wisphub.mjs        #  44 de la reactivación
-node verificar-rescate-leon.mjs   #  49 del dinero atorado y los contracargos
+node verificar-rescate-leon.mjs   #  58 del dinero atorado y los contracargos
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**210 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
+**219 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.

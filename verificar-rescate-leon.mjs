@@ -131,6 +131,7 @@ await new Promise((r) => wisphubFalso.listen(4395, '127.0.0.1', r));
 // ── Estado sembrado, como si Render acabara de reiniciar ───────────────────
 const TEL_A = '5219511111111';
 const TEL_B = '5219512222222';
+const TEL_C = '5219513333333';   // NO está en el registro sembrado, a propósito
 const EVENTO_YA_VISTO = 'cs_test_ya_procesado';
 
 const RUTA_STORE = path.join(process.cwd(), 'data', 'store.json');
@@ -355,13 +356,28 @@ console.log('\n=== 4b. UN DEPÓSITO DE UN CLIENTE QUE EL REGISTRO PERDIÓ ===');
    * dinero llegaría de alguien "desconocido". No hace falta rendirse: Stripe
    * guarda el teléfono en el metadata del cliente.
    */
-  banco.duenio.set('cus_C', TEL_A);
+  banco.duenio.set('cus_C', TEL_C);
   const r = await avisar({
     type: 'customer_cash_balance_transaction.created',
     data: { object: { id: 'ccbtxn_perdido', type: 'funded', customer: 'cus_C', net_amount: 44000 } },
   });
   es(r.codigo === 200, 'el depósito se acepta');
   es(await esperarLog('cliente recuperado de Stripe'), 'y se le pregunta a Stripe de quién era');
+}
+{
+  /*
+   * Y el caso feo: ese teléfono YA tenía su cliente de Stripe. El dinero se le
+   * abona, pero su CLABE no se puede tocar: ya la anotó en su banco.
+   */
+  banco.duenio.set('cus_DOBLE', TEL_B);
+  const antes = await admin('/admin/api/stripe/estado');
+  await avisar({
+    type: 'customer_cash_balance_transaction.created',
+    data: { object: { id: 'ccbtxn_doble', type: 'funded', customer: 'cus_DOBLE', net_amount: 30000 } },
+  });
+  es(await esperarLog('SEGUNDO cliente de'), 'un segundo cliente de Stripe para el mismo teléfono se detecta');
+  const despues = await admin('/admin/api/stripe/estado');
+  es(despues.conClabe === antes.conClabe, 'y NO se le cambia su cliente: su CLABE sigue siendo la misma');
 }
 
 console.log('\n=== 4c. STRIPE CAÍDO NO LLENA LA LISTA DE FALSOS ===');
@@ -373,10 +389,11 @@ console.log('\n=== 4c. STRIPE CAÍDO NO LLENA LA LISTA DE FALSOS ===');
    * intentos saldría una alerta por cada uno: mil avisos falsos sepultando al
    * que sí importaba.
    */
+  const antes = await admin('/admin/api/stripe/rezagados');
   banco.caido = true;
   const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
   const lista = await admin('/admin/api/stripe/rezagados');
-  es(lista.total === 0, 'con Stripe caído no se anota a nadie que no se supiera que tenía dinero');
+  es(lista.total === antes.total, 'con Stripe caído no se anota a nadie que no se supiera que tenía dinero');
   es(r.rescatados === 0, 'y no se rescata nada, claro');
   banco.caido = false;
 }
@@ -428,6 +445,29 @@ console.log('\n=== 6. EL RESUMEN DE LA MAÑANA NO CONFUNDE LAS DOS COSAS ===');
 }
 
 if (process.env.VER_LOG) console.error('\n---- LOG DEL SERVIDOR ----\n' + log.join(''));
+console.log('\n=== 6b. LO QUE VE LA OFICINA EN EL PANEL ===');
+{
+  // Un depósito atorado a propósito, para que la tarjeta tenga qué mostrar.
+  banco.falla = 'Stripe no está disponible';
+  wisphub.deuda.set('clienteA', 440);
+  depositar('cus_A', 47000);
+  await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
+  banco.falla = null;
+
+  const e = await admin('/admin/api/stripe/estado');
+  es(e.activo === true, 'el panel dice si el cobro está encendido');
+  es(e.conClabe >= 2, 'cuántos clientes ya tienen su CLABE fija');
+  es(e.rezagados === 1 && e.atorado === 470, 'y cuánto dinero está atorado, en pesos');
+  es(e.revertidos >= 1, 'con los pagos revertidos contados aparte de los que faltan por registrar');
+  es(typeof e.alcance === 'string' && e.alcance.length > 0, 'y a quién se le está ofreciendo');
+
+  // Y el botón de "moverlo ahora" de verdad lo mueve.
+  const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
+  es(r.rescatados === 1, 'el botón del panel mueve el dinero al momento');
+  const e2 = await admin('/admin/api/stripe/estado');
+  es(e2.rezagados === 0 && e2.atorado === 0, 'y la tarjeta queda en cero');
+}
+
 console.log('\n=== 7. UNA LISTA PEOR NUNCA SUSTITUYE A LA BUENA ===');
 {
   /*

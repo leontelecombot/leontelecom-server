@@ -5526,17 +5526,23 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
     /*
      * A quién revisarle el saldo en esta pasada.
      *
-     * Los que ya sabemos que fallaron van SIEMPRE. Los demás solo cada 6 h,
-     * porque revisarle el saldo a todo el padrón es una llamada a Stripe por
-     * cliente y no hace falta hacerlo cada diez minutos.
+     * Los que ya sabemos que fallaron van SIEMPRE. Al resto del padrón se le
+     * revisa cada 6 h, porque es una llamada a Stripe por cliente y no hace
+     * falta hacerlo cada diez minutos.
+     *
+     * `_auditoriaDesde > 0` significa que la auditoría anterior quedó a medias,
+     * y entonces se sigue en la pasada de los diez minutos en vez de esperar
+     * las seis horas: recorrer el padrón entero de 300 en 300 tardaría día y
+     * medio, y una red de seguridad que tarda día y medio en cerrarse no es
+     * una red.
      */
-    const auditar = forzarAuditoria || Date.now() - _ultimaAuditoriaSaldos > AUDITORIA_SALDOS_MS;
+    const auditar = forzarAuditoria || _auditoriaDesde > 0
+      || Date.now() - _ultimaAuditoriaSaldos > AUDITORIA_SALDOS_MS;
     const revisar = new Map();
     for (const [tel, r] of stripeSaldosRezagados) {
       if ((r.intentos || 0) < REZAGO_INTENTOS_MAX) revisar.set(tel, { ...r, yaAnotado: true });
     }
     if (auditar) {
-      _ultimaAuditoriaSaldos = Date.now();
       /*
        * La auditoría es una llamada a Stripe por cliente. Con el padrón entero
        * con CLABE serían más de mil en una sola pasada, y mientras corre no se
@@ -5546,7 +5552,14 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
       const todos = [...stripeClientes.entries()].filter(([tel, d]) => d && d.clienteId && !revisar.has(tel));
       if (_auditoriaDesde >= todos.length) _auditoriaDesde = 0;
       const tanda = todos.slice(_auditoriaDesde, _auditoriaDesde + AUDITORIA_POR_PASADA);
-      _auditoriaDesde = _auditoriaDesde + AUDITORIA_POR_PASADA >= todos.length ? 0 : _auditoriaDesde + AUDITORIA_POR_PASADA;
+      const siguiente = _auditoriaDesde + AUDITORIA_POR_PASADA;
+      if (siguiente >= todos.length) {
+        // Se dio la vuelta completa: ahora sí, a descansar las seis horas.
+        _auditoriaDesde = 0;
+        _ultimaAuditoriaSaldos = Date.now();
+      } else {
+        _auditoriaDesde = siguiente;
+      }
       for (const [tel, datos] of tanda) revisar.set(tel, { clienteId: datos.clienteId, yaAnotado: false });
     }
     if (!revisar.size) return { revisados: 0, rescatados: 0, fallidos: 0 };
@@ -5669,7 +5682,10 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
         const intentos = (previo.intentos || 0) + 1;
         stripeSaldosRezagados.set(tel, {
           ...previo, clienteId, intentos,
-          pesos: previo.pesos || 0, desde: previo.desde || Date.now(),
+          // El monto que se acaba de leer, no el que hubiera de antes: si no,
+          // el panel enseña "$0 atorado" sobre dinero que sí está parado ahí.
+          pesos: pesos > 0 ? pesos : (previo.pesos || 0),
+          desde: previo.desde || Date.now(),
           error: String(e.message).slice(0, 200),
         });
         schedulePersist();
@@ -5906,9 +5922,23 @@ app.post('/webhook/stripe', async (req, res) => {
           const tel = String((c && c.metadata && c.metadata.telefono) || '').replace(/\D/g, '');
           if (tel) {
             telefono = tel;
-            stripeClientes.set(tel, { ...(stripeClientes.get(tel) || {}), clienteId });
-            schedulePersist();
-            console.warn('[stripe-leon] cliente recuperado de Stripe ·', clienteId, '→', tel);
+            const yaTiene = (stripeClientes.get(tel) || {}).clienteId;
+            if (yaTiene && yaTiene !== clienteId) {
+              /*
+               * Ese teléfono YA tiene su cliente de Stripe, y no es este. El
+               * registro no se toca: su CLABE es la que ya anotó en su banco y
+               * cambiarla sería el peor error posible aquí. El depósito sí se
+               * le abona (el dinero es suyo), pero que alguien revise por qué
+               * hay dos clientes para el mismo teléfono.
+               */
+              console.warn('[stripe-leon] depósito de un SEGUNDO cliente de', tel, '·', clienteId, '(el suyo es', yaTiene + ')');
+              alertAdmin('stripe-leon',
+                `Entró dinero de ${tel} a un cliente de Stripe distinto del suyo (${clienteId} en vez de ${yaTiene}). Se le abonó igual y su CLABE NO se cambió, pero conviene revisar en Stripe por qué hay dos.`);
+            } else {
+              stripeClientes.set(tel, { ...(stripeClientes.get(tel) || {}), clienteId });
+              schedulePersist();
+              console.warn('[stripe-leon] cliente recuperado de Stripe ·', clienteId, '→', tel);
+            }
           }
         } catch (e) {
           console.error('[stripe-leon] no se pudo preguntar de quién es', clienteId, '·', e.message);
@@ -5954,11 +5984,18 @@ app.post('/webhook/stripe', async (req, res) => {
            * nada, que es el lado correcto donde equivocarse.
            */
           console.warn('[stripe-leon] barrido pospuesto ·', telefono, '· no se sabe la deuda:', deuda.porque);
-          anotarSaldoRezagado(telefono, reg.clienteId || o.customer, pesos, 'sin deuda: ' + deuda.porque);
+          anotarSaldoRezagado(telefono, o.customer || reg.clienteId, pesos, 'sin deuda: ' + deuda.porque);
         } else {
           try {
             const barrido = await stripeLeon.cobrarDelSaldo({
-              clienteId: reg.clienteId || o.customer, deposito: pesos, deuda: deuda.total,
+              /*
+               * El dinero está en `o.customer`: este aviso ES el movimiento del
+               * saldo de ESE cliente. Tomarlo del registro sería barrer al
+               * cliente equivocado el día que un teléfono tenga dos (pasa si se
+               * duplicó antes de que existiera el registro), y el cobro
+               * fallaría por saldo insuficiente sobre dinero que sí está.
+               */
+              clienteId: o.customer || reg.clienteId, deposito: pesos, deuda: deuda.total,
               telefono, nombre: (wisphubClients.get(telefono) || {}).name, referencia: o.id,
             });
             console.log('[stripe-leon] saldo barrido ·', telefono,
@@ -5979,7 +6016,7 @@ app.post('/webhook/stripe', async (req, res) => {
              * para cuando de verdad ya no se pudo.
              */
             console.error('[stripe-leon] NO se pudo barrer el saldo de', telefono, '·', e.message);
-            anotarSaldoRezagado(telefono, reg.clienteId || o.customer, pesos, e.message);
+            anotarSaldoRezagado(telefono, o.customer || reg.clienteId, pesos, e.message);
           }
         }
         const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id });
@@ -7409,6 +7446,31 @@ app.post('/admin/api/wisphub-sync', verifyAdminToken, requirePermission('wisphub
  * `?auditar=1` fuerza la revisión de TODOS los clientes con CLABE, no solo de
  * los que ya se sabía que habían fallado.
  */
+/*
+ * El estado del cobro en línea de un vistazo, para el panel.
+ *
+ * Lo que una persona necesita saber sin abrir Stripe: si está encendido, a
+ * quién se le está ofreciendo, cuánta gente ya tiene su CLABE, y sobre todo si
+ * hay dinero parado o pagos que se dieron la vuelta.
+ */
+app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
+  const alcance = (process.env.COBRO_LINEA_TELEFONOS || '').trim();
+  const atorado = [...stripeSaldosRezagados.values()].reduce((a, r) => a + (Number(r.pesos) || 0), 0);
+  const porTipo = (t) => stripeRegistrosPendientes.filter((r) => r.tipo === t).length;
+  res.json({
+    activo: stripeLeon.activo(),
+    hayLlave: stripeLeon.hayLlave(),
+    cuentaConectada: !!(process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim(),
+    reactivacionActiva: wisphubReactivar.activo(),
+    alcance: alcance || 'solo el teléfono piloto',
+    conClabe: [...stripeClientes.values()].filter((d) => d && d.clienteId).length,
+    rezagados: stripeSaldosRezagados.size,
+    atorado: +atorado.toFixed(2),
+    porRegistrar: porTipo('factura') + porTipo('afavor') + porTipo('ambiguo'),
+    revertidos: porTipo('disputa') + porTipo('devolucion'),
+  });
+});
+
 app.get('/admin/api/stripe/rezagados', verifyAdminToken, (req, res) => {
   const lista = [...stripeSaldosRezagados.entries()].map(([telefono, r]) => ({
     telefono,

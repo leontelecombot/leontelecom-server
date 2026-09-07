@@ -459,6 +459,18 @@
 <!-- ===== PÁGINA: Cobranza ===== -->
 <section class="page" id="page-cobranza">
 
+  <!-- Cobro en línea: lo primero que hay que poder ver es si hay dinero parado -->
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">💳</span> Cobro en línea (Stripe)</div>
+      <div class="card-body">
+        <div id="clAlert" class="alert"></div>
+        <div id="clEstado"><div class="empty">Cargando…</div></div>
+        <div id="clRezagados" style="margin-top:14px"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Editor del mensaje de aviso de corte (arriba, es lo que más se edita) -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
@@ -907,7 +919,7 @@
     else if(page==='soporte' && can('reports')){ loadTickets(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); loadPromoBanner(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
-    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); }
+    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCobroLinea(); }
     else if(page==='cortes' && can('clients')){ loadCorteStats(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
@@ -1378,6 +1390,99 @@
       const todayCount = (d.history||[]).filter(h => new Date(h.sentAt).toDateString() === today).length;
       document.getElementById('histCount').textContent = todayCount;
     } catch(e) {}
+  }
+
+  /* ── Cobro en línea ────────────────────────────────────────────────────
+   * Lo importante de esta tarjeta no es el estado de los interruptores: es el
+   * dinero atorado. Una transferencia a la CLABE cae dentro de Stripe y no le
+   * llega a León hasta que se cobra; si ese cobro falló, el cliente ya está
+   * reconectado y creyendo que todo quedó. El sistema lo reintenta solo cada
+   * diez minutos, pero cuando alguien llama diciendo "ya transferí" hace falta
+   * poder mirarlo y moverlo en el momento.
+   */
+  async function loadCobroLinea(){
+    const est = document.getElementById('clEstado');
+    const rez = document.getElementById('clRezagados');
+    if(!est) return;
+    try{
+      const [e, r] = await Promise.all([
+        (await fetchAuth('/admin/api/stripe/estado')).json(),
+        (await fetchAuth('/admin/api/stripe/rezagados')).json(),
+      ]);
+
+      const chip = (ok, si, no) =>
+        `<span style="display:inline-block;padding:4px 10px;border-radius:20px;font-size:.78em;font-weight:600;`
+        + `background:${ok?'#e8f8ee':'#fdecec'};color:${ok?'#1c7a43':'#b3261e'}">${ok?si:no}</span>`;
+
+      est.innerHTML =
+        `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+           ${chip(e.activo,'Cobro encendido','Cobro apagado')}
+           ${chip(e.reactivacionActiva,'Reactivación automática','Reactivación apagada')}
+           ${chip(e.hayLlave && e.cuentaConectada,'Stripe configurado','Falta configurar Stripe')}
+         </div>
+         <table class="data-table"><tbody>
+           <tr><td class="muted">Se le ofrece a</td><td><b>${esc(e.alcance)}</b></td></tr>
+           <tr><td class="muted">Clientes con su CLABE fija</td><td><b>${e.conClabe}</b></td></tr>
+           <tr><td class="muted">Pagos por registrar en Wisphub</td><td><b>${e.porRegistrar}</b></td></tr>
+           <tr><td class="muted">Pagos revertidos (contracargos y devoluciones)</td>
+               <td><b style="color:${e.revertidos?'#b3261e':'inherit'}">${e.revertidos}</b></td></tr>
+         </tbody></table>`;
+
+      const atorado = Number(e.atorado||0);
+      let html = `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+          <button class="btn btn-primary" style="width:auto;padding:10px 16px" onclick="barrerSaldos()" id="clBarrerBtn">
+            🔎 Buscar dinero atorado y moverlo ahora</button>
+          <span style="font-size:.82em;color:var(--muted)">se hace solo cada 10 minutos; esto es para no esperar</span>
+        </div>`;
+
+      if(!r.total){
+        html += `<div class="empty">No hay dinero atorado en Stripe. Todo lo que entró ya llegó a León Telecom.</div>`;
+      } else {
+        html += `<div style="background:#fff8e6;border:1px solid #f0dca8;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:.86em">
+            ⚠️ <b>${r.total} depósito${r.total===1?'':'s'}</b> por un total de <b>$${atorado.toFixed(2)}</b> entraron a Stripe y todavía no llegan a León Telecom.
+            El dinero está a salvo, a nombre del cliente. Se reintenta solo.
+          </div>
+          <div style="overflow-x:auto"><table class="data-table">
+            <thead><tr><th>Cliente</th><th>Monto</th><th>Intentos</th><th>Desde</th><th>Por qué</th></tr></thead><tbody>`;
+        for(const x of r.rezagados){
+          html += `<tr>
+            <td><b>${esc(x.nombre||'—')}</b><br><span class="muted" style="font-size:.9em">${esc(x.telefono)}</span></td>
+            <td>${x.pesos?('$'+Number(x.pesos).toFixed(2)):'—'}</td>
+            <td>${x.intentos}${x.agotado?' <span style="color:#b3261e;font-weight:600">(ya no reintenta)</span>':''}</td>
+            <td class="muted">${x.desde?new Date(x.desde).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'—'}</td>
+            <td class="muted" style="font-size:.9em">${esc(x.error||'')}</td></tr>`;
+        }
+        html += `</tbody></table></div>
+          <p style="font-size:.8em;color:var(--muted);margin-top:8px">
+            Los marcados <b>(ya no reintenta)</b> necesitan que alguien los mueva a mano desde el panel de Stripe.</p>`;
+      }
+      rez.innerHTML = html;
+    }catch(err){
+      est.innerHTML = '<div class="empty">No se pudo leer el estado del cobro en línea.</div>';
+      rez.innerHTML = '';
+    }
+  }
+
+  async function barrerSaldos(){
+    const btn = document.getElementById('clBarrerBtn');
+    const alerta = document.getElementById('clAlert');
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ Buscando…'; }
+    try{
+      const r = await (await fetchAuth('/admin/api/stripe/barrer?auditar=1', {method:'POST'})).json();
+      let msg;
+      if(r.apagado) msg = 'El cobro en línea está apagado, no hay nada que revisar.';
+      else if(r.corriendo) msg = 'Ya hay una búsqueda en curso; espera unos segundos.';
+      else if(r.error) msg = 'No se pudo completar: ' + r.error;
+      else if(r.rescatados) msg = `✅ Se movieron ${r.rescatados} depósito(s) a la cuenta de León Telecom.`;
+      else if(r.fallidos) msg = `Se revisaron ${r.revisados||0} y ${r.fallidos} no se pudieron mover todavía. Se reintenta solo.`;
+      else msg = `Se revisaron ${r.revisados||0} clientes y no hay dinero atorado.`;
+      if(alerta){ alerta.className='alert alert-success'; alerta.textContent=msg; alerta.style.display='block';
+        setTimeout(()=>{ alerta.style.display='none'; }, 9000); }
+    }catch(e){
+      if(alerta){ alerta.className='alert alert-error'; alerta.textContent='No se pudo hacer la búsqueda.'; alerta.style.display='block'; }
+    }
+    if(btn){ btn.disabled = false; btn.textContent = '🔎 Buscar dinero atorado y moverlo ahora'; }
+    loadCobroLinea();
   }
 
   async function fetchAuth(url, opts = {}) {
