@@ -24,8 +24,26 @@ const crypto = require('crypto');
  * paga este cargo aparte, y de ahí sale tanto el costo real de Stripe (3.6% +
  * $3 MXN) como lo que le queda a Aforo.
  */
-const CARGO_FIJO = 8;
-const CARGO_PCT = 0.05;
+/*
+ * Una tarifa por forma de pago, no una sola pareja.
+ *
+ * Recibir el dinero cuesta distinto según por dónde entre: una transferencia
+ * SPEI le cuesta a la plataforma $8.12 fijos, una tarjeta cobra porcentaje, y
+ * OXXO cobra más que la tarjeta. Con una tarifa pareja el reparto queda torcido:
+ * sobra margen en la transferencia y casi no queda nada en OXXO.
+ *
+ * Estos son los números de la propuesta AFO-LT-003 que ya vio León Telecom, y
+ * tienen que ser los mismos que cobre el sistema. Un documento que promete
+ * $460 y un cobro que pide $470 es la peor forma de estrenar el servicio.
+ */
+const TARIFAS = {
+  // Transferencia a su CLABE. Fijo, sin porcentaje: el costo de SPEI también
+  // es fijo, así que cobrar porcentaje aquí sería cobrar por nada.
+  clabe:   { fijo: 20, pct: 0 },
+  tarjeta: { fijo: 12, pct: 0.055 },
+  oxxo:    { fijo: 12, pct: 0.06 },
+};
+const FORMAS = Object.keys(TARIFAS);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  EL INTERRUPTOR
@@ -95,12 +113,20 @@ function permitido(telefono, piloto) {
   return lista.split(',').map((x) => x.replace(/\D/g, '')).filter(Boolean).includes(tel);
 }
 
-/** Cuánto cobrarle al cliente por pagar `monto` en línea, en centavos. */
-function calcularCargo(monto) {
+/**
+ * Cuánto cobrarle al cliente por pagar `monto` por `forma`, en centavos.
+ *
+ * La forma es obligatoria a propósito. Un valor por omisión aquí significaría
+ * cobrar la tarifa equivocada en silencio el día que alguien agregue una vía
+ * nueva y olvide pasarla, y eso no se nota hasta que no cuadra la caja.
+ */
+function calcularCargo(monto, forma) {
+  const t = TARIFAS[forma];
+  if (!t) throw new Error(`Forma de pago desconocida: ${forma} (esperaba ${FORMAS.join(', ')})`);
   const base = Math.round(Number(monto) * 100);
   if (!Number.isFinite(base) || base <= 0) return null;
-  const cargo = Math.round(CARGO_FIJO * 100 + CARGO_PCT * base);
-  return { baseCentavos: base, cargoCentavos: cargo, totalCentavos: base + cargo };
+  const cargo = Math.round(t.fijo * 100 + t.pct * base);
+  return { baseCentavos: base, cargoCentavos: cargo, totalCentavos: base + cargo, forma };
 }
 
 function hayLlave() {
@@ -188,9 +214,21 @@ async function stripe(ruta, cuerpo, opciones = {}) {
  * sería silencioso y del peor tipo, porque los dos creerían que ya quedó.
  * `pagadoPor` es solo para el registro y para avisarle a quien pagó.
  */
-async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId }) {
+async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma }) {
   const cuenta = (process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim();
   if (!cuenta) throw new Error('Falta LEON_STRIPE_CUENTA_CONECTADA');
+
+  /*
+   * UNA forma por link, no las dos en el mismo.
+   *
+   * Antes el link dejaba elegir tarjeta u OXXO dentro de Stripe, y con una
+   * tarifa pareja daba igual. Ya no: OXXO cuesta más que la tarjeta, así que
+   * si el cliente eligiera adentro, el cargo cobrado no sería el de la forma
+   * que usó. Se le pregunta ANTES, en WhatsApp, y el link ya viene amarrado.
+   */
+  if (forma !== 'tarjeta' && forma !== 'oxxo') {
+    throw new Error(`generarLinkPago espera forma 'tarjeta' u 'oxxo', llegó: ${forma}`);
+  }
 
   /*
    * Guardar la tarjeta exige un cliente de Stripe al cual pegársela.
@@ -205,11 +243,13 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
     throw new Error('Para guardar la tarjeta hace falta el cliente de Stripe (clienteId)');
   }
 
-  const c = calcularCargo(monto);
+  const c = calcularCargo(monto, forma);
   if (!c) throw new Error('Monto inválido: ' + monto);
 
   const sesion = await stripe('checkout/sessions', {
     mode: 'payment',
+    // Solo la forma que el cliente ya eligió: es la que se le cotizó.
+    payment_method_types: [forma === 'oxxo' ? 'oxxo' : 'card'],
     /*
      * Dos renglones separados a propósito: el cliente VE cuánto es su
      * mensualidad y cuánto el cargo por pagar en línea. Sin letras chiquitas,
@@ -232,7 +272,9 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
         price_data: {
           currency: 'mxn',
           unit_amount: c.cargoCentavos,
-          product_data: { name: 'Cargo por pagar en línea' },
+          product_data: {
+            name: forma === 'oxxo' ? 'Cargo por pagar en OXXO' : 'Cargo por pagar con tarjeta',
+          },
         },
       },
     ],
@@ -240,6 +282,8 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
     metadata: {
       telefono: String(telefono), pagadoPor: String(pagadoPor || telefono),
       tipo: 'mensualidad-leontelecom',
+      // Con qué tarifa se cotizó, para poder cuadrar después.
+      forma,
       // Para que el webhook sepa que hay que recordar la tarjeta de este cliente.
       guardarTarjeta: guardarTarjeta ? 'si' : 'no',
       /*
@@ -254,7 +298,7 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
       mensualidad: String(c.baseCentavos),
     },
     payment_intent_data: {
-      metadata: { telefono: String(telefono), pagadoPor: String(pagadoPor || telefono), tipo: 'mensualidad-leontelecom' },
+      metadata: { telefono: String(telefono), pagadoPor: String(pagadoPor || telefono), tipo: 'mensualidad-leontelecom', forma },
       description: `Mensualidad León Telecom · ${nombre || telefono}`,
       /*
        * Stripe transfiere a la cuenta conectada el total MENOS la comisión de
@@ -286,7 +330,9 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
        * Ponerlo siempre "por si acaso" sería guardar la tarjeta de gente que
        * nunca dijo que sí.
        */
-      setup_future_usage: guardarTarjeta ? 'off_session' : undefined,
+      // Solo con tarjeta: una ficha de OXXO no se puede volver a cobrar, y
+      // mandarlo en ese caso hace que Stripe rechace la sesión entera.
+      setup_future_usage: (guardarTarjeta && forma === 'tarjeta') ? 'off_session' : undefined,
     },
     // 32 min, no 30: entre que se calcula aquí y llega a Stripe pasan segundos,
     // y pedir justo el mínimo puede quedar por debajo y ser rechazado.
@@ -297,7 +343,7 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
   });
 
   return {
-    url: sesion.url, sesionId: sesion.id,
+    url: sesion.url, sesionId: sesion.id, forma,
     // Lo que ve el cliente desglosado, en pesos, para poder decírselo por WhatsApp.
     mensualidad: c.baseCentavos / 100,
     cargo: c.cargoCentavos / 100,
@@ -499,7 +545,7 @@ async function cobrarGuardado({ clienteId, metodoPago, monto, telefono, nombre, 
   if (!cuenta) throw new Error('Falta LEON_STRIPE_CUENTA_CONECTADA');
   if (!clienteId) throw new Error('Falta el cliente de Stripe');
   if (!metodoPago) throw new Error('Falta la tarjeta guardada');
-  const c = calcularCargo(monto);
+  const c = calcularCargo(monto, 'tarjeta');   // se cobra a una tarjeta guardada
   if (!c) throw new Error('Monto inválido: ' + monto);
 
   const tel = String(telefono || '').replace(/\D/g, '');
@@ -613,7 +659,7 @@ async function cobrarDelSaldo({ clienteId, deposito, deuda, telefono, nombre, re
    * León. Si depositó justo su plan, la comisión es cero.
    */
   const deudaCent = Math.max(0, Math.round((Number(deuda) || 0) * 100));
-  const cargoIdeal = calcularCargo(deuda || 0);
+  const cargoIdeal = calcularCargo(deuda || 0, 'clabe');
   const excedente = deudaCent > 0 ? Math.max(0, depositoCent - deudaCent) : 0;
   const comision = deudaCent > 0
     ? Math.min(cargoIdeal ? cargoIdeal.cargoCentavos : 0, excedente)
@@ -740,5 +786,5 @@ module.exports = {
   hayLlave, activo, permitido, usarRegistro,
   generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,
   verificarFirma, calcularCargo, clabeValida,
-  CARGO_FIJO, CARGO_PCT,
+  TARIFAS, FORMAS,
 };

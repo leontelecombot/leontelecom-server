@@ -4096,59 +4096,81 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
     // MAQUETA: pagar con tarjeta/OXXO por Stripe, sin mandar comprobante. Repite
     // el candado del número piloto por si alguien manda el id del botón a mano.
+    /*
+     * ── TARJETA U OXXO: PRIMERO CUÁL, DESPUÉS EL LINK ───────────────────────
+     *
+     * Antes este botón entregaba un solo link donde el cliente elegía adentro
+     * de Stripe. Ya no se puede: OXXO cuesta más que la tarjeta y cada uno
+     * tiene su tarifa, así que si eligiera adentro le habríamos cobrado el
+     * cargo de la otra forma. Se le pregunta aquí, con los dos precios a la
+     * vista, y el link ya sale amarrado a lo que escogió.
+     */
     if (_pt === 'pago_tarjeta') {
-      // Se repite el candado por si alguien manda el id del botón a mano: el
-      // menú es una sugerencia, esto es la puerta.
       if (!stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
         await sendMsg(chatId, 'Esa opción todavía no está disponible para tu cuenta. Usa depósito/transferencia y manda tu comprobante como de costumbre. 🙌');
         return;
       }
       try {
-        const c = wisphubClients.get(normalizePhone(chatId)) || {};
+        const cobro = await montoACobrar(chatId);
+        if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
 
-        /*
-         * El monto sale de las FACTURAS PENDIENTES, no del campo `saldo`.
-         *
-         * `saldo` parece lo obvio y no lo es: en la instalación de León Telecom
-         * viene en 0.00 para 286 de cada 300 clientes, y negativo (saldo a
-         * favor) para otros 11. Cobrando por ahí, el botón le respondía "no veo
-         * saldo pendiente" a casi todo el mundo y la tarjeta no servía para
-         * nadie.
-         *
-         * La deuda de verdad es la suma de `total` de las facturas en estado
-         * Pendiente. Si Wisphub no contesta, se cae al plan del cliente antes
-         * que dejarlo sin poder pagar.
-         */
-        let monto = 0;
-        let deTexto = '';
-        try {
-          const d = await wisphubReactivar.deudaDelCliente(c.usuario || '');
-          monto = d.total;
-          deTexto = d.facturas.length > 1 ? ` (${d.facturas.length} mensualidades)` : '';
-        } catch (e) {
-          console.warn('[stripe-leon] no se pudo leer la deuda de', normalizePhone(chatId), '·', e.message);
-        }
-        if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;   // respaldo: su plan
-
-        if (monto <= 0) {
-          await sendMsg(chatId, 'No veo un saldo pendiente en tu cuenta ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏');
-          return;
-        }
-        const pago = await stripeLeon.generarLinkPago({
-          telefono: normalizePhone(chatId), monto, nombre: c.name, urlBase: SERVER_BASE_URL,
-        });
+        const t = stripeLeon.calcularCargo(cobro.monto, 'tarjeta');
+        const o = stripeLeon.calcularCargo(cobro.monto, 'oxxo');
         await sendMsg(chatId,
-          `💳 Aquí puedes pagar en línea, sin salir de tu casa:\n\n`
-          + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${deTexto}\n`
+          `Tu mensualidad es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}. ¿Cómo prefieres pagarla?\n\n`
+          + `💳 *Con tarjeta* — total $${(t.totalCentavos / 100).toFixed(2)}\n`
+          + `   (cargo por pagar en línea: $${(t.cargoCentavos / 100).toFixed(2)})\n\n`
+          + `🏪 *En efectivo en OXXO* — total $${(o.totalCentavos / 100).toFixed(2)}\n`
+          + `   (cargo por pagar en línea: $${(o.cargoCentavos / 100).toFixed(2)})\n\n`
+          + `Cuesta un poco más en OXXO porque la tienda cobra por recibir el efectivo.`,
+          [], { buttons: [
+            { id: 'pago_con_tarjeta', title: '💳 Con tarjeta' },
+            { id: 'pago_con_oxxo', title: '🏪 Efectivo OXXO' },
+          ] });
+      } catch (e) {
+        console.error('[stripe-leon] cotizando tarjeta/OXXO:', e.message);
+        await sendMsg(chatId, 'No pude consultar tu cuenta ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
+      }
+      return;
+    }
+
+    if (_pt === 'pago_con_tarjeta' || _pt === 'pago_con_oxxo') {
+      if (!stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+        await sendMsg(chatId, 'Esa opción todavía no está disponible para tu cuenta. Usa depósito/transferencia y manda tu comprobante como de costumbre. 🙌');
+        return;
+      }
+      const forma = _pt === 'pago_con_oxxo' ? 'oxxo' : 'tarjeta';
+      try {
+        const c = wisphubClients.get(normalizePhone(chatId)) || {};
+        const cobro = await montoACobrar(chatId);
+        if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
+
+        const pago = await stripeLeon.generarLinkPago({
+          telefono: normalizePhone(chatId), monto: cobro.monto, nombre: c.name,
+          urlBase: SERVER_BASE_URL, forma,
+        });
+
+        const cabeza = forma === 'oxxo'
+          ? '🏪 Aquí sale tu ficha para pagar en OXXO:'
+          : '💳 Aquí puedes pagar con tu tarjeta, sin salir de tu casa:';
+        const cola = forma === 'oxxo'
+          ? '\n\nAbre el link y te da la ficha con el código de barras. Llévala a cualquier OXXO y págala en caja.\n\n'
+            + '⏱️ Tienes 30 minutos para abrir el link, pero la *ficha te dura varios días*.\n\n'
+            + 'Cuando la tienda reporte el pago te avisamos por aquí y tu servicio se reactiva solo. Puede tardar unas horas. *No mandes comprobante*, nosotros lo vemos.'
+          : '\n\nEn cuanto se confirme te avisamos por aquí y tu servicio se reactiva solo — no hace falta comprobante.\n\n'
+            + '⏱️ Tienes 30 minutos para abrir el link.';
+
+        await sendMsg(chatId,
+          `${cabeza}\n\n`
+          + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${cobro.deTexto}\n`
           + `• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n`
           + `• *Total: $${pago.total.toFixed(2)}*\n\n`
-          + `${pago.url}\n\n`
-          + `Puedes pagar con *tarjeta* o pedir tu *ficha para OXXO*. En cuanto se confirme te avisamos por aquí y tu servicio se reactiva solo — no hace falta comprobante.\n\n`
-          + `⏱️ Tienes 30 minutos para abrir el link. Si sacas ficha de OXXO, esa sí te dura varios días.\n\n`
-          + `⚠️ Si ya sacaste ficha de OXXO, *no transfieras además a tu CLABE*: se te cobraría dos veces.\n\n`
+          + `${pago.url}`
+          + cola
+          + `\n\n⚠️ No pagues además por otra vía: se te cobraría dos veces.\n\n`
           + `Si prefieres pagar como siempre, por depósito o transferencia directa, sigue siendo gratis: solo mándanos tu comprobante. 🙌`);
       } catch (e) {
-        console.error('[stripe-leon] generando link:', e.message);
+        console.error('[stripe-leon] generando link de', forma, ':', e.message);
         await sendMsg(chatId, 'No pude generar el link de pago ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
       }
       return;
@@ -4233,7 +4255,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           console.warn('[stripe-leon] sin deuda para la CLABE de', tel, '·', e.message);
         }
         if (deuda <= 0) deuda = parseFloat(c.precioPlan) || 0;
-        const cargo = deuda > 0 ? stripeLeon.calcularCargo(deuda) : null;
+        const cargo = deuda > 0 ? stripeLeon.calcularCargo(deuda, 'clabe') : null;
 
         const bloqueMonto = cargo
           ? `\n💵 *Transfiere: $${(cargo.totalCentavos / 100).toFixed(2)}*\n`
@@ -5404,6 +5426,41 @@ function registrarPagoYRevisarDoble({ telefono, monto, canal, ref }) {
   stripePagosRecientes.set(tel, previos.slice(-6));
   schedulePersist();
   return sospechoso || null;
+}
+
+/*
+ * Cuánto hay que cobrarle a este cliente, y por qué.
+ *
+ * Vive aparte porque ahora lo preguntan tres caminos distintos (la cotización
+ * de tarjeta/OXXO, el link de tarjeta y el de OXXO) y los tres tienen que dar
+ * exactamente el mismo número. Si cada uno lo calculara por su cuenta, bastaría
+ * con que la deuda cambiara entre una pantalla y la siguiente para cotizarle
+ * una cosa y cobrarle otra.
+ *
+ * El monto sale de las FACTURAS PENDIENTES, no del campo `saldo`: en la
+ * instalación de León Telecom ese campo viene en 0.00 para 286 de cada 300
+ * clientes, así que cobrando por ahí el botón no le serviría a casi nadie.
+ * Si Wisphub no contesta, se cae al precio de su plan antes que dejarlo sin
+ * poder pagar.
+ */
+async function montoACobrar(chatId) {
+  const tel = normalizePhone(chatId);
+  const c = wisphubClients.get(tel) || {};
+  let monto = 0;
+  let deTexto = '';
+  try {
+    const d = await wisphubReactivar.deudaDelCliente(c.usuario || '');
+    monto = d.total;
+    deTexto = d.facturas.length > 1 ? ` (${d.facturas.length} mensualidades)` : '';
+  } catch (e) {
+    console.warn('[stripe-leon] no se pudo leer la deuda de', tel, '·', e.message);
+  }
+  if (monto <= 0) { monto = parseFloat(c.precioPlan) || 0; deTexto = ''; }
+
+  if (monto <= 0) {
+    return { ok: false, mensaje: 'No veo un saldo pendiente en tu cuenta ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏' };
+  }
+  return { ok: true, monto, deTexto };
 }
 
 /*

@@ -252,15 +252,15 @@ es(!!sesion.token, 'la sesión de administrador abre');
 
 console.log('\n=== 2. IR POR EL DINERO ATORADO, REPARTIÉNDOLO BIEN ===');
 {
-  // Debe $440 y depositó $470: los $30 de más son el cargo por pagar en línea.
+  // Debe $440 y depositó $460: los $20 de más son el cargo por transferencia.
   wisphub.deuda.set('clienteA', 440);
-  depositar('cus_A', 47000);
+  depositar('cus_A', 46000);
   const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
   es(r.rescatados === 1, 'la auditoría encuentra el depósito y lo rescata');
   const c = banco.cobros.find((x) => x.cliente === 'cus_A');
-  es(!!c && c.monto === 47000, 'se cobra el saldo completo ($470)');
+  es(!!c && c.monto === 46000, 'se cobra el saldo completo ($460)');
   es(!!c && c.destino === 'acct_leon', 'y se manda a la cuenta de León Telecom');
-  es(!!c && c.comision === 3000, 'la comisión es SOLO el excedente ($30)');
+  es(!!c && c.comision === 2000, 'el cargo es la tarifa de transferencia ($20 fijos)');
   es((banco.saldos.get('cus_A') || 0) === 0, 'el saldo del cliente queda en cero');
   es(await esperarLog('nunca reportó'), 'y se avisa que ese depósito Stripe nunca lo reportó');
 }
@@ -277,7 +277,7 @@ console.log('\n=== 2. IR POR EL DINERO ATORADO, REPARTIÉNDOLO BIEN ===');
    * siempre creyendo que ya se había cobrado.
    */
   wisphub.deuda.set('clienteA', 440);
-  depositar('cus_A', 47000);
+  depositar('cus_A', 46000);
   const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
   es(r.rescatados === 1, 'un segundo depósito idéntico el mismo día TAMBIÉN se cobra');
   es((banco.saldos.get('cus_A') || 0) === 0, 'sin quedarse atorado por la llave anti-repetido');
@@ -288,7 +288,7 @@ console.log('\n=== 3. SI NO SE SABE LA DEUDA, NO SE REPARTE MAL ===');
   // Con Wisphub caído no se puede saber cuánto de ese depósito es mensualidad y
   // cuánto excedente. Cobrar comisión aquí sería quitárselo a León Telecom.
   wisphub.caido = true;
-  depositar('cus_B', 32300);   // debe $300 y deposita $323 ($300 + $23 de cargo)
+  depositar('cus_B', 32000);   // debe $300 y deposita $320 ($300 + $20 de cargo)
   const antes = banco.cobros.length;
   const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
   es(r.rescatados === 0 && r.fallidos === 1, 'el barrido se pospone, no se hace a medias');
@@ -296,7 +296,7 @@ console.log('\n=== 3. SI NO SE SABE LA DEUDA, NO SE REPARTE MAL ===');
   const lista = await admin('/admin/api/stripe/rezagados');
   const b = lista.rezagados.find((x) => x.telefono === TEL_B);
   es(!!b && /sin deuda/.test(b.error), 'y queda anotado diciendo por qué se pospuso');
-  es((banco.saldos.get('cus_B') || 0) === 32300, 'el dinero sigue intacto en Stripe, sin riesgo');
+  es((banco.saldos.get('cus_B') || 0) === 32000, 'el dinero sigue intacto en Stripe, sin riesgo');
 }
 {
   // Wisphub vuelve antes de agotarse la espera: se reparte como debe.
@@ -305,8 +305,8 @@ console.log('\n=== 3. SI NO SE SABE LA DEUDA, NO SE REPARTE MAL ===');
   const r = await admin('/admin/api/stripe/barrer', 'POST');
   es(r.rescatados === 1, 'en cuanto Wisphub contesta, el dinero se rescata');
   const c = banco.cobros.find((x) => x.cliente === 'cus_B');
-  // El cargo de un plan de $300 es $23 ($8 fijo + 5%), no el de $440.
-  es(!!c && c.comision === 2300, 'con la comisión de SU plan ($23), no una fija');
+  // La transferencia cobra $20 fijos, sin importar el tamaño del plan.
+  es(!!c && c.comision === 2000, 'con el cargo fijo de transferencia ($20)');
   es(!!c && c.monto - c.comision === 30000, 'y a León Telecom le llegan sus $300 exactos');
   const lista = await admin('/admin/api/stripe/rezagados');
   es(lista.total === 0, 'y sale de la lista de pendientes');
@@ -317,12 +317,12 @@ console.log('\n=== 3. SI NO SE SABE LA DEUDA, NO SE REPARTE MAL ===');
    * cuatro intentos se manda completo a León, renunciando a la comisión.
    */
   wisphub.caido = true;
-  depositar('cus_B', 33000);
+  depositar('cus_B', 32000);
   let ultimo = null;
   for (let i = 0; i < 5; i++) ultimo = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
   es(ultimo.rescatados === 1, 'tras varios intentos sin Wisphub, el dinero se manda igual');
   const c = banco.cobros.filter((x) => x.cliente === 'cus_B').pop();
-  es(!!c && c.monto === 33000 && c.comision === 0,
+  es(!!c && c.monto === 32000 && c.comision === 0,
     'COMPLETO a León Telecom y sin comisión: el error caro sería cobrarle de más');
   es(await esperarLog('se barre SIN comisión'), 'y queda avisado que ese cargo se perdió');
   wisphub.caido = false;
@@ -331,7 +331,7 @@ console.log('\n=== 3. SI NO SE SABE LA DEUDA, NO SE REPARTE MAL ===');
 console.log('\n=== 4. SI STRIPE FALLA, SE REINTENTA SOLO ===');
 {
   wisphub.deuda.set('clienteA', 440);
-  depositar('cus_A', 47000);
+  depositar('cus_A', 46000);
   banco.falla = 'Stripe no está disponible';
   const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
   es(r.fallidos >= 1, 'el fallo se cuenta, no se traga');
@@ -450,14 +450,14 @@ console.log('\n=== 6b. LO QUE VE LA OFICINA EN EL PANEL ===');
   // Un depósito atorado a propósito, para que la tarjeta tenga qué mostrar.
   banco.falla = 'Stripe no está disponible';
   wisphub.deuda.set('clienteA', 440);
-  depositar('cus_A', 47000);
+  depositar('cus_A', 46000);
   await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
   banco.falla = null;
 
   const e = await admin('/admin/api/stripe/estado');
   es(e.activo === true, 'el panel dice si el cobro está encendido');
   es(e.conClabe >= 2, 'cuántos clientes ya tienen su CLABE fija');
-  es(e.rezagados === 1 && e.atorado === 470, 'y cuánto dinero está atorado, en pesos');
+  es(e.rezagados === 1 && e.atorado === 460, 'y cuánto dinero está atorado, en pesos');
   es(e.revertidos >= 1, 'con los pagos revertidos contados aparte de los que faltan por registrar');
   es(typeof e.alcance === 'string' && e.alcance.length > 0, 'y a quién se le está ofreciendo');
 

@@ -59,8 +59,11 @@ suya, para siempre. La anota una vez en su banco y cada mes deposita ahí. No
 caduca, no hay links, y el pago se registra solo. Es la que más le va a servir a
 la gente que paga por transferencia o en ventanilla.
 
-**Tarjeta u OXXO** (`💳 Tarjeta u OXXO`) — un link de Checkout que vence en 32
-minutos.
+**Tarjeta u OXXO** (`💳 Tarjeta u OXXO`) — **primero cotiza las dos y pregunta
+cuál**, porque cada una tiene su tarifa. Al elegir, sale un link de Checkout
+amarrado a esa forma (`payment_method_types` de una sola), que vence en 32
+minutos. Antes era un solo link donde el cliente elegía dentro de Stripe; con
+tarifas distintas eso significaba cotizarle una forma y cobrarle la otra.
 
 **Otras formas** (`🏢 Otras formas`) — horario de oficina y los datos de pago de
 siempre, con comprobante. Nunca desaparece: pagar como toda la vida sigue siendo
@@ -68,13 +71,31 @@ gratis.
 
 ## El dinero
 
-León Telecom recibe **su precio de plan íntegro**. El cargo por pagar en línea
-(`$8 + 5%`, ajustable en `utils/stripeLeon.js`) lo paga el cliente que elige la
-comodidad, y de ahí sale tanto el costo real de Stripe como la parte de OBEX.
-Es el mismo trato que un organizador en Aforo.
+León Telecom recibe **su precio de plan íntegro**. El cargo por pagar en línea lo
+paga el cliente que elige la comodidad, y de ahí sale tanto el costo real de
+Stripe como la parte de OBEX. Es el mismo trato que un organizador en Aforo.
 
-> Los `$8 + 5%` son un **marcador de posición**. Con Stripe MX cobrando 3.6% + $3
-> más IVA, revisa el número antes de encender para todos.
+**Hay una tarifa por forma de pago**, en `TARIFAS` dentro de `utils/stripeLeon.js`.
+Son los números de la propuesta **AFO-LT-003** que León Telecom ya tiene en la
+mano, y tienen que seguir coincidiendo: un documento que promete $460 y un cobro
+que pide $470 es la peor forma de estrenar el servicio.
+
+| Forma | Cargo | Con un plan de $440 | Cuesta procesar | Queda |
+|---|---|---|---|---|
+| Transferencia (CLABE) | `$20` fijo | Paga $460.00 | $8.12 | $11.88 |
+| Tarjeta | `$12 + 5.5%` | Paga $476.20 | $23.37 | $12.83 |
+| OXXO | `$12 + 6%` | Paga $478.40 | $25.68 | $12.72 |
+| Efectivo en oficina | `$0` | Paga $440.00 | — | — |
+
+Recibir cada forma cuesta distinto, por eso la tarifa es distinta: con una tarifa
+pareja sobraba margen en la transferencia y casi no quedaba nada en OXXO. La de
+transferencia es **fija** porque el costo de SPEI también lo es; cobrar
+porcentaje ahí sería cobrar por nada.
+
+`calcularCargo(monto, forma)` **exige la forma** y truena si no la reconoce. Un
+valor por omisión ahí significaría cobrar la tarifa equivocada en silencio el día
+que alguien agregue una vía nueva y olvide pasarla, y eso no se nota hasta que no
+cuadra la caja.
 
 ## Reactivación automática en Wisphub
 
@@ -268,8 +289,8 @@ se entera, o el cliente paga y sigue cortado.
 ## Pruebas
 
 ```
-node verificar-cobro-leon.mjs     #  79 comprobaciones del módulo de cobro
-node verificar-webhook-leon.mjs   #  43 del cableado en index.js
+node verificar-cobro-leon.mjs     #  94 comprobaciones del módulo de cobro
+node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  44 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
@@ -277,7 +298,7 @@ node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**228 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
+**253 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.
