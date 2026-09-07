@@ -44,6 +44,7 @@ const banco = {
   movimientos: new Map(),  // clienteId -> id del último depósito recibido
   duenio: new Map(),       // clienteId -> teléfono, como lo guarda Stripe en metadata
   nMovimiento: 0,
+  caido: false,           // Stripe entero sin contestar
 };
 // Un depósito nuevo: sube el saldo y estrena id de movimiento, igual que Stripe.
 const depositar = (cliente, centavos) => {
@@ -59,6 +60,8 @@ const stripeFalso = createServer((req, res) => {
     const llaveIdem = req.headers['idempotency-key'] || '';
     res.setHeader('content-type', 'application/json');
     const responder = (obj, codigo = 200) => { res.statusCode = codigo; res.end(JSON.stringify(obj)); };
+
+    if (banco.caido) { res.statusCode = 503; return res.end('{"error":{"message":"Stripe caido"}}'); }
 
     if (llaveIdem && banco.idempotencia.has(llaveIdem)) {
       return responder(banco.idempotencia.get(llaveIdem));
@@ -359,6 +362,23 @@ console.log('\n=== 4b. UN DEPÓSITO DE UN CLIENTE QUE EL REGISTRO PERDIÓ ===');
   });
   es(r.codigo === 200, 'el depósito se acepta');
   es(await esperarLog('cliente recuperado de Stripe'), 'y se le pregunta a Stripe de quién era');
+}
+
+console.log('\n=== 4c. STRIPE CAÍDO NO LLENA LA LISTA DE FALSOS ===');
+{
+  /*
+   * Durante una auditoría se le lee el saldo a TODOS los clientes con CLABE. Si
+   * Stripe está caído, todas esas lecturas fallan. Anotarlos como "dinero
+   * atorado" llenaría la lista de gente que no tiene un peso ahí, y a los ocho
+   * intentos saldría una alerta por cada uno: mil avisos falsos sepultando al
+   * que sí importaba.
+   */
+  banco.caido = true;
+  const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
+  const lista = await admin('/admin/api/stripe/rezagados');
+  es(lista.total === 0, 'con Stripe caído no se anota a nadie que no se supiera que tenía dinero');
+  es(r.rescatados === 0, 'y no se rescata nada, claro');
+  banco.caido = false;
 }
 
 console.log('\n=== 5. CUANDO EL DINERO SE DA LA VUELTA ===');

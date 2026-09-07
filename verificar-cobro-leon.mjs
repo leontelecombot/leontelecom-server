@@ -149,6 +149,47 @@ console.log('\n=== 1. EL INTERRUPTOR ===');
   process.env.COBRO_LINEA_TELEFONOS = '';
 }
 
+console.log('\n=== 1b. ABRIR DE A POCO, SIN LISTAS A MANO ===');
+{
+  // Un padrón de mentira del tamaño del de verdad.
+  const padron = [];
+  for (let i = 0; i < 1430; i++) padron.push('52951' + String(1000000 + i));
+  const cuantos = (regla) => {
+    process.env.COBRO_LINEA_TELEFONOS = regla;
+    return padron.filter((t) => stripeLeon.permitido(t)).length;
+  };
+
+  cuantos('0%') === 0 ? OK('con 0% no pasa nadie') : MAL('el 0% dejó pasar gente');
+  const diez = cuantos('10%');
+  Math.abs(diez - 143) <= 30 ? OK(`con 10% pasa ~el 10% (${diez} de 1430)`) : MAL('el 10% dio ' + diez);
+  cuantos('100%') === 1430 ? OK('con 100% pasan todos') : MAL('el 100% no dejó pasar a todos');
+
+  /*
+   * Lo que de verdad importa de un despliegue por porcentaje: que sea SIEMPRE
+   * el mismo. Si fuera al azar, un cliente vería el botón el lunes y no el
+   * martes, y llamaría a la oficina a preguntar por qué.
+   */
+  process.env.COBRO_LINEA_TELEFONOS = '10%';
+  const a = padron.filter((t) => stripeLeon.permitido(t));
+  const b = padron.filter((t) => stripeLeon.permitido(t));
+  a.length === b.length && a.every((x, i) => x === b[i])
+    ? OK('al mismo cliente siempre le toca lo mismo (no es al azar)')
+    : MAL('el resultado cambió entre dos consultas');
+
+  // Y al abrir más, a nadie se le quita lo que ya tenía.
+  process.env.COBRO_LINEA_TELEFONOS = '25%';
+  const c = new Set(padron.filter((t) => stripeLeon.permitido(t)));
+  a.every((x) => c.has(x))
+    ? OK('al subir de 10% a 25% nadie pierde el acceso que ya tenía')
+    : MAL('alguien perdió el botón al ampliar el porcentaje');
+
+  process.env.COBRO_LINEA_TELEFONOS = '5219511000005,5219511000009';
+  stripeLeon.permitido('5219511000005') === true && stripeLeon.permitido('5219511000006') === false
+    ? OK('y la lista de teléfonos de siempre sigue funcionando igual')
+    : MAL('el porcentaje rompió la lista explícita');
+  process.env.COBRO_LINEA_TELEFONOS = '';
+}
+
 console.log('\n=== 2. LA CLABE NUNCA CAMBIA ===');
 {
   const a = await stripeLeon.clabeDelCliente({ telefono: TEL, nombre: 'Cliente Piloto' });

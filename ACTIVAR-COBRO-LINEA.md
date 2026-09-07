@@ -9,14 +9,25 @@ ven exactamente lo mismo de siempre: horario en oficina y datos de pago.
 | Variable | Qué hace |
 |---|---|
 | `COBRO_LINEA_ACTIVO` | `true` enciende. Cualquier otra cosa lo deja apagado. |
-| `COBRO_LINEA_TELEFONOS` | A quién se le ofrece. Vacío = solo el piloto. Lista con comas = esos. `*` = todos. |
+| `COBRO_LINEA_TELEFONOS` | A quién se le ofrece. Vacío = solo el piloto. Lista con comas = esos. `NN%` = esa fracción del padrón. `*` = todos. |
 
 ```
 Solo tú (piloto 529516549145):  COBRO_LINEA_ACTIVO=true
 Unos cuantos:                   COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=5219511111111,5219512222222
+Uno de cada diez:               COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=10%
+La mitad:                       COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=50%
 Todo el pueblo:                 COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=*
 Apagar de emergencia:           COBRO_LINEA_ACTIVO=false
 ```
+
+**El porcentaje es la forma recomendada de abrir.** Entre el teléfono piloto y
+`*` hay un salto de 1 a 1,430 clientes, y en el primer mes de mover dinero de
+verdad conviene enterarse de los problemas con 140 personas, no con todas.
+
+Quién entra se decide con el número de teléfono, no al azar, así que **el mismo
+cliente obtiene siempre la misma respuesta**: nadie ve el botón un día y lo
+pierde al siguiente. Y al subir el porcentaje solo se agrega gente, nunca se le
+quita a quien ya lo tenía.
 
 Apagar no requiere tocar código ni volver a desplegar. Es una variable en Render.
 
@@ -30,7 +41,14 @@ Apagar no requiere tocar código ni volver a desplegar. Es una variable en Rende
 4. **Registrar el webhook en Stripe** apuntando a `POST /webhook/stripe` con
    estos eventos:
    - `checkout.session.completed`
+   - `checkout.session.async_payment_succeeded` ← cuando pagan la ficha de OXXO
+   - `checkout.session.async_payment_failed`
    - `customer_cash_balance_transaction.created` ← **el de la CLABE, no se te olvide**
+   - `charge.dispute.created` y `charge.dispute.closed` ← los contracargos
+   - `charge.refunded`
+   - `payment_intent.payment_failed`
+
+   `node revisar-listo.mjs` los revisa uno por uno y dice cuál falta.
 5. **Activar transferencias bancarias MXN** en el panel de Stripe. Sin eso, la
    CLABE no se genera.
 
@@ -228,16 +246,16 @@ se entera, o el cliente paga y sigue cortado.
 ## Pruebas
 
 ```
-node verificar-cobro-leon.mjs     #  73 comprobaciones del módulo de cobro
+node verificar-cobro-leon.mjs     #  79 comprobaciones del módulo de cobro
 node verificar-webhook-leon.mjs   #  38 del cableado en index.js
 node verificar-wisphub.mjs        #  44 de la reactivación
-node verificar-rescate-leon.mjs   #  47 del dinero atorado y los contracargos
+node verificar-rescate-leon.mjs   #  49 del dinero atorado y los contracargos
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**202 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
+**210 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.

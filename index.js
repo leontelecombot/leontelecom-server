@@ -5507,6 +5507,8 @@ function olvidarSaldoRezagado(telefono) {
 
 let _barriendoSaldos = false;
 let _ultimaAuditoriaSaldos = 0;
+let _auditoriaDesde = 0;          // por dónde va la auditoría por tandas
+const AUDITORIA_POR_PASADA = 300;  // clientes revisados en cada vuelta
 const AUDITORIA_SALDOS_MS = 6 * 3600 * 1000;
 // Después de tantos intentos fallidos deja de insistir solo y pide una persona:
 // si algo lleva 8 intentos fallando, reintentar la novena vez no lo arregla.
@@ -5535,11 +5537,17 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
     }
     if (auditar) {
       _ultimaAuditoriaSaldos = Date.now();
-      for (const [tel, datos] of stripeClientes) {
-        if (datos && datos.clienteId && !revisar.has(tel)) {
-          revisar.set(tel, { clienteId: datos.clienteId, yaAnotado: false });
-        }
-      }
+      /*
+       * La auditoría es una llamada a Stripe por cliente. Con el padrón entero
+       * con CLABE serían más de mil en una sola pasada, y mientras corre no se
+       * atienden los reintentos. Se revisa por tandas, siguiendo donde quedó la
+       * anterior: en unas cuantas vueltas se recorre a todos igual.
+       */
+      const todos = [...stripeClientes.entries()].filter(([tel, d]) => d && d.clienteId && !revisar.has(tel));
+      if (_auditoriaDesde >= todos.length) _auditoriaDesde = 0;
+      const tanda = todos.slice(_auditoriaDesde, _auditoriaDesde + AUDITORIA_POR_PASADA);
+      _auditoriaDesde = _auditoriaDesde + AUDITORIA_POR_PASADA >= todos.length ? 0 : _auditoriaDesde + AUDITORIA_POR_PASADA;
+      for (const [tel, datos] of tanda) revisar.set(tel, { clienteId: datos.clienteId, yaAnotado: false });
     }
     if (!revisar.size) return { revisados: 0, rescatados: 0, fallidos: 0 };
 
@@ -5548,14 +5556,34 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
     for (const [tel, r] of revisar) {
       const clienteId = r.clienteId || (stripeClientes.get(tel) || {}).clienteId;
       if (!clienteId) { olvidarSaldoRezagado(tel); continue; }
+
+      /*
+       * Leer el saldo ANTES de cobrar es lo que hace seguro reintentar. Si el
+       * intento anterior sí había pasado y solo se perdió la respuesta, aquí
+       * el saldo ya está en cero y no se vuelve a cobrar nada.
+       *
+       * Y va en su propio intento, aparte del cobro, por una razón concreta: si
+       * Stripe está caído durante una auditoría, esta lectura falla para los
+       * MILES de clientes que se están revisando. Si eso contara como "dinero
+       * atorado", la lista se llenaría de gente que no tiene ni un peso ahí y a
+       * los ocho intentos saldría una alerta por cada uno. Un aviso importante
+       * sepultado bajo mil avisos falsos es un aviso perdido. Así que solo se
+       * anota a quien YA se sabía que tenía dinero.
+       */
+      let pesos = 0;
       try {
-        /*
-         * Leer el saldo ANTES de cobrar es lo que hace seguro reintentar. Si el
-         * intento anterior sí había pasado y solo se perdió la respuesta, aquí
-         * el saldo ya está en cero y no se vuelve a cobrar nada.
-         */
-        const pesos = await stripeLeon.saldoDisponible(clienteId);
-        if (pesos <= 0.01) { olvidarSaldoRezagado(tel); continue; }
+        pesos = await stripeLeon.saldoDisponible(clienteId);
+      } catch (e) {
+        if (!r.yaAnotado) {
+          console.warn('[stripe-rezago] no se pudo leer el saldo de', tel, '·', e.message);
+          continue;
+        }
+        pesos = -1;   // ya sabíamos que había dinero: cuenta como intento fallido
+      }
+      if (pesos >= 0 && pesos <= 0.01) { olvidarSaldoRezagado(tel); continue; }
+
+      try {
+        if (pesos < 0) throw new Error('no se pudo leer el saldo en Stripe');
 
         const nuevo = !r.yaAnotado;   // dinero que nadie había visto entrar
         /*

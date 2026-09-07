@@ -68,6 +68,30 @@ function permitido(telefono, piloto) {
   if (!tel) return false;
   if (!lista) return !!piloto && tel === String(piloto).replace(/\D/g, '');
   if (lista === '*') return true;
+
+  /*
+   * Abrir de a poco: `COBRO_LINEA_TELEFONOS=10%` se lo ofrece al 10% del padrón.
+   *
+   * Entre el teléfono piloto y `*` hay un salto de 1 a 1,430 clientes. Si algo
+   * sale mal en producción —y en el primer mes de cobrar dinero de verdad algo
+   * sale mal— la diferencia entre enterarse con 140 clientes o con todos es la
+   * diferencia entre un mal rato y un desastre.
+   *
+   * Quién entra se decide con el teléfono, no al azar: el mismo cliente tiene
+   * que obtener SIEMPRE la misma respuesta. Si fuera aleatorio, alguien vería el
+   * botón el lunes, lo perdería el martes y llamaría a la oficina a preguntar
+   * por qué. Y al subir el porcentaje solo se agrega gente, nunca se le quita a
+   * quien ya lo tenía.
+   */
+  const pct = lista.match(/^(\d{1,3})\s*%$/);
+  if (pct) {
+    const limite = Math.min(100, Number(pct[1]));
+    if (limite <= 0) return false;
+    if (limite >= 100) return true;
+    const h = crypto.createHash('sha256').update(tel).digest();
+    return (h.readUInt32BE(0) % 100) < limite;
+  }
+
   return lista.split(',').map((x) => x.replace(/\D/g, '')).filter(Boolean).includes(tel);
 }
 
