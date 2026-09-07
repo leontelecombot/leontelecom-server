@@ -680,7 +680,23 @@ async function syncWisphubClients() {
     }
     if (!authHeader) throw new Error('Wisphub rechazó la llave de API (401/403). Hay que revisar WISPHUB_API_KEY en Render.');
 
-    wisphubClients.clear();
+    /*
+     * La lista nueva se arma APARTE y solo sustituye a la buena si sale entera.
+     *
+     * Antes se vaciaba aquí mismo, antes de leer nada. Con eso, un Wisphub que
+     * contestara 200 con la lista vacía —una llave sin permisos, un filtro que
+     * les cambia, un mal día de su API— dejaba al bot con CERO clientes: no
+     * reconocía a nadie, nadie podía pedir su CLABE, y el respaldo que existe
+     * justo para eso se sobrescribía vacío en el siguiente guardado. Lo mismo si
+     * la paginación se cortaba a la mitad: se quedaba con 500 de 1,430 y los
+     * otros 930 dejaban de existir hasta la siguiente sincronización, seis
+     * horas después.
+     *
+     * Ahora una lista peor que la que ya se tiene se rechaza y se conserva la
+     * anterior, que es vieja pero completa.
+     */
+    const nuevos = new Map();
+    const teniamos = wisphubClients.size;
     let synced = 0, revisados = 0, pages = 0, offset = 0;
     const count = (data && data.count) || null;
 
@@ -701,7 +717,7 @@ async function syncWisphubClients() {
         if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
         if (phone.length < 12) continue; // teléfono inválido
         const name = [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.razon_social || c.usuario || rawPhone;
-        wisphubClients.set(phone, {
+        nuevos.set(phone, {
           name, phone, status: c.estado, wisphubId: c.id_servicio || c.id, source: 'wisphub',
           // Datos de cuenta para la búsqueda/estado de cuenta en el panel:
           saldo: c.saldo, fechaCorte: c.fecha_corte,
@@ -718,6 +734,32 @@ async function syncWisphubClients() {
       if (!res.ok) break; // ⚠️ se cortó a media paginación → NO es un sync completo
       data = await res.json();
     }
+
+    /*
+     * ¿Esta lista está en condiciones de sustituir a la que ya tenemos?
+     *
+     * La primera sincronización de todas entra siempre: algo es mejor que nada.
+     * Después, solo se acepta si llegó completa o si al menos no encogió.
+     */
+    let rechazo = '';
+    if (teniamos) {
+      if (!nuevos.size) rechazo = 'Wisphub contestó bien pero no devolvió ni un cliente';
+      else if (!complete && nuevos.size < teniamos) rechazo = `la lista llegó cortada (${nuevos.size} de ${teniamos})`;
+    }
+    if (rechazo) {
+      wisphubSyncError = rechazo;
+      console.error('[Wisphub] Sync RECHAZADO:', rechazo, '— se conserva la lista anterior de', teniamos);
+      alertAdmin('wisphub', [
+        'La sincronización con Wisphub trajo una lista peor que la que ya teníamos.',
+        `Motivo: ${rechazo}.`,
+        `El bot sigue trabajando con la última lista buena (${teniamos} clientes).`,
+        'Se reintenta solo cada 6 horas. Si se repite todo el día, hay que revisar la llave o los permisos en Wisphub.',
+      ].join('\n'));
+      return { synced: 0, error: rechazo, conservados: teniamos };
+    }
+
+    wisphubClients.clear();
+    for (const [k, v] of nuevos) wisphubClients.set(k, v);
 
     const unicos = wisphubClients.size;       // números de WhatsApp únicos (lo real)
     const sinTelefono = revisados - synced;   // activos sin teléfono válido en Wisphub
@@ -1183,7 +1225,19 @@ function buildStateSnapshot() {
     stripeClientes: Object.fromEntries(stripeClientes),
     // Para cazar pagos dobles entre canales tras un reinicio de Render.
     stripePagosRecientes: Object.fromEntries(stripePagosRecientes),
-    stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX)
+    stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX),
+    /*
+     * Los avisos de Stripe ya procesados.
+     *
+     * Se guardan porque Stripe reintenta un aviso hasta por tres días, y Render
+     * reinicia cada vez que se despliega. Si esto viviera solo en memoria, el
+     * reintento que cae DESPUÉS de un reinicio encontraría la lista vacía y
+     * volvería a correr el pago entero: segundo "ya quedó" al cliente, segunda
+     * reactivación, y una falsa alerta de pago doble sobre un pago que era uno.
+     */
+    stripeVistos: Object.fromEntries(stripeVistos),
+    // Depósitos que entraron a Stripe y todavía NO llegaron a León Telecom.
+    stripeSaldosRezagados: Object.fromEntries(stripeSaldosRezagados)
   };
 }
 
@@ -1225,6 +1279,18 @@ function hydrateState(s) {
   if (s.stripePagosRecientes && typeof s.stripePagosRecientes === 'object') {
     for (const [k, v] of Object.entries(s.stripePagosRecientes)) {
       if (Array.isArray(v)) stripePagosRecientes.set(String(k), v);
+    }
+  }
+  if (s.stripeVistos && typeof s.stripeVistos === 'object') {
+    // Solo lo del último día: lo más viejo Stripe ya no lo va a reintentar.
+    const limite = Date.now() - 24 * 3600 * 1000;
+    for (const [k, v] of Object.entries(s.stripeVistos)) {
+      if (Number(v) > limite) stripeVistos.set(String(k), Number(v));
+    }
+  }
+  if (s.stripeSaldosRezagados && typeof s.stripeSaldosRezagados === 'object') {
+    for (const [k, v] of Object.entries(s.stripeSaldosRezagados)) {
+      if (v && typeof v === 'object') stripeSaldosRezagados.set(String(k), v);
     }
   }
   const fill = (map, obj) => { if (obj) for (const [k, v] of Object.entries(obj)) map.set(k, v); };
@@ -3261,9 +3327,28 @@ async function sweepMorningDigest() {
      */
     const facturas = registros.filter((r) => r.tipo === 'factura');
     const aFavor = registros.filter((r) => r.tipo === 'afavor');
-    const bloqueRegistros = !registros.length ? [] : [
+    /*
+     * El dinero que se fue para atrás va en SU PROPIO bloque.
+     *
+     * Un contracargo no es "un pago por registrar": es lo contrario, un pago
+     * que se deshizo. Mezclarlo con los demás haría que la oficina fuera a
+     * marcar como pagada una factura cuyo dinero el banco ya se llevó, que es
+     * exactamente el error que este aviso existe para evitar.
+     */
+    const enContra = registros.filter((r) => r.tipo === 'disputa' || r.tipo === 'devolucion');
+    const porRegistrar = registros.filter((r) => r.tipo !== 'disputa' && r.tipo !== 'devolucion');
+    const bloqueContra = !enContra.length ? [] : [
       '',
-      `💰 *${registros.length} pago${registros.length === 1 ? '' : 's'} por registrar en Wisphub*`,
+      `🚨 *${enContra.length} pago${enContra.length === 1 ? '' : 's'} que se revirtió*`,
+      '(el dinero YA NO está: no marques estas facturas como pagadas)',
+      '',
+      ...enContra.slice(0, 8).map((r) => (r.tipo === 'disputa'
+        ? `⚖️ *${r.nombre || r.telefono}* — contracargo por $${Number(r.total).toFixed(2)}\n     ${r.detalle || ''}`
+        : `↩️ *${r.nombre || r.telefono}* — devolución de $${Number(r.total).toFixed(2)}`)),
+    ].filter(Boolean);
+    const bloqueRegistros = !porRegistrar.length ? [] : [
+      '',
+      `💰 *${porRegistrar.length} pago${porRegistrar.length === 1 ? '' : 's'} por registrar en Wisphub*`,
       '(ya se les reactivó el servicio; falta marcar su factura o su saldo a favor)',
       '',
       ...facturas.slice(0, 12).map((r) =>
@@ -3272,7 +3357,7 @@ async function sweepMorningDigest() {
         `⭐ *${r.nombre}* — $${Number(r.total).toFixed(2)} a favor (no debía nada)`),
       ...registros.filter((r) => r.tipo === 'ambiguo').slice(0, 6).map((r) =>
         `❓ *${r.nombre}* (${r.telefono}) — pagó, pero tiene varios servicios\n     ${r.detalle || ''}`),
-      registros.length > 18 ? `…y ${registros.length - 18} más.` : '',
+      porRegistrar.length > 18 ? `…y ${porRegistrar.length - 18} más.` : '',
       '',
       '⚠️ Mientras no se marquen, esos clientes siguen apareciendo con deuda y les pueden volver a cortar.',
     ].filter(Boolean);
@@ -3284,7 +3369,7 @@ async function sweepMorningDigest() {
          'Toca *📥 Ver casos* para bajarlos uno por uno con sus botones, o responde *RECIBIDO [número]* / *ATENDER [número]*.']
       : ['☀️ ¡Buenos días! No hay casos pendientes de clientes.'];
 
-    const msg = [...encabezado, ...bloqueRegistros].filter(Boolean).join('\n');
+    const msg = [...encabezado, ...bloqueRegistros, ...bloqueContra].filter(Boolean).join('\n');
     await sendAgentMessageSafe(msg, pend.length ? { buttons: [{ id: 'PENDIENTES', title: '📥 Ver casos' }] } : {});
     console.log(`[digest] Resumen matutino enviado: ${pend.length} casos · ${registros.length} pagos por registrar`);
   } catch (e) { console.error('[digest] sweep error:', e.message); }
@@ -5280,6 +5365,26 @@ function registrarPagoYRevisarDoble({ telefono, monto, canal, ref }) {
 }
 
 /*
+ * De un aviso de Stripe de vuelta al teléfono del cliente.
+ *
+ * Un contracargo o una devolución llegan como el objeto de la DISPUTA o del
+ * CARGO, no como la sesión de pago, así que no siempre traen el teléfono en el
+ * metadata. Lo que sí traen es el `payment_intent`, y ese es justo el número de
+ * referencia con el que se guardó el pago cuando entró. O sea que el registro
+ * de pagos recientes ya es el índice que hace falta, sin ir a preguntarle nada
+ * a Stripe.
+ */
+function telefonoDeEventoStripe(o) {
+  const directo = String((o && o.metadata && o.metadata.telefono) || '').replace(/\D/g, '');
+  if (directo) return directo;
+  const refs = [o && o.payment_intent, o && o.charge, o && o.id].filter(Boolean).map(String);
+  for (const [tel, pagos] of stripePagosRecientes) {
+    if ((pagos || []).some((p) => refs.includes(String(p.ref)))) return tel;
+  }
+  return '';
+}
+
+/*
  * Le avisa a la oficina qué quedó pendiente de registrar en Wisphub.
  *
  * La API de Wisphub NO permite marcar una factura como pagada: `estado` es de
@@ -5330,6 +5435,236 @@ function avisarRegistroPendiente(w, telefono) {
   // Una avería de verdad (no "todavía debe", que es la regla funcionando).
   if (w.avisos.some((a) => /No se pudo reactivar|Error hablando|no se pudo confirmar/i.test(a))) {
     alertAdmin('wisphub-reactivar', `${quien} pagó pero algo falló: ${w.avisos.join(' · ')}`);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  EL DINERO QUE SE QUEDÓ ATORADO EN STRIPE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Una transferencia a la CLABE del cliente NO le llega sola a León Telecom.
+ * Cae en el saldo de ese cliente DENTRO de Stripe y se queda ahí hasta que
+ * alguien la cobra. Ese cobro lo hace el webhook en cuanto entra el aviso.
+ *
+ * Pero el webhook puede fallar justo en ese paso, y de hecho es el paso más
+ * frágil de todo el cobro: depende de que Stripe conteste una segunda vez, en
+ * caliente, mientras Render puede estar reiniciando por un despliegue. Cuando
+ * falla, hoy solo salía una alerta y el dinero se quedaba parado esperando a
+ * que una persona lo moviera a mano. Si esa persona no lo ve —de madrugada, un
+ * domingo, entre cien avisos— el cliente ya está reconectado, ya le dijimos
+ * "gracias", y León Telecom nunca recibió su dinero.
+ *
+ * Esto lo va a buscar solo. Dos redes, no una:
+ *
+ *   1. REINTENTO de los que ya sabemos que fallaron (cada 10 min).
+ *   2. AUDITORÍA de TODOS los clientes con CLABE (cada 6 h), por si el aviso
+ *      de Stripe nunca llegó y entonces ni siquiera sabemos que hay dinero.
+ *
+ * La segunda es la que de verdad cierra el hueco: la primera solo alcanza los
+ * fallos que vimos, y el peor caso es justamente el que no vimos.
+ */
+/*
+ * La deuda del cliente, distinguiendo "no debe nada" de "no se pudo saber".
+ *
+ * La diferencia decide a quién le toca la comisión, y por eso no puede
+ * confundirse. La comisión sale del EXCEDENTE: de lo que el cliente depositó
+ * por encima de lo que debía. Si Wisphub no contesta y damos la deuda por cero,
+ * el sistema cree que TODO el depósito es excedente y le cobra comisión a
+ * dinero que el cliente mandó para su internet. Eso es quitarle a León Telecom
+ * de su mensualidad, en silencio y sin que nadie lo cuadre.
+ *
+ * Así que cuando no se sabe, se dice que no se sabe, y quien llama decide.
+ */
+async function deudaConocidaDe(telefono) {
+  const c = wisphubClients.get(String(telefono)) || {};
+  if (!c.usuario) return { conocida: false, total: 0, porque: 'el cliente no está en la lista de Wisphub' };
+  try {
+    const d = await wisphubReactivar.deudaDelCliente(c.usuario);
+    return { conocida: true, total: Number(d.total) || 0 };
+  } catch (e) {
+    return { conocida: false, total: 0, porque: e.message };
+  }
+}
+
+const stripeSaldosRezagados = new Map();   // telefono -> { clienteId, pesos, desde, intentos, error }
+
+function anotarSaldoRezagado(telefono, clienteId, pesos, error) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (!tel) return;
+  const previo = stripeSaldosRezagados.get(tel) || { desde: Date.now(), intentos: 0 };
+  stripeSaldosRezagados.set(tel, {
+    ...previo, clienteId: clienteId || previo.clienteId,
+    pesos: Number(pesos) || previo.pesos || 0,
+    error: error ? String(error).slice(0, 200) : previo.error,
+  });
+  schedulePersist();
+}
+
+function olvidarSaldoRezagado(telefono) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (stripeSaldosRezagados.delete(tel)) schedulePersist();
+}
+
+let _barriendoSaldos = false;
+let _ultimaAuditoriaSaldos = 0;
+const AUDITORIA_SALDOS_MS = 6 * 3600 * 1000;
+// Después de tantos intentos fallidos deja de insistir solo y pide una persona:
+// si algo lleva 8 intentos fallando, reintentar la novena vez no lo arregla.
+const REZAGO_INTENTOS_MAX = 8;
+// Cuántas veces se espera a que Wisphub conteste antes de mandar el depósito
+// completo a León Telecom sin cobrar comisión. Cada intento son 10 min.
+const REZAGO_SIN_DEUDA_MAX = 4;
+
+async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
+  if (_barriendoSaldos) return { corriendo: true };
+  if (!stripeLeon.activo() || !stripeLeon.hayLlave()) return { apagado: true };
+  if (!(process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim()) return { apagado: true };
+  _barriendoSaldos = true;
+  try {
+    /*
+     * A quién revisarle el saldo en esta pasada.
+     *
+     * Los que ya sabemos que fallaron van SIEMPRE. Los demás solo cada 6 h,
+     * porque revisarle el saldo a todo el padrón es una llamada a Stripe por
+     * cliente y no hace falta hacerlo cada diez minutos.
+     */
+    const auditar = forzarAuditoria || Date.now() - _ultimaAuditoriaSaldos > AUDITORIA_SALDOS_MS;
+    const revisar = new Map();
+    for (const [tel, r] of stripeSaldosRezagados) {
+      if ((r.intentos || 0) < REZAGO_INTENTOS_MAX) revisar.set(tel, { ...r, yaAnotado: true });
+    }
+    if (auditar) {
+      _ultimaAuditoriaSaldos = Date.now();
+      for (const [tel, datos] of stripeClientes) {
+        if (datos && datos.clienteId && !revisar.has(tel)) {
+          revisar.set(tel, { clienteId: datos.clienteId, yaAnotado: false });
+        }
+      }
+    }
+    if (!revisar.size) return { revisados: 0, rescatados: 0, fallidos: 0 };
+
+    let rescatados = 0;
+    let fallidos = 0;
+    for (const [tel, r] of revisar) {
+      const clienteId = r.clienteId || (stripeClientes.get(tel) || {}).clienteId;
+      if (!clienteId) { olvidarSaldoRezagado(tel); continue; }
+      try {
+        /*
+         * Leer el saldo ANTES de cobrar es lo que hace seguro reintentar. Si el
+         * intento anterior sí había pasado y solo se perdió la respuesta, aquí
+         * el saldo ya está en cero y no se vuelve a cobrar nada.
+         */
+        const pesos = await stripeLeon.saldoDisponible(clienteId);
+        if (pesos <= 0.01) { olvidarSaldoRezagado(tel); continue; }
+
+        const nuevo = !r.yaAnotado;   // dinero que nadie había visto entrar
+        /*
+         * La misma regla que en el webhook: sin saber la deuda no se reparte.
+         *
+         * Pero aquí hay un límite. Si Wisphub lleva rato sin contestar, el
+         * dinero no puede quedarse esperando indefinidamente: a los 4 intentos
+         * (unos 40 minutos) se manda COMPLETO a León Telecom, sin comisión.
+         * Entre cobrarle de más a León y renunciar a nuestro cargo, se renuncia
+         * al cargo: el error caro no es perder $30, es que un cliente pague su
+         * internet y ese dinero no llegue.
+         */
+        const intentosPrevios = (stripeSaldosRezagados.get(tel) || {}).intentos || 0;
+        const d = await deudaConocidaDe(tel);
+        if (!d.conocida && intentosPrevios < REZAGO_SIN_DEUDA_MAX) {
+          fallidos++;
+          stripeSaldosRezagados.set(tel, {
+            ...(stripeSaldosRezagados.get(tel) || {}), clienteId, pesos,
+            desde: (stripeSaldosRezagados.get(tel) || {}).desde || Date.now(),
+            intentos: intentosPrevios + 1,
+            error: 'sin deuda: ' + d.porque,
+          });
+          schedulePersist();
+          console.warn('[stripe-rezago] pospuesto ·', tel, '· no se sabe la deuda:', d.porque);
+          continue;
+        }
+        const deuda = d.total;
+        if (!d.conocida) {
+          console.warn('[stripe-rezago] se barre SIN comisión ·', tel, '· Wisphub no contestó en', intentosPrevios, 'intentos');
+          alertAdmin('stripe-rezago',
+            `Se mandó completo a León Telecom el depósito de ${tel} ($${pesos.toFixed(2)}) porque Wisphub no contestó y no se pudo calcular el cargo. El cliente quedó bien; el cargo por servicio de ese pago se perdió.`);
+        }
+
+        /*
+         * La llave que impide cobrar dos veces se cuelga del MOVIMIENTO, no del
+         * monto ni del día: dos depósitos iguales el mismo día son dos pagos
+         * distintos y tienen que poder cobrarse los dos. Si Stripe no dijera
+         * cuál fue el último movimiento, se cae a monto y día, que protege del
+         * reintento inmediato aunque no distinga esos dos depósitos.
+         */
+        let referencia = '';
+        try { referencia = await stripeLeon.ultimoMovimientoSaldo(clienteId); }
+        catch (e) { console.warn('[stripe-rezago] sin id de movimiento para', tel, '·', e.message); }
+        if (!referencia) {
+          const hoy = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          referencia = `rezago-${clienteId}-${Math.round(pesos * 100)}-${hoy}`;
+        }
+        const barrido = await stripeLeon.cobrarDelSaldo({
+          clienteId, deposito: pesos, deuda, telefono: tel,
+          nombre: (wisphubClients.get(tel) || {}).name,
+          referencia,
+        });
+        rescatados++;
+        olvidarSaldoRezagado(tel);
+        console.log('[stripe-rezago] rescatado ·', tel, '· $' + barrido.aLeonTelecom.toFixed(2), 'a León');
+
+        /*
+         * Si el aviso original SÍ llegó, al cliente ya se le dio las gracias y
+         * la factura ya se anotó: aquí solo faltaba mover el dinero, y volver a
+         * escribirle sería un segundo "ya quedó" por el mismo pago.
+         *
+         * Si el dinero apareció en la auditoría, nadie sabía que existía: ahí sí
+         * hay que avisarle y aplicar el pago, porque para él pagó y no pasó nada.
+         */
+        if (nuevo) {
+          console.warn('[stripe-rezago] ¡depósito que el webhook nunca reportó! ·', tel, '· $' + pesos.toFixed(2));
+          alertAdmin('stripe-rezago',
+            `Se encontró un depósito de $${pesos.toFixed(2)} de ${tel} que Stripe nunca avisó. Ya se movió a León Telecom y se le aplicó. Vale la pena revisar que el webhook esté recibiendo.`);
+          registrarPagoYRevisarDoble({ telefono: tel, monto: pesos, canal: 'transferencia', ref: barrido.id });
+          markCases(tel, 'recibido', 'stripe-clabe');
+          await sendWhatsAppMessage(tel,
+            `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado. ¡Gracias! 🙌`).catch(() => {});
+          try {
+            const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: pesos, referencia: barrido.id });
+            if (w.reactivado) {
+              await sendWhatsAppMessage(tel, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+            }
+            avisarRegistroPendiente(w, tel);
+          } catch (e) { console.error('[stripe-rezago] wisphub:', e.message); }
+        }
+      } catch (e) {
+        const previo = stripeSaldosRezagados.get(tel) || {};
+        const intentos = (previo.intentos || 0) + 1;
+        stripeSaldosRezagados.set(tel, {
+          ...previo, clienteId, intentos,
+          pesos: previo.pesos || 0, desde: previo.desde || Date.now(),
+          error: String(e.message).slice(0, 200),
+        });
+        schedulePersist();
+        fallidos++;
+        console.error('[stripe-rezago] intento', intentos, 'falló para', tel, '·', e.message);
+        /*
+         * Se avisa UNA sola vez, al agotar los intentos. Alertar en cada
+         * pasada convertiría una avería en cien mensajes y la alerta dejaría
+         * de leerse, que es como se pierden las importantes.
+         */
+        if (intentos === REZAGO_INTENTOS_MAX) {
+          alertAdmin('stripe-rezago',
+            `⚠️ Hay dinero de ${tel} atorado en Stripe y ya no se pudo mover solo (${intentos} intentos). Último error: ${e.message}. Hay que barrerlo a mano desde el panel de Stripe.`);
+        }
+      }
+    }
+    if (rescatados) console.log('[stripe-rezago] pasada terminada ·', rescatados, 'rescatado(s)');
+    return { revisados: revisar.size, rescatados, fallidos, auditoria: auditar };
+  } catch (e) {
+    console.error('[stripe-rezago] barrido:', e.message);
+    return { error: e.message };
+  } finally {
+    _barriendoSaldos = false;
   }
 }
 
@@ -5527,6 +5862,30 @@ app.post('/webhook/stripe', async (req, res) => {
       for (const [tel, datos] of stripeClientes) {
         if (datos && datos.clienteId === clienteId) { telefono = tel; break; }
       }
+      /*
+       * Si el registro no lo conoce, PREGUNTARLE A STRIPE de quién es.
+       *
+       * Antes esto se rendía aquí y el depósito quedaba sin dueño, esperando a
+       * que alguien lo resolviera a mano en el panel. Pero cada cliente se creó
+       * con su teléfono en el metadata, así que Stripe siempre lo sabe: basta
+       * con preguntar. Pasa cuando el registro local se perdió (base nueva,
+       * migración) y es justo el caso donde el cliente ya transfirió y jura que
+       * pagó.
+       */
+      if (!telefono && clienteId) {
+        try {
+          const c = await stripeLeon.obtenerCliente(clienteId);
+          const tel = String((c && c.metadata && c.metadata.telefono) || '').replace(/\D/g, '');
+          if (tel) {
+            telefono = tel;
+            stripeClientes.set(tel, { ...(stripeClientes.get(tel) || {}), clienteId });
+            schedulePersist();
+            console.warn('[stripe-leon] cliente recuperado de Stripe ·', clienteId, '→', tel);
+          }
+        } catch (e) {
+          console.error('[stripe-leon] no se pudo preguntar de quién es', clienteId, '·', e.message);
+        }
+      }
 
       if (stripeVistos.has(o.id)) {
         console.log('[stripe-leon] depósito repetido de', o.id, '— se ignora');
@@ -5550,31 +5909,50 @@ app.post('/webhook/stripe', async (req, res) => {
          * Va antes del aviso a propósito: si el barrido falla hay que decirlo,
          * no mandar un "ya quedó" sobre dinero que no se movió.
          */
-        let barrido = null;
-        try {
-          const reg = stripeClientes.get(telefono) || {};
-          let deuda = 0;
-          try {
-            const c = wisphubClients.get(telefono) || {};
-            if (c.usuario) deuda = (await wisphubReactivar.deudaDelCliente(c.usuario)).total;
-          } catch (e) { console.warn('[stripe-leon] sin deuda para calcular comisión:', e.message); }
-
-          barrido = await stripeLeon.cobrarDelSaldo({
-            clienteId: reg.clienteId || o.customer, deposito: pesos, deuda,
-            telefono, nombre: (wisphubClients.get(telefono) || {}).name, referencia: o.id,
-          });
-          console.log('[stripe-leon] saldo barrido ·', telefono,
-            '· a León $' + barrido.aLeonTelecom.toFixed(2), '· comisión $' + barrido.comision.toFixed(2));
-          if (barrido.sinComision) {
-            console.warn('[stripe-leon] sin comisión: depositó justo su plan, sin el cargo ·', telefono);
-          }
-        } catch (e) {
+        const reg = stripeClientes.get(telefono) || {};
+        const deuda = await deudaConocidaDe(telefono);
+        if (!deuda.conocida) {
           /*
-           * El dinero está a salvo en el saldo del cliente: no se pierde, pero
-           * tampoco le llegó a León. Alguien tiene que barrerlo a mano.
+           * Sin saber la deuda no se puede repartir bien, así que el barrido se
+           * POSPONE en vez de hacerse mal. La comisión sale del excedente sobre
+           * lo que el cliente debía; si damos la deuda por cero cuando en
+           * realidad no la sabemos, todo el depósito parece excedente y le
+           * cobramos comisión a dinero que era la mensualidad de León.
+           *
+           * El dinero no corre ningún riesgo: sigue en Stripe, a nombre del
+           * cliente, y `barrerSaldosRezagados` lo reintenta cada diez minutos.
+           * En cuanto Wisphub conteste se reparte como debe; si nunca contesta,
+           * a los cuarenta minutos se manda completo a León Telecom sin cobrar
+           * nada, que es el lado correcto donde equivocarse.
            */
-          console.error('[stripe-leon] NO se pudo barrer el saldo de', telefono, '·', e.message);
-          alertAdmin('stripe-saldo', `Entró una transferencia de $${pesos.toFixed(2)} de ${telefono} y NO se pudo mover a la cuenta de León Telecom: ${e.message}. El dinero está en Stripe, hay que barrerlo a mano.`);
+          console.warn('[stripe-leon] barrido pospuesto ·', telefono, '· no se sabe la deuda:', deuda.porque);
+          anotarSaldoRezagado(telefono, reg.clienteId || o.customer, pesos, 'sin deuda: ' + deuda.porque);
+        } else {
+          try {
+            const barrido = await stripeLeon.cobrarDelSaldo({
+              clienteId: reg.clienteId || o.customer, deposito: pesos, deuda: deuda.total,
+              telefono, nombre: (wisphubClients.get(telefono) || {}).name, referencia: o.id,
+            });
+            console.log('[stripe-leon] saldo barrido ·', telefono,
+              '· a León $' + barrido.aLeonTelecom.toFixed(2), '· comisión $' + barrido.comision.toFixed(2));
+            if (barrido.sinComision) {
+              console.warn('[stripe-leon] sin comisión: depositó justo su plan, sin el cargo ·', telefono);
+            }
+          } catch (e) {
+            /*
+             * El dinero está a salvo en el saldo del cliente: no se pierde, pero
+             * tampoco le llegó a León.
+             *
+             * Antes esto solo alertaba y se quedaba esperando a que una persona
+             * lo moviera a mano. Ahora se anota y `barrerSaldosRezagados` lo
+             * reintenta solo cada diez minutos: la mayoría de estos fallos son
+             * pasajeros (Stripe intermitente, un reinicio a media transacción) y
+             * se arreglan sin que nadie tenga que enterarse. La alerta se guarda
+             * para cuando de verdad ya no se pudo.
+             */
+            console.error('[stripe-leon] NO se pudo barrer el saldo de', telefono, '·', e.message);
+            anotarSaldoRezagado(telefono, reg.clienteId || o.customer, pesos, e.message);
+          }
         }
         const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id });
         if (doble) {
@@ -5614,6 +5992,79 @@ app.post('/webhook/stripe', async (req, res) => {
         alertAdmin('stripe-leon', `Entró una transferencia de $${pesos.toFixed(2)} al cliente de Stripe ${clienteId}, que no está en el registro: no se pudo abonar a nadie. Revísalo a mano en Stripe.`);
       }
       return res.json({ recibido: true });
+    }
+    /*
+     * ── CUANDO EL DINERO SE DA LA VUELTA ────────────────────────────────────
+     *
+     * Un contracargo o una devolución es un pago que ya dimos por bueno y que
+     * después se deshace. Para entonces el cliente ya está reconectado, ya se
+     * le dijo "gracias", y la factura ya se marcó como pagada en la oficina.
+     *
+     * Hasta ahora esto no se escuchaba: el dinero se iba y el sistema seguía
+     * creyendo que ese mes estaba pagado. Nadie se enteraba hasta cuadrar caja,
+     * si es que alguien cuadraba.
+     *
+     * Aquí NO se corta a nadie automáticamente. Cortar por un contracargo sería
+     * dejar sin internet a alguien que a lo mejor solo no reconoció el nombre
+     * del cargo en su estado de cuenta, que es de donde sale la mayoría de las
+     * disputas. La decisión es de una persona; lo que hace falta es que esa
+     * persona SE ENTERE, con el nombre y el monto en la mano.
+     */
+    if (evento.type === 'charge.dispute.created' || evento.type === 'charge.dispute.closed') {
+      const tel = telefonoDeEventoStripe(o);
+      const quien = tel ? `${(wisphubClients.get(tel) || {}).name || 'cliente'} (${tel})` : `cargo ${o.charge || o.id}`;
+      const monto = ((Number(o.amount) || 0) / 100).toFixed(2);
+
+      if (evento.type === 'charge.dispute.created') {
+        alertAdmin('stripe-disputa',
+          `🚨 CONTRACARGO de ${quien} por $${monto}. El banco retuvo ese dinero y hay que responder en Stripe con la evidencia (contrato, historial de servicio) antes de que venza el plazo. El servicio NO se cortó solo: decidan ustedes.`);
+        console.warn('[stripe-leon] contracargo ·', quien, '· $' + monto, '·', o.id);
+        anotarRegistroPendiente({ tipo: 'disputa', factura: null, total: Number(monto),
+          nombre: (wisphubClients.get(tel) || {}).name || '', telefono: tel || '',
+          detalle: `Contracargo ${o.id} · motivo: ${o.reason || 'sin especificar'}` });
+      } else {
+        const gano = o.status === 'won';
+        alertAdmin('stripe-disputa',
+          `${gano ? '✅' : '❌'} El contracargo de ${quien} por $${monto} se cerró: *${gano ? 'ganado' : String(o.status || 'perdido')}*.`
+          + (gano ? ' El dinero regresa.' : ' Ese dinero ya no vuelve; si el cliente sigue conectado, decidan qué hacer.'));
+        console.warn('[stripe-leon] disputa cerrada ·', quien, '·', o.status);
+      }
+      return res.json({ recibido: true, disputa: true });
+    }
+
+    if (evento.type === 'charge.refunded') {
+      const tel = telefonoDeEventoStripe(o);
+      const devuelto = ((Number(o.amount_refunded) || 0) / 100);
+      const total = ((Number(o.amount) || 0) / 100);
+      const parcial = devuelto > 0 && devuelto < total - 0.01;
+      const quien = tel ? `${(wisphubClients.get(tel) || {}).name || 'cliente'} (${tel})` : `cargo ${o.id}`;
+
+      alertAdmin('stripe-devolucion',
+        `↩️ DEVOLUCIÓN ${parcial ? 'PARCIAL ' : ''}a ${quien} por $${devuelto.toFixed(2)}`
+        + (parcial ? ` de $${total.toFixed(2)}` : '')
+        + '. Si ese pago ya se había marcado en Wisphub, hay que deshacerlo ahí.');
+      console.warn('[stripe-leon] devolución ·', quien, '· $' + devuelto.toFixed(2), '·', o.id);
+      anotarRegistroPendiente({ tipo: 'devolucion', factura: null, total: devuelto,
+        nombre: (wisphubClients.get(tel) || {}).name || '', telefono: tel || '',
+        detalle: `Devolución del cargo ${o.id}` });
+      return res.json({ recibido: true, devolucion: true });
+    }
+
+    /*
+     * Un cobro que se intentó y no pasó. Casi siempre es el barrido del saldo
+     * de una CLABE: el dinero del cliente sigue dentro de Stripe sin llegarle a
+     * León. Se anota para que `barrerSaldosRezagados` lo reintente solo, en vez
+     * de quedarse esperando a que alguien lo note.
+     */
+    if (evento.type === 'payment_intent.payment_failed'
+        && o.metadata && o.metadata.tipo === 'mensualidad-leontelecom') {
+      const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
+      const motivo = (o.last_payment_error && o.last_payment_error.message) || 'sin detalle';
+      console.warn('[stripe-leon] cobro fallido ·', tel || o.id, '·', motivo);
+      if (tel && o.metadata.via === 'clabe') {
+        anotarSaldoRezagado(tel, o.customer, (Number(o.amount) || 0) / 100, motivo);
+      }
+      return res.json({ recibido: true, fallido: true });
     }
   } catch (e) { console.error('[stripe-leon] webhook:', e.message); }
 
@@ -6919,6 +7370,40 @@ app.post('/admin/api/wisphub-sync', verifyAdminToken, requirePermission('wisphub
   res.json(result);
 });
 
+/*
+ * Ver y mover a mano el dinero atorado en Stripe.
+ *
+ * El barrido automático corre cada diez minutos, y para casi todo eso sobra.
+ * Pero el día que un cliente llame diciendo "ya transferí" nadie quiere
+ * contestarle "espérate diez minutos": con esto se revisa y se mueve al
+ * momento, y la respuesta dice exactamente cuánto se rescató.
+ *
+ * `?auditar=1` fuerza la revisión de TODOS los clientes con CLABE, no solo de
+ * los que ya se sabía que habían fallado.
+ */
+app.get('/admin/api/stripe/rezagados', verifyAdminToken, (req, res) => {
+  const lista = [...stripeSaldosRezagados.entries()].map(([telefono, r]) => ({
+    telefono,
+    nombre: (wisphubClients.get(telefono) || {}).name || '',
+    pesos: Number(r.pesos) || 0,
+    intentos: r.intentos || 0,
+    desde: r.desde ? new Date(r.desde).toISOString() : null,
+    error: r.error || '',
+    // Ya no se reintenta solo: necesita que una persona lo mueva desde Stripe.
+    agotado: (r.intentos || 0) >= REZAGO_INTENTOS_MAX,
+  }));
+  res.json({ total: lista.length, rezagados: lista });
+});
+
+app.post('/admin/api/stripe/barrer', verifyAdminToken, async (req, res) => {
+  try {
+    const r = await barrerSaldosRezagados({ forzarAuditoria: req.query.auditar === '1' });
+    res.json(r || {});
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // API: Get network status (check Wisphub or return online)
 app.get('/admin/api/network-status', verifyAdminToken, async (req, res) => {
   try {
@@ -7076,6 +7561,20 @@ const port = Number(process.env.PORT || 3000);
   // 3f) Bienvenida a NUEVOS clientes de Wisphub (baseline + saludo a los nuevos)
   setTimeout(() => sweepNewClients().catch(() => {}), 20000);        // primera pasada al arrancar
   setInterval(() => sweepNewClients().catch(() => {}), 15 * 60000);  // luego cada 15 min
+
+  /*
+   * 3g) Ir por el dinero que se quedó atorado dentro de Stripe.
+   *
+   * Arranca a los 90 s (no de inmediato: al levantar, el estado apenas se está
+   * restaurando y Wisphub todavía no sincroniza) y luego cada 10 min. Cada 6 h
+   * esa misma pasada audita a TODOS los clientes con CLABE, por si entró un
+   * depósito cuyo aviso nunca llegó.
+   *
+   * Sale gratis cuando no hay nada que hacer: si el cobro está apagado o no hay
+   * rezagados, la función regresa sin hablar con nadie.
+   */
+  setTimeout(() => barrerSaldosRezagados().catch(() => {}), 90000);
+  setInterval(() => barrerSaldosRezagados().catch(() => {}), 10 * 60000);
 
   // 4) Levantar el servidor
   app.listen(port, () => {

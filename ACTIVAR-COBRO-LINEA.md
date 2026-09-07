@@ -146,7 +146,53 @@ recibe confirmación.
 reactivación se reporta como fallida en vez de tronar.
 
 **Si no se puede leer la deuda.** NO se reactiva. Reconectar sin saber si pagó lo
-suficiente es regalar servicio.
+suficiente es regalar servicio. Y tampoco se reparte el dinero: sin saber cuánto
+debía, no se puede saber cuánto de su depósito es excedente, y cobrar comisión a
+ciegas sería quitársela a la mensualidad de León. El depósito se queda en Stripe
+(a salvo, a nombre del cliente) y se reintenta cada 10 minutos. Si Wisphub no
+vuelve en 40 minutos, el dinero se manda **completo a León Telecom, sin cobrar
+comisión**: perder el cargo es mucho más barato que cobrarle de más.
+
+**El dinero que se atora en Stripe.** Una transferencia a la CLABE cae en el
+saldo del cliente *dentro* de Stripe y no llega a León hasta que alguien la
+cobra. Ese cobro puede fallar, y antes solo salía una alerta esperando a que una
+persona lo moviera a mano. Ahora hay dos redes:
+
+- **Reintento** cada 10 minutos de los depósitos que se sabe que fallaron.
+- **Auditoría** cada 6 horas de **todos** los clientes con CLABE, por si el aviso
+  de Stripe nunca llegó y entonces nadie sabía siquiera que había dinero.
+
+Cuando la auditoría encuentra dinero del que nadie estaba enterado, además de
+moverlo le avisa al cliente y aplica el pago, porque para él ya había pagado y
+no había pasado nada.
+
+Desde el panel: `GET /admin/api/stripe/rezagados` para ver qué hay atorado, y
+`POST /admin/api/stripe/barrer` (con `?auditar=1` para revisar a todos) para no
+tener que esperar los 10 minutos cuando alguien llama diciendo "ya transferí".
+
+**Contracargos y devoluciones.** Antes no se escuchaban: el banco se llevaba el
+dinero y el sistema seguía creyendo que ese mes estaba pagado. Ahora llegan al
+webhook y se avisan con nombre y monto. **A nadie se le corta el internet
+automáticamente** por un contracargo: la mayoría nacen de no reconocer el nombre
+del cargo en el estado de cuenta, no de un fraude. La decisión es de una persona.
+En el resumen matutino van en su propio bloque, separados de los pagos por
+registrar, con la advertencia de no marcar esas facturas como pagadas.
+
+**Un depósito de un cliente que el registro no reconoce.** Pasa si el registro
+local se pierde (base nueva, migración). No hace falta rendirse: cada cliente se
+creó con su teléfono en el metadata de Stripe, así que se le pregunta a Stripe de
+quién era y se vuelve a anotar.
+
+**Un aviso que Stripe reintenta después de un reinicio de Render.** Stripe
+reintenta hasta tres días y Render reinicia en cada despliegue. El candado de
+"esto ya se procesó" ahora se guarda con el estado, así que el reintento no
+vuelve a cobrar ni manda un segundo "ya quedó".
+
+**Wisphub contestando con la lista vacía.** Lo más peligroso que le puede pasar
+al bot: dejaría de reconocer a los 1,430 clientes de golpe, nadie podría pedir su
+CLABE, y el respaldo se sobrescribiría vacío. Ahora la lista nueva se arma aparte
+y solo sustituye a la buena si llegó entera; una lista vacía o cortada a la mitad
+se rechaza, se conserva la anterior y se avisa.
 
 ## Lo que sigue siendo manual
 
@@ -182,16 +228,19 @@ se entera, o el cliente paga y sigue cortado.
 ## Pruebas
 
 ```
-node verificar-cobro-leon.mjs     # 53 comprobaciones del módulo de cobro
-node verificar-webhook-leon.mjs   # 17 del cableado en index.js
-node verificar-wisphub.mjs        # 44 de la reactivación
-node revisar-stripe.mjs          # la cuenta de Stripe a detalle
-node revisar-listo.mjs           # TODO junto: ¿ya puedo encender?
+node verificar-cobro-leon.mjs     #  73 comprobaciones del módulo de cobro
+node verificar-webhook-leon.mjs   #  38 del cableado en index.js
+node verificar-wisphub.mjs        #  44 de la reactivación
+node verificar-rescate-leon.mjs   #  47 del dinero atorado y los contracargos
+node revisar-stripe.mjs           # la cuenta de Stripe a detalle
+node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-Ninguna toca Stripe de verdad: hay un Stripe falso que reproduce el retraso de
-indexado, la idempotencia y los rechazos del banco.
+**202 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
+Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
+del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
+sistema cuando no contesta.
 
 ## Lo que está blindado, y por qué
 

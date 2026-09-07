@@ -629,6 +629,63 @@ async function cobrarDelSaldo({ clienteId, deposito, deuda, telefono, nombre, re
   };
 }
 
+/*
+ * De vuelta del cliente de Stripe al teléfono, preguntándole a Stripe.
+ *
+ * El registro local es quien dice qué Customer es cada teléfono, y se persiste.
+ * Pero si ese registro se perdiera —una base nueva, una migración a medias— un
+ * depósito a la CLABE llegaría de un Customer que el sistema ya no reconoce, y
+ * el dinero se quedaría sin poder abonárselo a nadie.
+ *
+ * No hace falta que sea así: cada Customer se creó con el teléfono en su
+ * metadata, así que Stripe SIEMPRE sabe de quién es. Esto lo va a preguntar.
+ */
+async function obtenerCliente(clienteId) {
+  if (!clienteId) throw new Error('Falta el cliente de Stripe');
+  return stripe(`customers/${encodeURIComponent(clienteId)}`);
+}
+
+/*
+ * ¿Cuánto dinero de este cliente sigue guardado DENTRO de Stripe?
+ *
+ * Una transferencia a la CLABE no le llega a León Telecom sola: cae en el saldo
+ * del cliente dentro de Stripe y ahí se queda hasta que alguien la cobre. Lo
+ * normal es que la cobre el webhook en cuanto entra, pero ese barrido puede
+ * fallar —Stripe intermitente, Render reiniciando, un aviso que se perdió— y
+ * entonces el dinero se queda ahí: no se pierde, pero tampoco llega, y nadie
+ * se entera hasta que el cliente reclama que ya pagó.
+ *
+ * Esto es lo que permite ir a buscarlo después. Devuelve PESOS, no centavos.
+ */
+async function saldoDisponible(clienteId) {
+  if (!clienteId) throw new Error('Falta el cliente de Stripe');
+  const cb = await stripe(`customers/${encodeURIComponent(clienteId)}/cash_balance`);
+  const centavos = (cb && cb.available && cb.available.mxn) || 0;
+  return (Number(centavos) || 0) / 100;
+}
+
+/*
+ * El identificador del último movimiento del saldo de un cliente.
+ *
+ * Sirve para ponerle nombre propio a un depósito cuando se rescata a
+ * destiempo. Cuando el aviso llega bien, ese nombre es el id del movimiento
+ * que trae el propio aviso; cuando hay que ir a buscar el dinero después, el
+ * aviso no está y hace falta preguntarlo.
+ *
+ * Importa porque ese nombre es la llave que impide cobrar dos veces. Una llave
+ * armada con el monto y la fecha parecería suficiente y NO lo es: si el mismo
+ * cliente deposita dos veces la misma cantidad el mismo día —dos meses que
+ * paga por separado, o un familiar que paga sin avisar— las dos veces darían
+ * la misma llave, Stripe devolvería el primer cobro como si fuera el segundo, y
+ * el segundo depósito se quedaría atorado sin que nadie lo notara. El id del
+ * movimiento es distinto para cada depósito, siempre.
+ */
+async function ultimoMovimientoSaldo(clienteId) {
+  if (!clienteId) throw new Error('Falta el cliente de Stripe');
+  const r = await stripe(`customers/${encodeURIComponent(clienteId)}/cash_balance_transactions?limit=1`);
+  return (r && r.data && r.data[0] && r.data[0].id) || '';
+}
+
 /** Firma del webhook de Stripe — mismo HMAC que aforo/cobro.js, comparación en tiempo constante. */
 function verificarFirma(cuerpoCrudo, cabecera, secreto, toleranciaSeg = 300) {
   if (!cuerpoCrudo || !cabecera || !secreto) return false;
@@ -657,7 +714,7 @@ function verificarFirma(cuerpoCrudo, cabecera, secreto, toleranciaSeg = 300) {
 
 module.exports = {
   hayLlave, activo, permitido, usarRegistro,
-  generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo,
+  generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,
   verificarFirma, calcularCargo, clabeValida,
   CARGO_FIJO, CARGO_PCT,
 };
