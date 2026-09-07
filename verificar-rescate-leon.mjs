@@ -468,6 +468,27 @@ console.log('\n=== 6b. LO QUE VE LA OFICINA EN EL PANEL ===');
   es(e2.rezagados === 0 && e2.atorado === 0, 'y la tarjeta queda en cero');
 }
 
+console.log('\n=== 6c. EL CARGO QUE NO SE PUDO COBRAR SE VE ===');
+{
+  /*
+   * El cliente transfiere JUSTO lo que debía, sin sumarle el cargo. Su pago
+   * queda perfecto y León recibe todo. Pero esa transferencia le cuesta $8.12
+   * a la plataforma, así que ese pago deja a OBEX en rojo. No falla, no alerta
+   * y no se ve en ningún lado: por eso hay que contarlo.
+   */
+  const antes = await admin('/admin/api/stripe/estado');
+  wisphub.deuda.set('clienteA', 440);
+  depositar('cus_A', 44000);              // $440 exactos, sin el cargo
+  const r = await admin('/admin/api/stripe/barrer?auditar=1', 'POST');
+  es(r.rescatados === 1, 'el pago entra igual y le llega completo a León');
+  const c = banco.cobros.filter((x) => x.cliente === 'cus_A').pop();
+  es(!!c && c.comision === 0, 'sin cargo cobrado, porque no hubo excedente');
+
+  const e = await admin('/admin/api/stripe/estado');
+  es(e.sinCargo.cantidad === antes.sinCargo.cantidad + 1, 'y queda contado como pago sin cargo');
+  es(e.sinCargo.costo > antes.sinCargo.costo, 'con lo que costó, para que se vea la pérdida');
+}
+
 console.log('\n=== 7. UNA LISTA PEOR NUNCA SUSTITUYE A LA BUENA ===');
 {
   /*

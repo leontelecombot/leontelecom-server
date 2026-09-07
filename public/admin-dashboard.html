@@ -1426,6 +1426,10 @@
            <tr><td class="muted">Pagos por registrar en Wisphub</td><td><b>${e.porRegistrar}</b></td></tr>
            <tr><td class="muted">Pagos revertidos (contracargos y devoluciones)</td>
                <td><b style="color:${e.revertidos?'#b3261e':'inherit'}">${e.revertidos}</b></td></tr>
+           <tr><td class="muted">Pagos sin cargo cobrado <span title="El cliente transfirió justo lo que debía, sin sumarle el cargo por pagar en línea. Su pago quedó perfecto, pero a nosotros esa transferencia nos cuesta $8.12 de Stripe.">ⓘ</span><br>
+               <span class="muted" style="font-size:.85em">últimos 30 días</span></td>
+               <td><b style="color:${(e.sinCargo&&e.sinCargo.cantidad)?'#b3261e':'inherit'}">${(e.sinCargo&&e.sinCargo.cantidad)||0}</b>
+               ${(e.sinCargo&&e.sinCargo.cantidad)?`<br><span class="muted" style="font-size:.85em">nos costaron $${e.sinCargo.costo.toFixed(2)}</span>`:''}</td></tr>
          </tbody></table>`;
 
       const atorado = Number(e.atorado||0);

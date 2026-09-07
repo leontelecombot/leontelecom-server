@@ -215,6 +215,25 @@ CLABE, y el respaldo se sobrescribiría vacío. Ahora la lista nueva se arma apa
 y solo sustituye a la buena si llegó entera; una lista vacía o cortada a la mitad
 se rechaza, se conserva la anterior y se avisa.
 
+### El monto que se le pide al cliente NO es su plan
+
+Es la parte del sistema donde más fácil se pierde dinero, y no se nota.
+
+El cargo por pagar en línea sale del **excedente** sobre lo que el cliente
+debía. Si transfiere justo su mensualidad, el excedente es cero y no se cobra
+nada. Y recibir esa transferencia le cuesta a la plataforma **$8.12**
+(comprobado contra la API de Stripe con un cargo real: entraron $440, quedaron
+$431.88). O sea que un pago sin cargo no es "ganar cero", es **perder $8.12**.
+
+Por eso el mensaje de la CLABE trae el **total exacto** con el cargo ya sumado,
+sacado de sus facturas pendientes. Si dijera "transfiere el monto de tu plan",
+todo el mundo transferiría justo eso y con el padrón entero serían más de once
+mil pesos al mes de pérdida, en silencio.
+
+Los pagos que aun así entran sin cargo (alguien que transfiere de memoria) se
+cuentan y se ven en el panel, en la tarjeta de Cobro en línea, con lo que
+costaron.
+
 ## Lo que sigue siendo manual
 
 La API de Wisphub **no permite marcar una factura como pagada**: `estado` es de
@@ -250,15 +269,15 @@ se entera, o el cliente paga y sigue cortado.
 
 ```
 node verificar-cobro-leon.mjs     #  79 comprobaciones del módulo de cobro
-node verificar-webhook-leon.mjs   #  38 del cableado en index.js
+node verificar-webhook-leon.mjs   #  43 del cableado en index.js
 node verificar-wisphub.mjs        #  44 de la reactivación
-node verificar-rescate-leon.mjs   #  58 del dinero atorado y los contracargos
+node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**219 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
+**228 comprobaciones en total.** Ninguna toca Stripe ni Wisphub de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.

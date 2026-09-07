@@ -270,7 +270,7 @@ console.log('\n=== 6e. LA CLABE SOLO PARA CLIENTES DE VERDAD ===');
    * a ningún servicio: entra, no tiene dueño, y alguien lo devuelve a mano.
    */
   const fuente = await import('node:fs').then((fs) => fs.readFileSync('index.js', 'utf8'));
-  const bloque = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,2600}?\n    \}/) || [])[0] || '';
+  const bloque = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,6000}?\n    \}/) || [])[0] || '';
   bloque ? OK('se encuentra el manejador de la CLABE') : MAL('no se encontró');
 
   /if \(!c \|\| !c\.name\)/.test(bloque)
@@ -285,6 +285,29 @@ console.log('\n=== 6e. LA CLABE SOLO PARA CLIENTES DE VERDAD ===');
     ? OK('enseña el beneficiario REAL que devuelve Stripe, si lo devuelve') : MAL('no usa el beneficiario real');
   /ventanilla/.test(bloque)
     ? OK('y le dice qué hacer si en ventanilla le preguntan a nombre de quién') : MAL('sin guía para la ventanilla');
+
+  /*
+   * ── LO QUE CUESTA DINERO SI FALTA ────────────────────────────────────────
+   *
+   * La comisión sale del EXCEDENTE sobre lo que el cliente debía. Si el mensaje
+   * le dice "transfiere el monto de tu plan", va a transferir justo eso, el
+   * excedente será cero y no se cobrará nada. Y recibir esa transferencia le
+   * cuesta $8.12 a la plataforma (comprobado contra la API de Stripe), así que
+   * cada uno de esos pagos deja a OBEX en rojo. Con el padrón entero son más de
+   * once mil pesos al mes, perdidos en silencio.
+   *
+   * Por eso el mensaje TIENE que traer el monto con el cargo ya sumado.
+   */
+  /deudaDelCliente/.test(bloque)
+    ? OK('el monto sale de sus facturas pendientes, no de un supuesto') : MAL('no consulta la deuda real');
+  /calcularCargo/.test(bloque)
+    ? OK('y le suma el cargo por pagar en línea') : MAL('¡no suma el cargo! cada pago costaría $8.12 sin cobrar nada');
+  /Transfiere: \*?\$/.test(bloque)
+    ? OK('le dice el TOTAL exacto que tiene que transferir') : MAL('no le dice cuánto transferir');
+  /precioPlan/.test(bloque)
+    ? OK('y si Wisphub no contesta, cae al precio de su plan') : MAL('sin respaldo si Wisphub no contesta');
+  !/transfiere ahí el monto de tu plan/.test(bloque)
+    ? OK('ya NO le dice que transfiera solo su plan (era la fuga)') : MAL('sigue pidiendo solo el plan, sin el cargo');
 }
 
 console.log('\n=== 7. EL MENÚ DE PAGO CABE EN WHATSAPP ===');

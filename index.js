@@ -1237,7 +1237,8 @@ function buildStateSnapshot() {
      */
     stripeVistos: Object.fromEntries(stripeVistos),
     // Depósitos que entraron a Stripe y todavía NO llegaron a León Telecom.
-    stripeSaldosRezagados: Object.fromEntries(stripeSaldosRezagados)
+    stripeSaldosRezagados: Object.fromEntries(stripeSaldosRezagados),
+    stripeCargosPerdidos: stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX)
   };
 }
 
@@ -1292,6 +1293,9 @@ function hydrateState(s) {
     for (const [k, v] of Object.entries(s.stripeSaldosRezagados)) {
       if (v && typeof v === 'object') stripeSaldosRezagados.set(String(k), v);
     }
+  }
+  if (Array.isArray(s.stripeCargosPerdidos)) {
+    stripeCargosPerdidos = s.stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX);
   }
   const fill = (map, obj) => { if (obj) for (const [k, v] of Object.entries(obj)) map.set(k, v); };
   fill(clientProfiles, s.clientProfiles);
@@ -4201,12 +4205,50 @@ async function handleChatMessage(chatId, text, sendMsg) {
         }
 
         const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name });
+
+        /*
+         * DECIRLE CUÁNTO TRANSFERIR, con el cargo ya sumado.
+         *
+         * Esto no es un detalle de redacción, es de dinero. La comisión sale
+         * del EXCEDENTE sobre lo que el cliente debía: si transfiere justo su
+         * mensualidad, el excedente es cero y no se cobra nada. Y una
+         * transferencia SPEI le cuesta $8.12 a la plataforma, comprobado
+         * contra la API de Stripe. O sea que cada cliente que deposite justo su
+         * plan —que es lo que iba a hacer todo el mundo, porque el mensaje
+         * anterior decía literalmente "transfiere el monto de tu plan"— deja a
+         * OBEX $8.12 abajo. Con el padrón entero eso son más de once mil pesos
+         * al mes de pérdida, en silencio.
+         *
+         * El monto sale de las facturas pendientes, igual que en el botón de
+         * tarjeta. Si Wisphub no contesta se cae al precio de su plan, y si
+         * tampoco hay, se dice sin cifras antes que decir una equivocada.
+         */
+        let deuda = 0;
+        let cuantas = 0;
+        try {
+          const d = await wisphubReactivar.deudaDelCliente(c.usuario || '');
+          deuda = d.total;
+          cuantas = d.facturas.length;
+        } catch (e) {
+          console.warn('[stripe-leon] sin deuda para la CLABE de', tel, '·', e.message);
+        }
+        if (deuda <= 0) deuda = parseFloat(c.precioPlan) || 0;
+        const cargo = deuda > 0 ? stripeLeon.calcularCargo(deuda) : null;
+
+        const bloqueMonto = cargo
+          ? `\n💵 *Transfiere: $${(cargo.totalCentavos / 100).toFixed(2)}*\n`
+            + `   • ${cuantas > 1 ? `Tus ${cuantas} mensualidades` : 'Tu mensualidad'}: $${(cargo.baseCentavos / 100).toFixed(2)}\n`
+            + `   • Cargo por pagar en línea: $${(cargo.cargoCentavos / 100).toFixed(2)}\n`
+          : '\n💵 Transfiere el monto de tu recibo más el cargo por pagar en línea.\n';
+
         await sendMsg(chatId,
           `🏦 Esta es *tu cuenta personal* para pagar tu internet:\n\n`
           + `*CLABE:* ${datos.clabe}\n`
           + (datos.banco ? `*Banco:* ${datos.banco}\n` : '')
           + (datos.beneficiario ? `*A nombre de:* ${datos.beneficiario}\n` : '')
-          + `\nGuárdala en tu banco: *es tuya y no cambia nunca*. Cada mes transfiere ahí el monto de tu plan y tu pago se registra solo — no hace falta que mandes comprobante.\n\n`
+          + bloqueMonto
+          + `\nGuárdala en tu banco: *la CLABE es tuya y no cambia nunca*. Lo único que cambia es el monto, según lo que debas ese mes.\n\n`
+          + `Cuando transfieras, tu pago se registra solo y tu servicio se reactiva — *no hace falta que mandes comprobante*.\n\n`
           + `Si transfieres desde tu app del banco, dala de alta una vez como cuenta frecuente y ya.\n\n`
           + `Si vas a ventanilla y te preguntan a nombre de quién va, enséñales esta pantalla: la cuenta la administra el banco que procesa nuestros pagos. 🙌`);
       } catch (e) {
@@ -5486,6 +5528,32 @@ async function deudaConocidaDe(telefono) {
   }
 }
 
+/*
+ * Los pagos que entraron SIN dejar cargo por servicio.
+ *
+ * Pasa cuando el cliente transfiere justo lo que debía, sin el cargo sumado.
+ * No es un error del sistema y el cliente queda perfecto: su pago se aplica
+ * completo. Pero a la plataforma ese movimiento le cuesta $8.12 de comisión de
+ * Stripe, así que cada uno de estos deja a OBEX en números rojos por ese pago.
+ *
+ * Se lleva la cuenta porque es la única forma de notarlo. Un pago sin cargo no
+ * falla, no alerta y no se ve en ningún lado: simplemente el mes cierra con
+ * menos dinero del esperado y nadie sabe por qué. Con esto se ve en el panel.
+ */
+let stripeCargosPerdidos = [];   // [{ telefono, pesos, cuando, motivo }]
+const CARGOS_PERDIDOS_MAX = 300;
+
+function anotarCargoPerdido(telefono, pesos, motivo) {
+  stripeCargosPerdidos.push({
+    telefono: String(telefono || ''), pesos: Number(pesos) || 0,
+    cuando: Date.now(), motivo: String(motivo || ''),
+  });
+  if (stripeCargosPerdidos.length > CARGOS_PERDIDOS_MAX) {
+    stripeCargosPerdidos = stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX);
+  }
+  schedulePersist();
+}
+
 const stripeSaldosRezagados = new Map();   // telefono -> { clienteId, pesos, desde, intentos, error }
 
 function anotarSaldoRezagado(telefono, clienteId, pesos, error) {
@@ -5516,6 +5584,9 @@ const REZAGO_INTENTOS_MAX = 8;
 // Cuántas veces se espera a que Wisphub conteste antes de mandar el depósito
 // completo a León Telecom sin cobrar comisión. Cada intento son 10 min.
 const REZAGO_SIN_DEUDA_MAX = 4;
+// Lo que Stripe cobra por recibir una transferencia SPEI. Comprobado contra la
+// API con un cargo real: $440 entraron, $431.88 quedaron.
+const COSTO_SPEI = 8.12;
 
 async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
   if (_barriendoSaldos) return { corriendo: true };
@@ -5628,6 +5699,7 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
           console.warn('[stripe-rezago] se barre SIN comisión ·', tel, '· Wisphub no contestó en', intentosPrevios, 'intentos');
           alertAdmin('stripe-rezago',
             `Se mandó completo a León Telecom el depósito de ${tel} ($${pesos.toFixed(2)}) porque Wisphub no contestó y no se pudo calcular el cargo. El cliente quedó bien; el cargo por servicio de ese pago se perdió.`);
+          anotarCargoPerdido(tel, pesos, 'Wisphub no contestó y no se pudo calcular el cargo');
         }
 
         /*
@@ -5652,6 +5724,11 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
         rescatados++;
         olvidarSaldoRezagado(tel);
         console.log('[stripe-rezago] rescatado ·', tel, '· $' + barrido.aLeonTelecom.toFixed(2), 'a León');
+        // Mismo conteo que en el webhook: un pago sin cargo cobrado no es ganar
+        // cero, es perder los $8.12 que cuesta la transferencia.
+        if (barrido.sinComision && d.conocida) {
+          anotarCargoPerdido(tel, pesos, 'transfirió justo lo que debía, sin el cargo');
+        }
 
         /*
          * Si el aviso original SÍ llegó, al cliente ya se le dio las gracias y
@@ -6002,6 +6079,7 @@ app.post('/webhook/stripe', async (req, res) => {
               '· a León $' + barrido.aLeonTelecom.toFixed(2), '· comisión $' + barrido.comision.toFixed(2));
             if (barrido.sinComision) {
               console.warn('[stripe-leon] sin comisión: depositó justo su plan, sin el cargo ·', telefono);
+              anotarCargoPerdido(telefono, pesos, 'transfirió justo lo que debía, sin el cargo');
             }
           } catch (e) {
             /*
@@ -7468,6 +7546,16 @@ app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
     atorado: +atorado.toFixed(2),
     porRegistrar: porTipo('factura') + porTipo('afavor') + porTipo('ambiguo'),
     revertidos: porTipo('disputa') + porTipo('devolucion'),
+    /*
+     * Lo que costó cobrar sin haber podido cobrar el cargo. Cada transferencia
+     * SPEI le cuesta $8.12 a la plataforma, así que un pago sin cargo no es
+     * "ganar cero": es perder esos $8.12.
+     */
+    sinCargo: (() => {
+      const desde = Date.now() - 30 * 24 * 3600 * 1000;
+      const recientes = stripeCargosPerdidos.filter((x) => x.cuando > desde);
+      return { cantidad: recientes.length, costo: +(recientes.length * COSTO_SPEI).toFixed(2) };
+    })(),
   });
 });
 
