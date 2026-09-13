@@ -459,6 +459,17 @@
 <!-- ===== PÁGINA: Cobranza ===== -->
 <section class="page" id="page-cobranza">
 
+  <!-- A dónde le cae el dinero. Va primero: sin esto, nada de lo de abajo cobra. -->
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">🏦</span> ¿A dónde te llega el dinero?</div>
+      <div class="card-body">
+        <div id="ccAlert" class="alert"></div>
+        <div id="ccCaja"><div class="empty">Cargando…</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Cobro en línea: lo primero que hay que poder ver es si hay dinero parado -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
@@ -919,7 +930,7 @@
     else if(page==='soporte' && can('reports')){ loadTickets(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); loadPromoBanner(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
-    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCobroLinea(); }
+    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro(); loadCobroLinea(); }
     else if(page==='cortes' && can('clients')){ loadCorteStats(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
@@ -1400,6 +1411,86 @@
    * diez minutos, pero cuando alguien llama diciendo "ya transferí" hace falta
    * poder mirarlo y moverlo en el momento.
    */
+  /* ── ¿A dónde te llega el dinero? ───────────────────────────────────────
+   *
+   * La primera pantalla que ve León, y probablemente la única vez que la ve.
+   * No sabe qué es Stripe ni tiene por qué saberlo: lo que necesita entender es
+   * qué le van a pedir, cuánto tarda, y qué pasa mientras no la haga.
+   */
+  async function loadCuentaCobro(){
+    const caja = document.getElementById('ccCaja');
+    if(!caja) return;
+    try{
+      const d = await (await fetchAuth('/admin/api/cuenta-cobro')).json();
+
+      if(!d.configurado){
+        caja.innerHTML = `<div class="empty">El cobro con tarjeta todavía no está configurado en el servidor.
+          Cuando lo esté, aquí podrás dar de alta tu cuenta.</div>`;
+        return;
+      }
+
+      if(!d.cuenta){
+        caja.innerHTML =
+          `<p style="font-size:.95em;line-height:1.65;margin-bottom:10px">
+             Para cobrarles a tus clientes con tarjeta hace falta decir
+             <b>a qué cuenta del banco te llega el dinero</b>. Se hace una sola vez y no cuesta nada.
+           </p>
+           <p style="font-size:.88em;line-height:1.6;color:var(--muted);margin-bottom:12px">
+             Ten a la mano tu <b>identificación</b>, tu <b>RFC</b> y la <b>CLABE</b> de tu cuenta.
+             El formulario es del banco que procesa los pagos, no nuestro, y toma unos diez minutos.
+             Cuando lo termines, el cobro se enciende solo.
+           </p>
+           <div class="alert alert-warn" style="display:block;margin-bottom:12px">
+             Mientras no la des de alta, <b>el cobro con tarjeta no funciona</b>.
+             Tus clientes siguen pagando como siempre, en la oficina o por depósito.
+           </div>
+           <button class="btn btn-primary" id="ccAlta">Dar de alta mi cuenta</button>`;
+        document.getElementById('ccAlta').addEventListener('click', altaCuentaCobro);
+        return;
+      }
+
+      const c = d.cuenta;
+      const chip = (ok, si, no) =>
+        `<span style="display:inline-block;padding:4px 10px;border-radius:20px;font-size:.78em;font-weight:600;`
+        + `background:${ok?'#e8f8ee':'#fff4e5'};color:${ok?'#1c7a43':'#8a5a00'}">${ok?si:no}</span>`;
+
+      caja.innerHTML =
+        `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+           ${chip(c.puedeCobrar,'Ya puede cobrar','Le falta terminar el alta')}
+         </div>
+         <table class="data-table"><tbody>
+           <tr><td class="muted">Cuenta</td><td><b>${c.banco ? 'Banco ···· '+esc(c.banco) : 'Sin banco registrado todavía'}</b></td></tr>
+           ${c.demora!=null?`<tr><td class="muted">Stripe te deposita en</td><td><b>${c.demora} días hábiles</b></td></tr>`:''}
+         </tbody></table>`
+        + (c.puedeCobrar ? '' :
+          `<div class="alert alert-warn" style="display:block;margin-top:12px">
+             <b>Todavía falta terminar el alta.</b> Hasta que la termines, el cobro con tarjeta no
+             funciona y tus clientes siguen pagando como siempre.
+             ${(c.faltante||[]).length?('<br>Falta: '+esc((c.faltante||[]).slice(0,4).join(', '))+'.'):''}
+           </div>
+           <button class="btn btn-primary" id="ccAlta" style="margin-top:10px">Continuar donde me quedé</button>`)
+        + (c.sinRespuesta ? `<div class="empty" style="margin-top:10px">No se pudo consultar el estado con Stripe en este momento.</div>` : '');
+      const b = document.getElementById('ccAlta');
+      if(b) b.addEventListener('click', altaCuentaCobro);
+    }catch(_){
+      caja.innerHTML = '<div class="empty">No se pudo cargar. Recarga la página.</div>';
+    }
+  }
+
+  async function altaCuentaCobro(e){
+    const btn = e.target;
+    const antes = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Abriendo…';
+    try{
+      const r = await (await fetchAuth('/admin/api/cuenta-cobro', { method:'POST' })).json();
+      if(r.urlAlta){ location.href = r.urlAlta; return; }
+      showAlert('ccAlert', r.error || 'No se pudo abrir el alta.', 'error');
+    }catch(_){
+      showAlert('ccAlert', 'No se pudo abrir el alta. Intenta en un momento.', 'error');
+    }
+    btn.disabled = false; btn.textContent = antes;
+  }
+
   async function loadCobroLinea(){
     const est = document.getElementById('clEstado');
     const rez = document.getElementById('clRezagados');

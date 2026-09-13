@@ -1238,7 +1238,16 @@ function buildStateSnapshot() {
     stripeVistos: Object.fromEntries(stripeVistos),
     // Depósitos que entraron a Stripe y todavía NO llegaron a León Telecom.
     stripeSaldosRezagados: Object.fromEntries(stripeSaldosRezagados),
-    stripeCargosPerdidos: stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX)
+    stripeCargosPerdidos: stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX),
+    /*
+     * La cuenta de Stripe a la que le cae el dinero de León.
+     *
+     * Se persiste porque se da de alta UNA vez desde su panel. Si se perdiera
+     * en un reinicio, el sistema creería que nunca la dio de alta y le pediría
+     * hacer otra: dos cuentas conectadas, el dinero partido entre las dos y
+     * ninguna forma sencilla de juntarlo.
+     */
+    stripeCuentaLeon: stripeCuentaLeon || null
   };
 }
 
@@ -1251,6 +1260,12 @@ function buildStateSnapshot() {
  * indexar y podría crear un cliente duplicado con otra CLABE. El registro es lo
  * que hace que eso no pase nunca.
  */
+let stripeCuentaLeon = null;
+stripeLeon.usarCuenta({
+  obtener: () => stripeCuentaLeon,
+  guardar: (datos) => { stripeCuentaLeon = datos; schedulePersist(); },
+});
+
 const stripeClientes = new Map();
 stripeLeon.usarRegistro({
   obtener: (tel) => stripeClientes.get(String(tel)) || null,
@@ -1271,6 +1286,17 @@ function hydrateState(s) {
     if (wisphubClients.size) console.log(`[Wisphub] Lista restaurada del respaldo: ${wisphubClients.size} clientes (del ${String(s.wisphubClientesAl || '').slice(0, 16)})`);
   }
   if (Array.isArray(s.wisphubLog)) wisphubLog = s.wisphubLog.slice(0, WISPHUB_LOG_MAX);
+  /*
+   * La cuenta de cobro de León, primero que nada: el módulo tiene que saberla
+   * ANTES de que llegue el primer pago, no después.
+   */
+  if (s.stripeCuentaLeon && s.stripeCuentaLeon.id) {
+    stripeCuentaLeon = s.stripeCuentaLeon;
+    stripeLeon.usarCuenta({
+      obtener: () => stripeCuentaLeon,
+      guardar: (datos) => { stripeCuentaLeon = datos; schedulePersist(); },
+    });
+  }
   if (s.stripeClientes && typeof s.stripeClientes === 'object') {
     for (const [k, v] of Object.entries(s.stripeClientes)) stripeClientes.set(String(k), v);
   }
@@ -7581,6 +7607,66 @@ app.post('/admin/api/wisphub-sync', verifyAdminToken, requirePermission('wisphub
  * `?auditar=1` fuerza la revisión de TODOS los clientes con CLABE, no solo de
  * los que ya se sabía que habían fallado.
  */
+/* ═══════════ LA CUENTA A LA QUE LE CAE EL DINERO, DESDE EL PANEL ═══════════
+ *
+ * Antes esto era una variable de entorno que alguien tenía que crear a mano en
+ * Stripe y pegar en Render. León no podía hacerlo solo, y mientras tanto todo
+ * el cobro en línea se quedaba apagado esperando a que alguien más se sentara.
+ */
+app.get('/admin/api/cuenta-cobro', verifyAdminToken, requirePermission('reports'), async (_req, res) => {
+  try {
+    if (!stripeLeon.hayLlave()) {
+      return res.json({ ok: true, configurado: false, cuenta: null });
+    }
+    const id = stripeLeon.cuentaConectada();
+    if (!id) return res.json({ ok: true, configurado: true, cuenta: null });
+    let est = null;
+    try { est = await stripeLeon.estadoCuenta(); }
+    catch (e) { console.warn('[cobro] no se pudo consultar la cuenta:', e.message); }
+    res.json({
+      ok: true, configurado: true,
+      cuenta: {
+        id,
+        puedeCobrar: est ? est.puedeCobrar : stripeLeon.cuentaLista(),
+        faltante: (est && est.faltante) || [],
+        banco: (est && est.banco) || null,
+        demora: est ? est.demora : null,
+        sinRespuesta: !est,
+      },
+    });
+  } catch (e) {
+    console.error('[cobro] cuenta:', e.message);
+    res.status(500).json({ ok: false, error: 'No se pudo consultar la cuenta de cobro.' });
+  }
+});
+
+app.post('/admin/api/cuenta-cobro', verifyAdminToken, requirePermission('reports'), async (req, res) => {
+  try {
+    if (!stripeLeon.hayLlave()) {
+      return res.status(503).json({ ok: false, error: 'Todavía no está configurado el cobro con tarjeta.' });
+    }
+    const urlBase = (process.env.URL_PUBLICA || '').replace(/\/$/, '')
+      || `${req.protocol}://${req.get('host')}`;
+    await stripeLeon.crearCuentaConectada({
+      email: (process.env.LEON_CONTACTO_EMAIL || '').trim() || undefined,
+      nombre: 'León Telecom',
+    });
+    res.json({ ok: true, urlAlta: await stripeLeon.enlaceOnboarding({ urlBase }) });
+  } catch (e) {
+    const dice = (e.stripe && e.stripe.message) || e.message || '';
+    console.error('[cobro] alta de cuenta:', dice);
+    /*
+     * Un 4xx de Stripe es configuración que falta: el siguiente intento va a
+     * fallar igual. Decir "intenta luego" manda a picar un botón que nunca va
+     * a servir y esconde la causa en un registro que nadie abre.
+     */
+    if (e.status >= 400 && e.status < 500 && dice) {
+      return res.status(503).json({ ok: false, error: 'Stripe no dejó crear la cuenta y dijo esto: “' + dice.slice(0, 300) + '”. No es un problema pasajero.' });
+    }
+    res.status(502).json({ ok: false, error: 'No pudimos abrir el alta de la cuenta. Intenta en un momento.' });
+  }
+});
+
 /*
  * El estado del cobro en línea de un vistazo, para el panel.
  *

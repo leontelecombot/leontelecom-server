@@ -133,6 +133,151 @@ function hayLlave() {
   return !!(process.env.STRIPE_SECRET_KEY || '').trim();
 }
 
+/* ═══════════════ LA CUENTA A LA QUE LE CAE EL DINERO ═══════════════
+ *
+ * Hasta aquí, la cuenta de León vivía en una variable de entorno que alguien
+ * tenía que crear a mano en el panel de Stripe y pegar en Render. O sea que él
+ * no podía darla de alta solo: dependía de que alguien más se sentara a hacerlo
+ * por él, y mientras tanto el cobro completo se quedaba apagado.
+ *
+ * Ahora puede hacerlo desde su panel. Lo que se guarda aquí manda; la variable
+ * de entorno sigue funcionando igual, para no romper lo que ya esté puesto.
+ */
+let _cuenta = null;          // { id, puedeCobrar, revisadaEn }
+let _guardaCuenta = null;
+
+/** Le dice al módulo dónde guardar y leer la cuenta, igual que con el registro. */
+function usarCuenta(io) {
+  if (io && typeof io.obtener === 'function' && typeof io.guardar === 'function') {
+    _guardaCuenta = io;
+    const g = io.obtener();
+    if (g && g.id) _cuenta = g;
+  }
+}
+
+/** El id de la cuenta conectada: la del panel, o la de la variable de siempre. */
+function cuentaConectada() {
+  if (_cuenta && _cuenta.id) return _cuenta.id;
+  return (process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim();
+}
+
+/**
+ * ¿Ya PUEDE cobrar esa cuenta?
+ *
+ * Es distinto de que exista. Stripe la crea al instante y la habilita para
+ * cobrar solo cuando termina de revisar los papeles. Cobrarle a un cliente
+ * contra una cuenta a medio verificar acaba con el cargo rechazado DESPUÉS de
+ * que la persona ya metió su tarjeta, y quien da la cara es León.
+ */
+function cuentaLista() {
+  if (_cuenta && _cuenta.id) return !!_cuenta.puedeCobrar;
+  // Con la variable de siempre se confía en quien la puso: es configuración
+  // manual, no un alta de autoservicio.
+  return !!(process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim();
+}
+
+/*
+ * LA API v2, NO LA v1. Stripe dejó de aceptar `POST /v1/accounts` para
+ * integraciones nuevas. La v2 pide JSON y una cabecera de versión obligatoria.
+ */
+const VERSION_V2 = process.env.STRIPE_VERSION_V2 || '2025-08-27.preview';
+const API_V2 = (process.env.STRIPE_API_V2 || 'https://api.stripe.com/v2/').replace(/\/?$/, '/');
+
+async function stripeV2(ruta, cuerpo, metodo = 'POST') {
+  const llave = (process.env.STRIPE_SECRET_KEY || '').trim();
+  if (!llave) throw new Error('Falta STRIPE_SECRET_KEY');
+  const r = await fetch(API_V2 + ruta, {
+    method: metodo,
+    headers: {
+      Authorization: 'Bearer ' + llave,
+      'Content-Type': 'application/json',
+      'Stripe-Version': VERSION_V2,
+    },
+    body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+  });
+  const datos = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const e = new Error((datos.error && datos.error.message) || `Stripe respondió ${r.status}`);
+    e.stripe = datos.error || null; e.status = r.status;
+    throw e;
+  }
+  return datos;
+}
+
+/** Crea la cuenta de León en Stripe. Una sola vez: después solo se consulta. */
+async function crearCuentaConectada({ email, nombre } = {}) {
+  if (_cuenta && _cuenta.id) return _cuenta.id;
+  const cuenta = await stripeV2('core/accounts', {
+    contact_email: email || undefined,
+    display_name: nombre || 'León Telecom',
+    identity: { country: 'mx', entity_type: 'company' },
+    include: ['configuration.merchant'],
+    dashboard: 'express',
+    defaults: {
+      responsibilities: { fees_collector: 'application', losses_collector: 'application' },
+      currency: 'mxn',
+    },
+    configuration: { merchant: { capabilities: { card_payments: { requested: true } } } },
+  });
+  _cuenta = { id: cuenta.id, puedeCobrar: false, revisadaEn: Date.now() };
+  if (_guardaCuenta) _guardaCuenta.guardar(_cuenta);
+
+  /*
+   * Que Stripe le pague lo antes que pueda. Retiene unos días como ventana
+   * contra contracargos y eso no se quita, pero pagar DIARIO en vez de semanal
+   * es la diferencia entre que su dinero salga el día que se libera o que
+   * espere al corte. Va aparte y sin romper nada: una cuenta creada vale más
+   * que un calendario perfecto.
+   */
+  try {
+    await stripe('accounts/' + encodeURIComponent(cuenta.id), {
+      settings: { payouts: { schedule: { interval: 'daily', delay_days: 'minimum' } } },
+    });
+  } catch (e) { console.warn('[cobro] no se pudo poner el pago diario:', e.message); }
+
+  return cuenta.id;
+}
+
+/** El enlace donde él llena sus datos y su banco, en el sitio de Stripe. */
+async function enlaceOnboarding({ urlBase } = {}) {
+  const id = cuentaConectada();
+  if (!id) throw new Error('Todavía no hay cuenta que dar de alta');
+  const base = String(urlBase || '').replace(/\/$/, '');
+  const enlace = await stripeV2('core/account_links', {
+    account: id,
+    use_case: {
+      type: 'account_onboarding',
+      account_onboarding: {
+        configurations: ['merchant'],
+        refresh_url: `${base}/cuenta-cobro?estado=reintentar`,
+        return_url: `${base}/cuenta-cobro?estado=listo`,
+      },
+    },
+  });
+  return enlace.url;
+}
+
+/** Le pregunta a Stripe cómo va esa cuenta, y lo recuerda. */
+async function estadoCuenta() {
+  const id = cuentaConectada();
+  if (!id) return { id: '', existe: false, puedeCobrar: false, faltante: [] };
+  const c = await stripe('accounts/' + encodeURIComponent(id));
+  const est = {
+    id,
+    existe: true,
+    puedeCobrar: !!c.charges_enabled,
+    puedeRecibir: !!c.payouts_enabled,
+    faltante: (c.requirements && c.requirements.currently_due) || [],
+    banco: (((c.external_accounts || {}).data || [])[0] || {}).last4 || null,
+    demora: ((c.settings || {}).payouts || {}).schedule?.delay_days ?? null,
+  };
+  if (_cuenta && _cuenta.id === id) {
+    _cuenta = { ..._cuenta, puedeCobrar: est.puedeCobrar, revisadaEn: Date.now() };
+    if (_guardaCuenta) _guardaCuenta.guardar(_cuenta);
+  }
+  return est;
+}
+
 async function aplanar(obj, prefijo = '', destino = new URLSearchParams()) {
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined || v === null) continue;
@@ -215,8 +360,9 @@ async function stripe(ruta, cuerpo, opciones = {}) {
  * `pagadoPor` es solo para el registro y para avisarle a quien pagó.
  */
 async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma }) {
-  const cuenta = (process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim();
-  if (!cuenta) throw new Error('Falta LEON_STRIPE_CUENTA_CONECTADA');
+  const cuenta = cuentaConectada();
+  if (!cuenta) throw new Error('Todavía no se ha dado de alta la cuenta a la que le cae el dinero');
+  if (!cuentaLista()) throw new Error('La cuenta de cobro todavía no está aprobada por Stripe');
 
   /*
    * UNA forma por link, no las dos en el mismo.
@@ -541,8 +687,9 @@ async function clabeDelCliente({ telefono, nombre }) {
  */
 async function cobrarGuardado({ clienteId, metodoPago, monto, telefono, nombre, periodo }) {
   if (!activo()) throw new Error('El cobro en línea está apagado');
-  const cuenta = (process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim();
-  if (!cuenta) throw new Error('Falta LEON_STRIPE_CUENTA_CONECTADA');
+  const cuenta = cuentaConectada();
+  if (!cuenta) throw new Error('Todavía no se ha dado de alta la cuenta a la que le cae el dinero');
+  if (!cuentaLista()) throw new Error('La cuenta de cobro todavía no está aprobada por Stripe');
   if (!clienteId) throw new Error('Falta el cliente de Stripe');
   if (!metodoPago) throw new Error('Falta la tarjeta guardada');
   const c = calcularCargo(monto, 'tarjeta');   // se cobra a una tarjeta guardada
@@ -647,8 +794,9 @@ async function cobrarGuardado({ clienteId, metodoPago, monto, telefono, nombre, 
  */
 async function cobrarDelSaldo({ clienteId, deposito, deuda, telefono, nombre, referencia }) {
   if (!activo()) throw new Error('El cobro en línea está apagado');
-  const cuenta = (process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim();
-  if (!cuenta) throw new Error('Falta LEON_STRIPE_CUENTA_CONECTADA');
+  const cuenta = cuentaConectada();
+  if (!cuenta) throw new Error('Todavía no se ha dado de alta la cuenta a la que le cae el dinero');
+  if (!cuentaLista()) throw new Error('La cuenta de cobro todavía no está aprobada por Stripe');
   if (!clienteId) throw new Error('Falta el cliente de Stripe');
 
   const depositoCent = Math.round(Number(deposito) * 100);
@@ -783,7 +931,8 @@ function verificarFirma(cuerpoCrudo, cabecera, secreto, toleranciaSeg = 300) {
 }
 
 module.exports = {
-  hayLlave, activo, permitido, usarRegistro,
+  hayLlave, activo, permitido, usarRegistro, usarCuenta,
+  cuentaConectada, cuentaLista, crearCuentaConectada, enlaceOnboarding, estadoCuenta,
   generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,
   verificarFirma, calcularCargo, clabeValida,
   TARIFAS, FORMAS,
