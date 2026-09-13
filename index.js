@@ -5324,6 +5324,31 @@ app.get('/cuenta-cobro', sinCacheCobro, (_req, res) =>
  * Solo contesta dos cosas: si esa cuenta ya puede cobrar y qué le falta. No
  * dice el id de la cuenta, ni el banco, ni nada que sirva a un tercero.
  */
+async function revisarCuentaLeon() {
+  if (!stripeLeon.hayLlave() || !stripeLeon.cuentaConectada()) return;
+  try {
+    const est = await stripeLeon.estadoCuenta();
+    if (!est.puedeCobrar) {
+      console.warn('[cobro] la cuenta de León NO puede cobrar ahora mismo. Falta:',
+        (est.faltante || []).join(', ') || 'sin detalle');
+    }
+  } catch (e) {
+    /*
+     * Se distingue "Stripe dice que esa cuenta ya no sirve" de "no se pudo
+     * hablar con Stripe", porque piden lo contrario. Un 4xx significa que la
+     * cuenta se borró o se desconectó y hay que dejar de cobrar contra ella.
+     * Cualquier otra cosa es un tropiezo, y apagar el cobro por un tropiezo de
+     * un minuto es peor que el tropiezo.
+     */
+    if (e.status >= 400 && e.status < 500) {
+      console.error('[cobro] Stripe ya no reconoce la cuenta de León:', e.message);
+      stripeLeon.olvidarCuenta();
+    } else {
+      console.warn('[cobro] no se pudo revisar la cuenta, se deja como estaba:', e.message);
+    }
+  }
+}
+
 app.get('/api/cuenta-cobro/estado', async (_req, res) => {
   try {
     if (!stripeLeon.hayLlave() || !stripeLeon.cuentaConectada()) {
@@ -7911,6 +7936,20 @@ const port = Number(process.env.PORT || 3000);
 
   // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
   setInterval(() => flushConversations().catch(() => {}), 60000);
+
+  /*
+   * 3e-bis) ¿La cuenta de León sigue pudiendo cobrar?
+   *
+   * Aprobada hoy no quiere decir aprobada para siempre. Stripe suspende una
+   * cuenta cuando se le vence un documento o cuando le pide información nueva,
+   * y no avisa por este lado. Sin esta revisión, el sistema seguiría mandando
+   * cobros contra una cuenta muerta: el cliente mete su tarjeta, el cargo se
+   * rechaza, y quien da la cara es León.
+   *
+   * Cada diez minutos, que es de sobra para algo que cambia dos veces al año.
+   */
+  setTimeout(() => revisarCuentaLeon(), 30000);
+  setInterval(() => revisarCuentaLeon(), 10 * 60000);
 
   // 3f) Bienvenida a NUEVOS clientes de Wisphub (baseline + saludo a los nuevos)
   setTimeout(() => sweepNewClients().catch(() => {}), 20000);        // primera pasada al arrancar

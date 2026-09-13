@@ -257,6 +257,21 @@ async function enlaceOnboarding({ urlBase } = {}) {
   return enlace.url;
 }
 
+/*
+ * Dejar de dar por buena la cuenta.
+ *
+ * Se usa cuando Stripe contesta que ya no la reconoce. No se borra el id: se
+ * marca como no lista, para que no se cobre contra ella pero siga a la vista
+ * en el panel con su estado real. Borrarla haría que el sistema le pidiera dar
+ * de alta otra, y acabaría con dos cuentas y el dinero partido.
+ */
+function olvidarCuenta() {
+  if (_cuenta && _cuenta.id) {
+    _cuenta = { ..._cuenta, puedeCobrar: false, revisadaEn: Date.now() };
+    if (_guardaCuenta) _guardaCuenta.guardar(_cuenta);
+  }
+}
+
 /** Le pregunta a Stripe cómo va esa cuenta, y lo recuerda. */
 async function estadoCuenta() {
   const id = cuentaConectada();
@@ -932,7 +947,7 @@ function verificarFirma(cuerpoCrudo, cabecera, secreto, toleranciaSeg = 300) {
 
 module.exports = {
   hayLlave, activo, permitido, usarRegistro, usarCuenta,
-  cuentaConectada, cuentaLista, crearCuentaConectada, enlaceOnboarding, estadoCuenta,
+  cuentaConectada, cuentaLista, crearCuentaConectada, enlaceOnboarding, estadoCuenta, olvidarCuenta,
   generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,
   verificarFirma, calcularCargo, clabeValida,
   TARIFAS, FORMAS,

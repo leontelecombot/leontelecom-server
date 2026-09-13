@@ -261,6 +261,45 @@ console.log('\n=== 9. LO QUE PIDE STRIPE, EN ESPAÑOL ===');
      'y lo que no conoce lo enseña tal cual, en vez de ocultarle que falta algo');
 }
 
+console.log('\n=== 10. SI STRIPE LA SUSPENDE DESPUÉS ===');
+{
+  /*
+   * Aprobada hoy no quiere decir aprobada para siempre. Stripe suspende una
+   * cuenta cuando se le vence un documento o cuando pide información nueva, y
+   * no avisa por este lado. Sin revisarla, el sistema seguiría mandando cobros
+   * contra una cuenta muerta: el cliente mete su tarjeta, el cargo se rechaza,
+   * y quien da la cara es León.
+   */
+  es(cobro.cuentaLista() === true, 'la cuenta viene lista de la prueba anterior');
+
+  // Stripe deja de aprobarla.
+  estado.puedeCobrar = false;
+  estado.faltante = ['company.verification.document'];
+  await cobro.estadoCuenta();
+  es(cobro.cuentaLista() === false, 'al revisarla, el sistema se entera de que ya no puede cobrar');
+
+  let error = null;
+  try {
+    await cobro.generarLinkPago({ telefono: '5219516549145', monto: 440, nombre: 'Cliente', urlBase: 'https://x.mx', forma: 'tarjeta' });
+  } catch (e) { error = e.message; }
+  es(/no está aprobada/i.test(error || ''), 'y deja de cobrar contra ella');
+
+  // Y cuando Stripe la vuelve a aprobar, cobra sola otra vez.
+  estado.puedeCobrar = true;
+  estado.faltante = [];
+  await cobro.estadoCuenta();
+  es(cobro.cuentaLista() === true, 'cuando Stripe la reactiva, vuelve a cobrar sin que nadie toque nada');
+
+  /*
+   * Y si Stripe contesta que ya no la reconoce, se marca como no lista pero NO
+   * se borra el id: borrarla haría que el sistema le pidiera dar de alta otra,
+   * y acabaría con dos cuentas y el dinero partido entre las dos.
+   */
+  cobro.olvidarCuenta();
+  es(cobro.cuentaLista() === false, 'si Stripe deja de reconocerla, se deja de cobrar');
+  es(cobro.cuentaConectada() === 'acct_leon', 'pero el id se conserva: no se le pide crear otra');
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));
