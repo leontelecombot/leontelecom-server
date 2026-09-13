@@ -207,6 +207,60 @@ console.log('\n=== 7. LA PANTALLA A LA QUE STRIPE LO REGRESA ===');
   es(/Continuar donde me qued/.test(html), 'diciéndole dónde retomar, no dejándolo perdido');
 }
 
+console.log('\n=== 8. EL PANEL SE ENTERA SOLO CUANDO STRIPE APRUEBA ===');
+{
+  /*
+   * La revisión de Stripe tarda de minutos a días, y él no tiene forma de
+   * saber cuándo terminó. Sin esto, la única manera de enterarse es recargar la
+   * página a ver si cambió, y eso nadie lo hace: deja la pestaña abierta y
+   * asume que sigue igual.
+   */
+  const fs = await import('node:fs');
+  const panel = fs.readFileSync('./public/admin-dashboard.html', 'utf8');
+
+  es(/function ccVigilar\(\)/.test(panel), 'el panel se pregunta solo mientras está pendiente');
+  es(/CC_CADA\s*=\s*45000/.test(panel), 'cada 45 segundos, no cada segundo');
+  es(/CC_HASTA\s*=\s*30 \* 60000/.test(panel), 'y se para sola a la media hora');
+  es(/Stripe aprob[óo] tu cuenta/.test(panel), 'avisa en el momento en que se aprueba');
+  es(/if\(c\.puedeCobrar && ccRevision\)/.test(panel), 'una sola vez, no en cada consulta');
+  es(/if\(page!=='cobranza'\) ccDejarDeVigilar\(\)/.test(panel), 'y deja de preguntar al salir de la sección');
+  es(/if\(!callado\) caja\.innerHTML/.test(panel),
+     'las consultas de fondo no borran lo que ya está en pantalla');
+}
+
+console.log('\n=== 9. LO QUE PIDE STRIPE, EN ESPAÑOL ===');
+{
+  /*
+   * Stripe contesta con códigos suyos: "individual.verification.document",
+   * "company.tax_id". A León eso no le dice nada, y es justo el momento en que
+   * necesita entender qué le falta para poder resolverlo solo en vez de hablar
+   * a preguntar.
+   */
+  const fs = await import('node:fs');
+  const panel = fs.readFileSync('./public/admin-dashboard.html', 'utf8');
+  const pantalla = fs.readFileSync('./public/cuenta-cobro.html', 'utf8');
+
+  for (const [donde, html, fn] of [['el panel', panel, 'ccEnEspanol'], ['la pantalla del alta', pantalla, 'enEspanol']]) {
+    es(new RegExp('function ' + fn).test(html), `${donde} traduce los códigos de Stripe`);
+    es(/una foto de tu identificación/.test(html), `${donde} explica el documento de identidad`);
+    es(/tu RFC/.test(html), `${donde} explica el RFC`);
+    es(/tu cuenta de banco \(CLABE\)/.test(html), `${donde} explica la cuenta de banco`);
+  }
+
+  // La traducción de verdad, no solo que exista el texto.
+  const PALABRAS = [
+    [/verification\.document|identity\.document/i, 'una foto de tu identificación'],
+    [/tax_id|rfc/i, 'tu RFC'],
+    [/external_account|bank_account/i, 'tu cuenta de banco (CLABE)'],
+  ];
+  const traducir = (c) => { for (const [re, t] of PALABRAS) if (re.test(String(c))) return t; return String(c); };
+  es(traducir('individual.verification.document') === 'una foto de tu identificación', 'traduce el documento de identidad');
+  es(traducir('company.tax_id') === 'tu RFC', 'traduce el RFC');
+  es(traducir('external_account') === 'tu cuenta de banco (CLABE)', 'traduce la cuenta de banco');
+  es(traducir('algo.que.no.conocemos') === 'algo.que.no.conocemos',
+     'y lo que no conoce lo enseña tal cual, en vez de ocultarle que falta algo');
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));

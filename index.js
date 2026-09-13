@@ -7708,7 +7708,13 @@ app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
   res.json({
     activo: stripeLeon.activo(),
     hayLlave: stripeLeon.hayLlave(),
-    cuentaConectada: !!(process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim(),
+    /*
+     * La cuenta puede venir del panel o de la variable de siempre. Mirar solo
+     * la variable hacía que el tablero dijera "falta configurar Stripe" aunque
+     * él ya la hubiera dado de alta con sus propias manos.
+     */
+    cuentaConectada: !!stripeLeon.cuentaConectada(),
+    cuentaLista: stripeLeon.cuentaLista(),
     reactivacionActiva: wisphubReactivar.activo(),
     alcance: alcance || 'solo el teléfono piloto',
     conClabe: [...stripeClientes.values()].filter((d) => d && d.clienteId).length,

@@ -57,6 +57,30 @@ const pie = (t) => `<div class="pie">${t}</div>`;
 
 function pinta(html) { caja.innerHTML = html; }
 
+/*
+ * Lo que pide Stripe, en español. Contesta con códigos suyos, y este es justo
+ * el momento en que él necesita entender qué le falta para resolverlo solo.
+ */
+const PALABRAS = [
+  [/verification\.document|identity\.document/i, 'una foto de tu identificación'],
+  [/verification\.additional_document/i, 'un comprobante de domicilio'],
+  [/tax_id|rfc/i, 'tu RFC'],
+  [/external_account|bank_account/i, 'tu cuenta de banco (CLABE)'],
+  [/business_profile\.url|business_url/i, 'la página o red social de tu negocio'],
+  [/business_profile\.mcc|product_description/i, 'a qué se dedica tu negocio'],
+  [/address/i, 'tu domicilio'],
+  [/phone/i, 'tu teléfono'],
+  [/dob|date_of_birth/i, 'tu fecha de nacimiento'],
+  [/representative/i, 'los datos de quien representa a la empresa'],
+  [/owners|directors/i, 'los datos de los socios'],
+  [/company\.name|business_name/i, 'el nombre fiscal de la empresa'],
+];
+function enEspanol(codigo) {
+  const c = String(codigo || '');
+  for (const [re, texto] of PALABRAS) if (re.test(c)) return texto;
+  return c;
+}
+
 function quedoListo() {
   pinta(paloma + `
     <h1>Listo, tu cuenta ya puede recibir pagos</h1>
@@ -83,7 +107,7 @@ function faltaAlgo(faltante) {
       clientes siguen pagando como siempre.
     </p>
     ${faltante && faltante.length ? `<div class="nota"><h2>Lo que falta</h2><ul>${
-      faltante.slice(0, 5).map((f) => '<li>' + String(f).replace(/[<>&]/g, '') + '</li>').join('')
+      faltante.slice(0, 5).map((f) => '<li>' + enEspanol(f).replace(/[<>&]/g, '') + '</li>').join('')
     }</ul></div>` : ''}
     <p style="margin-top:14px">
       Entra a tu panel, sección <strong>Cobranza</strong>, y pícale a

@@ -925,6 +925,9 @@
   }
   // Carga (refresca) los datos de cada página solo cuando se abre.
   function loadPage(page){
+    // Al cambiar de sección se deja de preguntar por la cuenta. Si se vuelve a
+    // Cobranza y sigue pendiente, la vigilancia se enciende sola otra vez.
+    if(page!=='cobranza') ccDejarDeVigilar();
     if(page==='inicio'){ loadStats(); loadMetrics(); const iw=document.getElementById('incidentWrap'); if(can('reports')){ if(iw) iw.style.display=''; loadIncident(); } else if(iw) iw.style.display='none'; }
     else if(page==='ejecutivo' && can('clients')){ loadEjecutivo(); }
     else if(page==='soporte' && can('reports')){ loadTickets(); }
@@ -1417,9 +1420,70 @@
    * No sabe qué es Stripe ni tiene por qué saberlo: lo que necesita entender es
    * qué le van a pedir, cuánto tarda, y qué pasa mientras no la haga.
    */
-  async function loadCuentaCobro(){
+  /*
+   * Mientras Stripe revisa, el panel se pregunta solo.
+   *
+   * Esa revisión tarda de minutos a días y él no tiene forma de saber cuándo
+   * terminó. Sin esto, la única manera de enterarse es recargar la página a
+   * ver si cambió, y eso nadie lo hace: la deja abierta y asume que sigue
+   * igual. Se consulta cada 45 segundos, solo mientras esté pendiente, y se
+   * para sola a la media hora para no dejar una pestaña olvidada preguntando
+   * toda la tarde.
+   */
+
+  /*
+   * Lo que pide Stripe, en español.
+   *
+   * Stripe contesta con códigos suyos: "individual.verification.document",
+   * "company.tax_id". A León eso no le dice nada, y es justo el momento en que
+   * necesita entender qué le falta para poder resolverlo solo en vez de hablar
+   * a preguntar. Lo que no esté en la lista se enseña tal cual: más vale un
+   * código raro que ocultarle que falta algo.
+   */
+  const CC_PALABRAS = [
+    [/verification\.document|identity\.document/i, 'una foto de tu identificación'],
+    [/verification\.additional_document/i, 'un comprobante de domicilio'],
+    [/tax_id|rfc/i, 'tu RFC'],
+    [/external_account|bank_account/i, 'tu cuenta de banco (CLABE)'],
+    [/business_profile\.url|business_url/i, 'la página o red social de tu negocio'],
+    [/business_profile\.mcc|product_description/i, 'a qué se dedica tu negocio'],
+    [/address/i, 'tu domicilio'],
+    [/phone/i, 'tu teléfono'],
+    [/dob|date_of_birth/i, 'tu fecha de nacimiento'],
+    [/representative/i, 'los datos de quien representa a la empresa'],
+    [/owners|directors/i, 'los datos de los socios'],
+    [/company\.name|business_name/i, 'el nombre fiscal de la empresa'],
+  ];
+  function ccEnEspanol(codigo){
+    const c = String(codigo || '');
+    for(const [re, texto] of CC_PALABRAS) if(re.test(c)) return texto;
+    return c;
+  }
+
+  let ccRevision = null;
+  let ccDesde = 0;
+  const CC_CADA = 45000;
+  const CC_HASTA = 30 * 60000;
+
+  function ccVigilar(){
+    if(ccRevision) return;
+    ccDesde = Date.now();
+    ccRevision = setInterval(() => {
+      if(Date.now() - ccDesde > CC_HASTA) return ccDejarDeVigilar();
+      loadCuentaCobro({ callado: true });
+    }, CC_CADA);
+  }
+  function ccDejarDeVigilar(){
+    if(ccRevision){ clearInterval(ccRevision); ccRevision = null; }
+  }
+
+  async function loadCuentaCobro(opciones){
+    const callado = !!(opciones && opciones.callado);
     const caja = document.getElementById('ccCaja');
     if(!caja) return;
+    // En una consulta de fondo no se borra lo que ya está en pantalla: si el
+    // servidor tarda, él vería su cuenta desaparecer y volver sin razón.
+    if(!callado) caja.innerHTML = '<div class="empty">Cargando…</div>';
     try{
       const d = await (await fetchAuth('/admin/api/cuenta-cobro')).json();
 
@@ -1430,6 +1494,7 @@
       }
 
       if(!d.cuenta){
+        ccDejarDeVigilar();
         caja.innerHTML =
           `<p style="font-size:.95em;line-height:1.65;margin-bottom:10px">
              Para cobrarles a tus clientes con tarjeta hace falta decir
@@ -1450,6 +1515,19 @@
       }
 
       const c = d.cuenta;
+
+      /*
+       * El momento en que pasa de "le falta" a "ya puede cobrar" es el único
+       * que vale la pena interrumpir. Se avisa una sola vez y se deja de
+       * preguntar.
+       */
+      if(c.puedeCobrar && ccRevision){
+        ccDejarDeVigilar();
+        showAlert('ccAlert', '✅ Stripe aprobó tu cuenta. El dinero de tus clientes ya puede caer ahí.', 'success');
+      } else if(!c.puedeCobrar && !c.sinRespuesta){
+        ccVigilar();
+      }
+
       const chip = (ok, si, no) =>
         `<span style="display:inline-block;padding:4px 10px;border-radius:20px;font-size:.78em;font-weight:600;`
         + `background:${ok?'#e8f8ee':'#fff4e5'};color:${ok?'#1c7a43':'#8a5a00'}">${ok?si:no}</span>`;
@@ -1466,7 +1544,7 @@
           `<div class="alert alert-warn" style="display:block;margin-top:12px">
              <b>Todavía falta terminar el alta.</b> Hasta que la termines, el cobro con tarjeta no
              funciona y tus clientes siguen pagando como siempre.
-             ${(c.faltante||[]).length?('<br>Falta: '+esc((c.faltante||[]).slice(0,4).join(', '))+'.'):''}
+             ${(c.faltante||[]).length?('<br>Falta: '+esc((c.faltante||[]).slice(0,4).map(ccEnEspanol).join(', '))+'.'):''}
            </div>
            <button class="btn btn-primary" id="ccAlta" style="margin-top:10px">Continuar donde me quedé</button>`)
         + (c.sinRespuesta ? `<div class="empty" style="margin-top:10px">No se pudo consultar el estado con Stripe en este momento.</div>` : '');
@@ -1509,7 +1587,8 @@
         `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
            ${chip(e.activo,'Cobro encendido','Cobro apagado')}
            ${chip(e.reactivacionActiva,'Reactivación automática','Reactivación apagada')}
-           ${chip(e.hayLlave && e.cuentaConectada,'Stripe configurado','Falta configurar Stripe')}
+           ${chip(e.hayLlave && e.cuentaConectada && e.cuentaLista,'Stripe configurado',
+                  e.cuentaConectada ? 'Falta que Stripe apruebe tu cuenta' : 'Falta dar de alta tu cuenta')}
          </div>
          <table class="data-table"><tbody>
            <tr><td class="muted">Se le ofrece a</td><td><b>${esc(e.alcance)}</b></td></tr>
