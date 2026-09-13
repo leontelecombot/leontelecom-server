@@ -183,6 +183,30 @@ console.log('\n=== 6. LA VARIABLE DE SIEMPRE SIGUE SIRVIENDO ===');
   es(r.lista === true, 'y la da por buena, porque la puso una persona a propósito');
 }
 
+console.log('\n=== 7. LA PANTALLA A LA QUE STRIPE LO REGRESA ===');
+{
+  /*
+   * Stripe lo devuelve a /cuenta-cobro en tres situaciones y solo una es buena:
+   * terminó y quedó aprobado, terminó pero le falta algo, o el enlace se venció
+   * antes de que llenara nada.
+   *
+   * Esa pantalla decía "Listo, recibimos tus datos" en los tres casos. Es lo
+   * peor que se le puede decir a alguien que acaba de dedicar diez minutos a
+   * teclear su RFC: se va tranquilo creyendo que ya, y se entera semanas
+   * después de que nunca quedó.
+   */
+  const fs = await import('node:fs');
+  const html = fs.readFileSync('./public/cuenta-cobro.html', 'utf8');
+
+  es(!/Listo, recibimos tus datos<\/h1>/.test(html), 'ya no dice "listo" pase lo que pase');
+  es(/Listo, tu cuenta ya puede recibir pagos/.test(html), 'dice que quedó solo cuando de verdad quedó');
+  es(/falta un paso/.test(html), 'avisa cuando Stripe todavía pide algo');
+  es(/El enlace se venci/.test(html), 'y avisa cuando el enlace se venció');
+  es(/estado=reintentar|'reintentar'/.test(html), 'reconociendo la marca que manda Stripe');
+  es(/\/api\/cuenta-cobro\/estado/.test(html), 'y preguntándole al servidor cómo está de verdad');
+  es(/Continuar donde me qued/.test(html), 'diciéndole dónde retomar, no dejándolo perdido');
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));

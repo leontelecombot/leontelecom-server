@@ -30,38 +30,106 @@
 </style>
 </head>
 <body>
-<div class="caja">
+<div class="caja" id="caja">
   <div class="marca">León Telecom</div>
-
-  <div class="paloma">
-    <svg width="26" height="26" viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg>
-  </div>
-
-  <h1>Listo, recibimos tus datos</h1>
-
-  <p>
-    Tu cuenta de cobro quedó ligada. <strong>Stripe va a revisar la información</strong>
-    y en cuanto la apruebe, los pagos de tus clientes empiezan a caer directo en la cuenta
-    bancaria que registraste.
-  </p>
-
-  <p>
-    Esa revisión suele tardar poco, pero a veces Stripe pide algún documento extra.
-    Si pasa, te llega un correo directo de ellos.
-  </p>
-
-  <div class="nota">
-    <h2>Qué sigue</h2>
-    <ul>
-      <li>Nosotros te avisamos en cuanto esté aprobada.</li>
-      <li>Nada cambia para tus clientes hasta que lo activemos juntos.</li>
-      <li>El dinero de cada pago te llega íntegro, sin descuentos de nuestra parte.</li>
-    </ul>
-  </div>
-
-  <div class="pie">
-    Ya puedes cerrar esta pestaña. Si algo no te cuadró, escríbenos y lo revisamos.
-  </div>
+  <div id="contenido"><p>Revisando cómo quedó tu cuenta…</p></div>
 </div>
+
+<script>
+/*
+ * ESTA PANTALLA DECÍA SIEMPRE "LISTO, RECIBIMOS TUS DATOS".
+ *
+ * Stripe regresa aquí en tres situaciones distintas y solo una de ellas es
+ * buena: cuando terminó y quedó aprobado, cuando terminó pero Stripe todavía
+ * le pide algo, y cuando el enlace se venció antes de que llenara nada.
+ *
+ * Decirle "listo" en los tres casos es lo peor que se puede hacer con alguien
+ * que acaba de dedicar diez minutos a teclear su RFC y su cuenta de banco: se
+ * va tranquilo creyendo que ya, y se entera semanas después de que nunca quedó.
+ *
+ * Así que se le pregunta al servidor cómo está de verdad, y se le dice eso.
+ */
+const marca = new URLSearchParams(location.search).get('estado') || '';
+const caja = document.getElementById('contenido');
+
+const paloma = '<div class="paloma"><svg width="26" height="26" viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg></div>';
+const pie = (t) => `<div class="pie">${t}</div>`;
+
+function pinta(html) { caja.innerHTML = html; }
+
+function quedoListo() {
+  pinta(paloma + `
+    <h1>Listo, tu cuenta ya puede recibir pagos</h1>
+    <p>
+      Stripe aprobó tu información. A partir de ahora, el dinero de cada cliente que
+      pague en línea <strong>cae directo en tu cuenta bancaria</strong>, sin pasar por
+      nadie más y sin descuentos de nuestra parte.
+    </p>
+    <div class="nota">
+      <h2>Qué sigue</h2>
+      <ul>
+        <li>Tus clientes no notan nada hasta que lo activemos juntos.</li>
+        <li>Tú decides con cuántos empezamos.</li>
+      </ul>
+    </div>` + pie('Ya puedes cerrar esta pestaña.'));
+}
+
+function faltaAlgo(faltante) {
+  pinta(`
+    <h1>Se guardó lo que llenaste, pero falta un paso</h1>
+    <p>
+      Stripe todavía te pide algo más antes de aprobar tu cuenta.
+      <strong>Mientras no lo completes, el cobro en línea no funciona</strong> y tus
+      clientes siguen pagando como siempre.
+    </p>
+    ${faltante && faltante.length ? `<div class="nota"><h2>Lo que falta</h2><ul>${
+      faltante.slice(0, 5).map((f) => '<li>' + String(f).replace(/[<>&]/g, '') + '</li>').join('')
+    }</ul></div>` : ''}
+    <p style="margin-top:14px">
+      Entra a tu panel, sección <strong>Cobranza</strong>, y pícale a
+      <strong>“Continuar donde me quedé”</strong>. Retomas justo donde lo dejaste.
+    </p>` + pie('Si no te queda claro qué te está pidiendo, escríbenos y lo vemos juntos.'));
+}
+
+function seVencio() {
+  pinta(`
+    <h1>El enlace se venció</h1>
+    <p>
+      Por seguridad, el enlace del alta dura poco. <strong>No perdiste nada</strong>:
+      lo que hayas llenado se guardó.
+    </p>
+    <p>
+      Entra a tu panel, sección <strong>Cobranza</strong>, y vuelve a abrirlo desde ahí.
+    </p>` + pie('Si te sigue pasando, escríbenos y te mandamos uno nuevo.'));
+}
+
+function noSeSupo() {
+  pinta(`
+    <h1>Recibimos tus datos</h1>
+    <p>
+      No pudimos confirmar en este momento si Stripe ya los aprobó.
+      <strong>Revisa tu panel</strong>, en la sección Cobranza: ahí siempre aparece el
+      estado real de tu cuenta.
+    </p>` + pie('Ya puedes cerrar esta pestaña.'));
+}
+
+(async () => {
+  if (marca === 'reintentar') return seVencio();
+  try {
+    /*
+     * Se pregunta por el estado PÚBLICO, sin sesión: quien llega aquí viene del
+     * sitio de Stripe, no del panel, y no trae token. La respuesta no dice nada
+     * privado, solo si esa cuenta ya puede cobrar y qué le falta.
+     */
+    const r = await fetch('/api/cuenta-cobro/estado', { cache: 'no-store' });
+    const d = await r.json();
+    if (!d || !d.ok || !d.existe) return noSeSupo();
+    if (d.puedeCobrar) return quedoListo();
+    return faltaAlgo(d.faltante);
+  } catch (_) {
+    noSeSupo();
+  }
+})();
+</script>
 </body>
 </html>

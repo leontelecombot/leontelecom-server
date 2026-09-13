@@ -5314,6 +5314,33 @@ const sinCacheCobro = (_req, res, next) => { res.setHeader('Cache-Control', 'no-
 app.get('/cuenta-cobro', sinCacheCobro, (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'cuenta-cobro.html'), { cacheControl: false }));
 
+/*
+ * El estado de la cuenta, SIN sesión.
+ *
+ * Quien llega a /cuenta-cobro viene del sitio de Stripe, no del panel, y no
+ * trae token. Sin esta ruta, esa pantalla no puede saber si quedó y tiene que
+ * decirle "listo" a ciegas, que es justo lo que hacía.
+ *
+ * Solo contesta dos cosas: si esa cuenta ya puede cobrar y qué le falta. No
+ * dice el id de la cuenta, ni el banco, ni nada que sirva a un tercero.
+ */
+app.get('/api/cuenta-cobro/estado', async (_req, res) => {
+  try {
+    if (!stripeLeon.hayLlave() || !stripeLeon.cuentaConectada()) {
+      return res.json({ ok: true, existe: false, puedeCobrar: false, faltante: [] });
+    }
+    const est = await stripeLeon.estadoCuenta();
+    res.json({
+      ok: true, existe: true,
+      puedeCobrar: !!est.puedeCobrar,
+      faltante: (est.faltante || []).slice(0, 6),
+    });
+  } catch (e) {
+    console.warn('[cobro] estado público:', e.message);
+    res.json({ ok: false, existe: true, puedeCobrar: false, faltante: [] });
+  }
+});
+
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'leontelecom-server' });
 });
