@@ -308,6 +308,11 @@ console.log('\n=== 11. "50 CLIENTES" QUIERE DECIR 50 CLIENTES ===');
    * justo el tipo de cuenta que se hace mal: hoy 50 de 1,050 es 4.8%, y si él
    * crece a 1,400 ese mismo 4.8% ya son 67 clientes sin que nadie lo decidiera.
    */
+  // La cuenta tiene que estar lista: desde ahora, sin eso no se le ofrece a
+  // nadie, y lo que se está probando aquí es a cuántos.
+  estado.puedeCobrar = true; estado.faltante = [];
+  await cobro.estadoCuenta();
+
   const TOTAL = 1050;
   const padron = new Array(TOTAL).fill(0).map((_, i) => '52951' + String(1000000 + i));
   cobro.usarPadron({ total: () => TOTAL, telefonos: () => padron });
@@ -352,12 +357,48 @@ console.log('\n=== 12. SIN SABER CUÁNTOS CLIENTES HAY, NO SE INVENTA ===');
    * no se puede repartir un cupo. Preferible ofrecérselo a una persona de menos
    * que a mil de más el día que arranca el cobro de verdad.
    */
+  estado.puedeCobrar = true; estado.faltante = [];
+  await cobro.estadoCuenta();
   cobro.usarPadron({ total: () => 0, telefonos: () => [] });
   process.env.COBRO_LINEA_TELEFONOS = '50';
   const piloto = '529516549145';
   es(cobro.permitido(piloto, piloto) === true, 'el piloto sigue entrando');
   es(cobro.permitido('5295110000001', piloto) === false, 'y nadie más, hasta que se sepa el total');
   process.env.COBRO_LINEA_TELEFONOS = '*';
+}
+
+console.log('\n=== 13. AL CLIENTE NO SE LE OFRECE LO QUE NO SE PUEDE CUMPLIR ===');
+{
+  /*
+   * Sin esto, el cliente ve el botón de pagar con tarjeta, lo elige, y hasta
+   * entonces se topa con un error porque la cuenta de León no está lista. Eso
+   * es peor que no ofrecerlo: ya se hizo ilusiones, y el que queda mal es León.
+   */
+  const padron = ['5295110000001', '5295110000002', '5295110000003'];
+  cobro.usarPadron({ total: () => padron.length, telefonos: () => padron });
+  process.env.COBRO_LINEA_TELEFONOS = '*';
+
+  cobro.olvidarCuenta();   // la cuenta existe pero Stripe no la aprueba
+  es(cobro.cuentaLista() === false, 'la cuenta no está lista');
+  es(padron.every((t) => cobro.permitido(t, '') === false),
+     'a nadie se le ofrece pagar en línea mientras no lo esté');
+
+  // En cuanto Stripe la aprueba, vuelve a ofrecerse sin que nadie toque nada.
+  estado.puedeCobrar = true; estado.faltante = [];
+  await cobro.estadoCuenta();
+  es(cobro.cuentaLista() === true, 'Stripe la aprueba');
+  es(padron.every((t) => cobro.permitido(t, '') === true), 'y vuelve a ofrecerse sola');
+
+  // Y el apagador general sigue mandando sobre todo lo demás.
+  process.env.COBRO_LINEA_ACTIVO = 'false';
+  es(padron.every((t) => cobro.permitido(t, '') === false),
+     'con el interruptor apagado no se ofrece, aunque la cuenta esté lista');
+  process.env.COBRO_LINEA_ACTIVO = 'true';
+
+  const fs = await import('node:fs');
+  const servidor = fs.readFileSync('./index.js', 'utf8');
+  es(/esDeLaCuenta/.test(servidor) && /El pago en línea no está disponible/.test(servidor),
+     'y si aun así falla, no se le dice "intenta en un rato" a algo que no se va a arreglar solo');
 }
 
 if (process.env.VER_PEDIDOS === '1') {

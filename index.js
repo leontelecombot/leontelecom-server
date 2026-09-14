@@ -4206,7 +4206,19 @@ async function handleChatMessage(chatId, text, sendMsg) {
           + `Si prefieres pagar como siempre, por depósito o transferencia directa, sigue siendo gratis: solo mándanos tu comprobante. 🙌`);
       } catch (e) {
         console.error('[stripe-leon] generando link de', forma, ':', e.message);
-        await sendMsg(chatId, 'No pude generar el link de pago ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
+        /*
+         * "Intenta en un rato" solo sirve si en un rato va a funcionar. Si lo
+         * que falta es la cuenta de León, el siguiente intento falla igual y el
+         * cliente se estrella dos veces. Ahí se le manda directo a la vía que
+         * sí funciona, sin prometerle nada.
+         */
+        const esDeLaCuenta = /cuenta|aprobada/i.test(e.message || '');
+        if (esDeLaCuenta) {
+          console.error('[stripe-leon] ¡LA CUENTA DE LEÓN NO ESTÁ LISTA! Se le ofreció pagar en línea a un cliente y no se pudo.');
+          await sendMsg(chatId, 'El pago en línea no está disponible en este momento. Paga como siempre, por depósito o transferencia, y mándanos tu comprobante. 🙏');
+        } else {
+          await sendMsg(chatId, 'No pude generar el link de pago ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
+        }
       }
       return;
     }

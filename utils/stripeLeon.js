@@ -81,6 +81,15 @@ function activo() {
  */
 function permitido(telefono, piloto) {
   if (!activo()) return false;
+  /*
+   * Si la cuenta de León no está lista, NO se le ofrece al cliente.
+   *
+   * Sin esto, alguien ve el botón de pagar con tarjeta, lo elige, y hasta
+   * entonces se topa con un error. Eso es peor que no ofrecerlo: ya se hizo
+   * ilusiones, y el que queda mal es León, no nosotros. Que la opción no
+   * exista mientras no pueda cumplirse.
+   */
+  if (!cuentaLista()) return false;
   const lista = String(process.env.COBRO_LINEA_TELEFONOS || '').trim();
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return false;
