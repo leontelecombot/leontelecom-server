@@ -169,8 +169,17 @@ a.volver{display:inline-block;margin-top:18px;font-size:13px;color:#6b3fa0}
 createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/pagar') {
     anotar('cliente → bot', 'PAGAR');
-    const pago = await stripeLeon.generarLinkPago({ telefono: CLIENTE.telefono, monto: CLIENTE.saldo, nombre: CLIENTE.name, urlBase: `http://127.0.0.1:${PUERTO}` });
-    anotar('bot → cliente', `💳 Aquí puedes pagar en línea, sin salir de tu casa:\n\n• Mensualidad: $${pago.mensualidad.toFixed(2)}\n• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n• Total: $${pago.total.toFixed(2)}\n\n${pago.url}\n\nPuedes pagar con tarjeta, OXXO o transferencia. En cuanto se confirme te avisamos por aquí — no hace falta que mandes comprobante.`);
+    /*
+     * Igual que el bot de verdad: primero se le cotiza cada forma y él elige.
+     * El demo se quedó atrás cuando el sistema empezó a exigir la forma de
+     * pago, y se caía justo al picar "PAGAR", que es el momento de la venta.
+     */
+    const t = stripeLeon.calcularCargo(CLIENTE.saldo, 'tarjeta');
+    const o = stripeLeon.calcularCargo(CLIENTE.saldo, 'oxxo');
+    anotar('bot → cliente', `Tu mensualidad es de $${CLIENTE.saldo.toFixed(2)}. ¿Cómo prefieres pagarla?\n\n💳 Con tarjeta — total $${(t.totalCentavos / 100).toFixed(2)}\n🏪 En efectivo en OXXO — total $${(o.totalCentavos / 100).toFixed(2)}`);
+    anotar('cliente → bot', '💳 Con tarjeta');
+    const pago = await stripeLeon.generarLinkPago({ telefono: CLIENTE.telefono, monto: CLIENTE.saldo, nombre: CLIENTE.name, urlBase: `http://127.0.0.1:${PUERTO}`, forma: 'tarjeta' });
+    anotar('bot → cliente', `💳 Aquí puedes pagar con tu tarjeta, sin salir de tu casa:\n\n• Mensualidad: $${pago.mensualidad.toFixed(2)}\n• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n• Total: $${pago.total.toFixed(2)}\n\n${pago.url}\n\nEn cuanto se confirme te avisamos por aquí y tu servicio se reactiva solo — no hace falta comprobante.`);
   } else if (req.method === 'POST' && req.url === '/confirmar') {
     const cuerpo = JSON.stringify({
       type: 'checkout.session.completed',
