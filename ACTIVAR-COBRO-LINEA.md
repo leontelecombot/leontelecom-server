@@ -9,32 +9,45 @@ ven exactamente lo mismo de siempre: horario en oficina y datos de pago.
 | Variable | Qué hace |
 |---|---|
 | `COBRO_LINEA_ACTIVO` | `true` enciende. Cualquier otra cosa lo deja apagado. |
-| `COBRO_LINEA_TELEFONOS` | A quién se le ofrece. Vacío = solo el piloto. Lista con comas = esos. `NN%` = esa fracción del padrón. `*` = todos. |
+| `COBRO_LINEA_TELEFONOS` | A quién se le ofrece. Vacío = solo el piloto. Un número = esa cantidad de clientes. Lista con comas = esos. `NN%` = esa fracción del padrón. `*` = todos. |
 
 ```
 Solo tú (piloto 529516549145):  COBRO_LINEA_ACTIVO=true
-Unos cuantos:                   COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=5219511111111,5219512222222
+Los 50 acordados con León:      COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=50
+Unos cuantos a dedo:            COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=5219511111111,5219512222222
 Uno de cada diez:               COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=10%
-La mitad:                       COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=50%
 Todo el pueblo:                 COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=*
 Apagar de emergencia:           COBRO_LINEA_ACTIVO=false
 ```
 
-**El porcentaje es la forma recomendada de abrir.** Entre el teléfono piloto y
-`*` hay un salto de 1 a 1,430 clientes, y en el primer mes de mover dinero de
-verdad conviene enterarse de los problemas con 140 personas, no con todas.
+**Un número pelón son CLIENTES, y es la forma recomendada de abrir.** Los tratos
+se cierran en clientes, no en porcentajes: con León se acordó empezar con 50, y
+`COBRO_LINEA_TELEFONOS=50` son exactamente 50, no "más o menos". Si el padrón
+crece, siguen siendo 50 hasta que alguien decida otra cosa, que es justo lo que
+un porcentaje NO hace: 4.8% de 1,050 son 50 clientes, pero de 1,400 son 67 sin
+que nadie lo haya decidido.
+
+Entre el teléfono piloto y `*` hay un salto de 1 a 1,430 clientes, y en el
+primer mes de mover dinero de verdad conviene enterarse de los problemas con 50
+personas, no con todas.
 
 Quién entra se decide con el número de teléfono, no al azar, así que **el mismo
 cliente obtiene siempre la misma respuesta**: nadie ve el botón un día y lo
-pierde al siguiente. Y al subir el porcentaje solo se agrega gente, nunca se le
-quita a quien ya lo tenía.
+pierde al siguiente. Y al subir el cupo solo se agrega gente, nunca se le quita
+a quien ya lo tenía.
+
+Si el padrón todavía no ha cargado (Wisphub caído, servidor recién arrancado),
+un cupo por número **no se reparte a ciegas**: se queda solo el piloto y se
+avisa en el registro. Preferible una persona de menos que mil de más.
 
 Apagar no requiere tocar código ni volver a desplegar. Es una variable en Render.
 
 ## Lo que falta antes de encenderlo
 
-1. **`LEON_STRIPE_CUENTA_CONECTADA`** — la cuenta de Stripe Connect de León
-   Telecom. Es a donde cae su dinero. Sin esto no se genera ningún cobro.
+1. **La cuenta a la que le cae el dinero.** Ya NO hace falta crearla a mano:
+   León la da de alta desde su panel, en Cobranza → "¿A dónde te llega el
+   dinero?". Necesita identificación, RFC y CLABE. `LEON_STRIPE_CUENTA_CONECTADA`
+   sigue funcionando como respaldo si se prefiere ponerla a mano.
 2. **`STRIPE_SECRET_KEY`** — la misma llave de plataforma que usa Aforo.
 3. **`STRIPE_WEBHOOK_SECRET_LEON`** — el secreto del webhook, distinto del de
    Aforo aunque la llave de plataforma sea la misma.

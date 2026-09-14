@@ -103,14 +103,106 @@ function permitido(telefono, piloto) {
    */
   const pct = lista.match(/^(\d{1,3})\s*%$/);
   if (pct) {
-    const limite = Math.min(100, Number(pct[1]));
-    if (limite <= 0) return false;
-    if (limite >= 100) return true;
-    const h = crypto.createHash('sha256').update(tel).digest();
-    return (h.readUInt32BE(0) % 100) < limite;
+    const porciento = Math.min(100, Number(pct[1]));
+    if (porciento <= 0) return false;
+    if (porciento >= 100) return true;
+    return dentroDelCupo(tel, porciento * 100);
+  }
+
+  /*
+   * Un número pelón son CLIENTES, no porcentaje: `COBRO_LINEA_TELEFONOS=50`.
+   *
+   * Los tratos se cierran en clientes, no en porcentajes. Con León se acordó
+   * "empezamos con 50", y traducir eso a mano cada vez que cambie el padrón es
+   * justo el tipo de cuenta que se hace mal: hoy 50 de 1,050 es 4.8%, y si él
+   * crece a 1,400 ese mismo 4.8% ya son 67 clientes sin que nadie lo decidiera.
+   */
+  const cuantos = lista.match(/^(\d{1,6})$/);
+  if (cuantos) {
+    const meta = Number(cuantos[1]);
+    if (meta <= 0) return false;
+    const total = _padron ? Number(_padron.total()) || 0 : 0;
+    if (!total) {
+      /*
+       * Sin saber cuántos clientes hay no se puede repartir un cupo. Se avisa
+       * fuerte y se cae al piloto: es preferible ofrecérselo a una persona de
+       * menos que a mil de más el día que arranca el cobro de verdad.
+       */
+      console.warn('[cobro] COBRO_LINEA_TELEFONOS=' + meta + ' pero todavía no se sabe cuántos clientes hay; por ahora solo el piloto.');
+      return !!piloto && tel === String(piloto).replace(/\D/g, '');
+    }
+    if (meta >= total) return true;
+    return entreLosPrimeros(tel, meta);
   }
 
   return lista.split(',').map((x) => x.replace(/\D/g, '')).filter(Boolean).includes(tel);
+}
+
+/*
+ * ¿Este teléfono cae dentro de los primeros `corte` de diez mil?
+ *
+ * Se decide con el teléfono, no al azar, para que el MISMO cliente obtenga
+ * siempre la misma respuesta. Si fuera aleatorio, alguien vería el botón el
+ * lunes, lo perdería el martes y llamaría a la oficina a preguntar por qué.
+ *
+ * Se reparte en diez mil y no en cien porque 50 de 1,050 clientes es 4.76%, y
+ * con cien cajones eso se redondea a 4% o 5%: la diferencia entre 42 y 53
+ * clientes. Con diez mil, el número que se acordó es el que sale.
+ */
+function dentroDelCupo(tel, corte) {
+  if (corte <= 0) return false;
+  if (corte >= 10000) return true;
+  const h = crypto.createHash('sha256').update(tel).digest();
+  return (h.readUInt32BE(0) % 10000) < corte;
+}
+
+/*
+ * ¿Está este teléfono entre los primeros `meta` del padrón?
+ *
+ * Repartir por proporción daba "más o menos 50": con 1,050 clientes salían 42,
+ * y un trato que dice 50 tiene que dar 50. Aquí se ordenan todos los teléfonos
+ * por su huella y se toman los primeros `meta`. El orden no depende del azar ni
+ * de quién pregunte primero, así que el mismo cliente obtiene siempre la misma
+ * respuesta, y subir el cupo solo agrega gente.
+ *
+ * El corte se calcula una vez y se guarda: hacerlo en cada mensaje de WhatsApp
+ * sería ordenar mil teléfonos por cada "hola".
+ */
+let _corte = { para: '', valor: null };
+function entreLosPrimeros(tel, meta) {
+  const lista = (_padron && typeof _padron.telefonos === 'function') ? _padron.telefonos() : null;
+  // Sin la lista completa no se puede ser exacto: se reparte por proporción,
+  // que da un número cercano, y se sigue adelante.
+  if (!lista || !lista.length) {
+    const total = _padron ? Number(_padron.total()) || 0 : 0;
+    return total ? dentroDelCupo(tel, Math.round((meta / total) * 10000)) : false;
+  }
+
+  const clave = meta + ':' + lista.length;
+  if (_corte.para !== clave) {
+    const huellas = lista
+      .map((t) => huella(String(t).replace(/\D/g, '')))
+      .filter((h) => h >= 0)
+      .sort((a, b) => a - b);
+    // El valor del que quedó en el lugar `meta`: quien tenga una huella menor
+    // está dentro, y son exactamente `meta` personas.
+    _corte = { para: clave, valor: meta < huellas.length ? huellas[meta] : Infinity };
+  }
+  return huella(tel) < _corte.valor;
+}
+
+function huella(tel) {
+  if (!tel) return -1;
+  return crypto.createHash('sha256').update(tel).digest().readUInt32BE(0);
+}
+
+/*
+ * Quiénes son los clientes. Lo sabe el servidor (la lista de Wisphub), no este
+ * módulo, así que se le presta igual que el registro de clientes.
+ */
+let _padron = null;
+function usarPadron(p) {
+  if (p && typeof p.total === 'function') { _padron = p; _corte = { para: '', valor: null }; }
 }
 
 /**
@@ -946,7 +1038,7 @@ function verificarFirma(cuerpoCrudo, cabecera, secreto, toleranciaSeg = 300) {
 }
 
 module.exports = {
-  hayLlave, activo, permitido, usarRegistro, usarCuenta,
+  hayLlave, activo, permitido, usarRegistro, usarCuenta, usarPadron,
   cuentaConectada, cuentaLista, crearCuentaConectada, enlaceOnboarding, estadoCuenta, olvidarCuenta,
   generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,
   verificarFirma, calcularCargo, clabeValida,

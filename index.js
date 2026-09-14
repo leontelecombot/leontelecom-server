@@ -1260,6 +1260,15 @@ function buildStateSnapshot() {
  * indexar y podría crear un cliente duplicado con otra CLABE. El registro es lo
  * que hace que eso no pase nunca.
  */
+/*
+ * Cuántos clientes hay, para poder repartir un cupo de "50 clientes" sin que
+ * nadie tenga que convertirlo a porcentaje a mano cada vez que crece el padrón.
+ */
+stripeLeon.usarPadron({
+  total: () => wisphubClients.size,
+  telefonos: () => Array.from(wisphubClients.keys()),
+});
+
 let stripeCuentaLeon = null;
 stripeLeon.usarCuenta({
   obtener: () => stripeCuentaLeon,

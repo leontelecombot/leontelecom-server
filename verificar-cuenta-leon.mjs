@@ -300,6 +300,66 @@ console.log('\n=== 10. SI STRIPE LA SUSPENDE DESPUÉS ===');
   es(cobro.cuentaConectada() === 'acct_leon', 'pero el id se conserva: no se le pide crear otra');
 }
 
+console.log('\n=== 11. "50 CLIENTES" QUIERE DECIR 50 CLIENTES ===');
+{
+  /*
+   * Los tratos se cierran en clientes, no en porcentajes. Con León se acordó
+   * "empezamos con 50", y traducir eso a mano cada vez que cambie el padrón es
+   * justo el tipo de cuenta que se hace mal: hoy 50 de 1,050 es 4.8%, y si él
+   * crece a 1,400 ese mismo 4.8% ya son 67 clientes sin que nadie lo decidiera.
+   */
+  const TOTAL = 1050;
+  const padron = new Array(TOTAL).fill(0).map((_, i) => '52951' + String(1000000 + i));
+  cobro.usarPadron({ total: () => TOTAL, telefonos: () => padron });
+  process.env.COBRO_LINEA_TELEFONOS = '50';
+
+  const dentro = padron.filter((t) => cobro.permitido(t, '529516549145'));
+  es(dentro.length === 50, `de 1,050 clientes entran EXACTAMENTE 50 (entraron ${dentro.length})`);
+
+  // El mismo cliente tiene que obtener SIEMPRE la misma respuesta.
+  const otraVez = padron.filter((t) => cobro.permitido(t, '529516549145'));
+  es(JSON.stringify(dentro) === JSON.stringify(otraVez),
+     'y siempre son los mismos: nadie ve el botón un día y lo pierde al siguiente');
+
+  // Subir el cupo solo AGREGA gente, nunca se la quita a quien ya lo tenía.
+  process.env.COBRO_LINEA_TELEFONOS = '200';
+  const masGrande = padron.filter((t) => cobro.permitido(t, '529516549145'));
+  es(dentro.every((t) => masGrande.includes(t)),
+     'al subir a 200, los 50 de antes siguen dentro');
+  es(masGrande.length === 200, `y ahora entran exactamente 200 (entraron ${masGrande.length})`);
+
+  // Pedir más de los que hay se los da a todos, sin romperse.
+  process.env.COBRO_LINEA_TELEFONOS = '5000';
+  es(padron.every((t) => cobro.permitido(t, '')), 'pedir más de los que hay se lo ofrece a todos');
+
+  // El porcentaje de siempre sigue funcionando.
+  process.env.COBRO_LINEA_TELEFONOS = '10%';
+  const diez = padron.filter((t) => cobro.permitido(t, ''));
+  es(Math.abs(diez.length - 105) <= 30, `el porcentaje sigue sirviendo (10% dio ${diez.length})`);
+
+  // Y la lista de teléfonos a mano, también.
+  process.env.COBRO_LINEA_TELEFONOS = padron[0] + ',' + padron[1];
+  es(cobro.permitido(padron[0], '') && cobro.permitido(padron[1], '') && !cobro.permitido(padron[5], ''),
+     'y la lista de teléfonos escritos a mano, también');
+
+  process.env.COBRO_LINEA_TELEFONOS = '*';
+}
+
+console.log('\n=== 12. SIN SABER CUÁNTOS CLIENTES HAY, NO SE INVENTA ===');
+{
+  /*
+   * Si el padrón todavía no carga (Wisphub caído, servidor recién arrancado),
+   * no se puede repartir un cupo. Preferible ofrecérselo a una persona de menos
+   * que a mil de más el día que arranca el cobro de verdad.
+   */
+  cobro.usarPadron({ total: () => 0, telefonos: () => [] });
+  process.env.COBRO_LINEA_TELEFONOS = '50';
+  const piloto = '529516549145';
+  es(cobro.permitido(piloto, piloto) === true, 'el piloto sigue entrando');
+  es(cobro.permitido('5295110000001', piloto) === false, 'y nadie más, hasta que se sepa el total');
+  process.env.COBRO_LINEA_TELEFONOS = '*';
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));
