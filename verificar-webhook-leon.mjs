@@ -321,7 +321,7 @@ console.log('\n=== 7. EL MENÚ DE PAGO CABE EN WHATSAPP ===');
   const bloque = (fuente.match(/const botonesPago = [\s\S]{0,900}?\];/) || [])[0] || '';
   bloque ? OK('se encuentra el armado del menú') : MAL('no se encontró botonesPago');
 
-  const conCobro = (bloque.match(/id: 'pago_(clabe|tarjeta|otras)'/g) || []).length;
+  const conCobro = (bloque.match(/id: 'pago_(clabe|con_tarjeta|con_oxxo)'/g) || []).length;
   conCobro === 3 ? OK('con cobro en línea son exactamente 3 botones') : MAL('son ' + conCobro);
 
   const sinCobro = (bloque.match(/id: 'pago_(horario|datos)'/g) || []).length;

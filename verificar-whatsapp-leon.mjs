@@ -269,8 +269,9 @@ console.log('\n=== 1. EL MENÚ DE PAGAR: A QUIÉN SE LE OFRECE QUÉ ===');
   await entra(A, 'pagar');
   const r = await respuestas(n);
   const b = conBotones(r).botones.map((x) => x.id);
-  es(b.includes('pago_tarjeta') && b.includes('pago_clabe'), 'en el piloto: tarjeta/OXXO y CLABE en el menú');
-  es(dice(r, /OTRO/), 'en el piloto se le dice que puede pagar la cuenta de alguien más (OTRO)');
+  es(b.includes('pago_con_tarjeta') && b.includes('pago_clabe') && b.includes('pago_con_oxxo'), 'en el piloto: transferencia, tarjeta y OXXO, un botón cada una');
+  es(dice(r, /Tu mensualidad es de \*\$300\.00\*/), 'y antes de preguntar cómo, le dice cuánto debe');
+  es(dice(r, /a nombre de quién/), 'en el piloto se le dice cómo pagar la cuenta de alguien más (a nombre de quién)');
   es(r.every((m) => m.a === A), 'todo le llegó a quien escribió');
 
   n = enviados.length;
@@ -278,7 +279,7 @@ console.log('\n=== 1. EL MENÚ DE PAGAR: A QUIÉN SE LE OFRECE QUÉ ===');
   const rd = await respuestas(n);
   const bd = conBotones(rd).botones.map((x) => x.id);
   es(!bd.includes('pago_tarjeta') && bd.includes('pago_horario'), 'fuera del piloto: solo oficina y datos de pago');
-  es(!dice(rd, /OTRO/), 'fuera del piloto ni se menciona OTRO');
+  es(!dice(rd, /a nombre de quién/), 'fuera del piloto ni se menciona pagar por otro');
 
   n = enviados.length;
   await entra(D, 'otro');
@@ -304,7 +305,9 @@ console.log('\n=== 2. PAGAR LA CUENTA DE OTRO, POR TELÉFONO ===');
   await toca(A, 'pago_otro_es_0');
   r = await respuestas(n);
   es(dice(r, /vas a pagar la cuenta de \*Ana Pérez\*/), 'al confirmar, dice de quién es la cuenta que va a pagar');
-  es(conBotones(r).botones.some((x) => x.id === 'pago_tarjeta'), 'y ofrece tarjeta u OXXO');
+  es(dice(r, /Su mensualidad es de \*\$440\.00\*/), 'con la mensualidad de ella a la vista');
+  const bc = conBotones(r).botones.map((x) => x.id);
+  es(bc.includes('pago_clabe') && bc.includes('pago_con_tarjeta') && bc.includes('pago_con_oxxo'), 'y ofrece transferencia, tarjeta y OXXO de un toque');
 
   n = enviados.length;
   await toca(A, 'pago_tarjeta');
@@ -358,13 +361,9 @@ console.log('\n=== 3. NADA SE REACTIVA HASTA QUE EL DINERO ESTÁ CONFIRMADO ==='
 console.log('\n=== 4. OXXO POR OTRO: LA FICHA LA RECIBE QUIEN LA SACÓ ===');
 {
   let n = enviados.length;
-  await entra(A, 'pagar el de mi mamá');
-  const r0 = await respuestas(n);
-  es(dice(r0, /De quién es la cuenta/), '"pagar el de mi mamá" también abre el flujo de pagar por otro');
-  if (!dice(r0, /De quién es la cuenta/)) console.log('    recibió:', JSON.stringify(r0.map((m) => m.texto.slice(0, 80))));
-  n = enviados.length;
-  await entra(A, 'Ana Pérez');
+  await entra(A, 'Pago de internet a nombre de Ana Pérez');
   let r = await respuestas(n);
+  es(!dice(r, /De quién es la cuenta/), '"pago a nombre de Ana Pérez" no pregunta de quién: ya lo dijo');
   const bot = conBotones(r);
   es(dice(r, /Encontré estas cuentas/) && bot.botones.length === 2, 'por nombre encuentra a las dos Ana Pérez y pregunta cuál');
   es(bot.botones.map((x) => x.title).includes('Ana Pérez') && bot.botones.some((x) => /Gómez/.test(x.title)), 'con el nombre de cada una en su botón');
@@ -558,6 +557,39 @@ console.log('\n=== 9. "OTRO" NO SE ROBA LAS RESPUESTAS DE OTRA CONVERSACIÓN ===
   es(!dice(r, /De quién es la cuenta/), 'a media conversación de un reporte, "otro" no abre el flujo de pagar por otro');
 }
 
+console.log('\n=== 9b. LO QUE LA GENTE ESCRIBE DE VERDAD ===');
+{
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(A, 'Buen día, pago del señor Diego Ruiz');
+  let r = await respuestas(n);
+  es(!dice(r, /¿Es la cuenta de/), '"pago del señor X" sin "a nombre de" no se adivina (sería peligroso)');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+
+  n = enviados.length;
+  await entra(A, 'Pago de Internet a nombre de Diego Ruiz, gracias');
+  r = await respuestas(n);
+  es(dice(r, /¿Es la cuenta de \*Diego Ruiz\*\?/), '"pago a nombre de Diego Ruiz, gracias" encuentra a Diego y pide confirmar');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+
+  n = enviados.length;
+  await entra(A, 'cuánto debo');
+  r = await respuestas(n);
+  es(dice(r, /Tu mensualidad es de \*\$300\.00\*/) && conBotones(r).botones.length === 3, '"cuánto debo" contesta el monto y ofrece cómo pagar');
+
+  n = enviados.length;
+  await entra(A, 'oficina');
+  r = await respuestas(n, 2);
+  es(dice(r, /oficina/i) && dice(r, /datos de pago/i), '"oficina" da horario y datos de pago');
+
+  // Un toque en 💳 Tarjeta desde el menú da el link directo, sin más preguntas.
+  n = enviados.length;
+  const antes = stripe.sesiones.length;
+  await toca(A, 'pago_con_tarjeta');
+  r = await respuestas(n);
+  es(stripe.sesiones.length === antes + 1 && dice(r, /Total: \$/), 'un toque en Tarjeta desde el menú da el link con el total, sin otra pregunta');
+}
+
 console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE PAGA ESE ===');
 {
   let n = enviados.length;
@@ -600,8 +632,7 @@ console.log('\n=== 11. Y LA CLABE ES DE UN CONTRATO, NO DEL TELÉFONO ===');
   n = enviados.length;
   await toca(F, 'pago_clabe');
   let r = await respuestas(n);
-  if (!dice(r, /cada uno tiene su propia CLABE/)) console.log('    recibió:', JSON.stringify(r.map((m) => m.texto.slice(0, 160))));
-  es(dice(r, /cada uno tiene su propia CLABE/), 'al pedir la CLABE con dos contratos, se le explica que cada uno tiene la suya');
+  es(dice(r, /Tienes \*2 servicios\*/), 'al pedir la transferencia con dos contratos, primero pregunta cuál');
   const cual = conBotones(r).botones.findIndex((b) => /Local/.test(b.title));
   n = enviados.length;
   await toca(F, 'pago_servicio_' + cual);

@@ -4197,23 +4197,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       try {
+        if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'pago_tarjeta')) return;
         const ajena = cuentaAjena(chatId);
-        const telCuenta = ajena || normalizePhone(chatId);
-        let servicio = servicioEnSesion(chatId);
-        if (!servicio) {
-          const varios = await serviciosDeLaCuenta(telCuenta);
-          if (varios.length > 1) {
-            // Varios contratos: que diga cuál antes de cotizar nada.
-            setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajena, servicios: varios.slice(0, 3), desde: Date.now() } });
-            const deQuienEs = ajena ? `*${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* tiene` : 'Tienes';
-            await sendMsg(chatId,
-              `${deQuienEs} *${varios.length} servicios* con nosotros. ¿Cuál vas a pagar?`
-              + (varios.length > 3 ? '\n\n(Se muestran los primeros 3; si es otro, escríbele a un asesor.)' : ''),
-              [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'pago_servicio_' + i, title: (x.estado && /suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
-            return;
-          }
-          if (varios.length === 1) servicio = { servicioId: varios[0].id, usuario: varios[0].usuario, etiqueta: varios[0].etiqueta };
-        }
+        const servicio = servicioEnSesion(chatId);
         const cobro = await montoACobrar(chatId, ajena, servicio);
         if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
 
@@ -4247,6 +4233,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
       const forma = _pt === 'pago_con_oxxo' ? 'oxxo' : 'tarjeta';
       try {
+        if (await preguntarContratoSiHayVarios(chatId, sendMsg, _pt)) return;
         /*
          * ¿Para quién es el pago? Para quien escribe, salvo que antes haya
          * dicho que va a pagar la cuenta de alguien más. En ese caso el link
@@ -4366,16 +4353,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           return;
         }
 
-        if (!servicioClabe) {
-          const varios = await serviciosDeLaCuenta(tel);
-          if (varios.length > 1) {
-            setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajenaClabe, servicios: varios.slice(0, 3), viaClabe: true, desde: Date.now() } });
-            await sendMsg(chatId,
-              `${ajenaClabe ? `*${c.name}* tiene` : 'Tienes'} *${varios.length} servicios* con nosotros, y cada uno tiene su propia CLABE. ¿Cuál vas a pagar?`,
-              [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'pago_servicio_' + i, title: (x.estado && /suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
-            return;
-          }
-        }
+        if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'pago_clabe')) return;
 
         const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name, servicioId: servicioClabe ? servicioClabe.servicioId : undefined });
 
@@ -4455,7 +4433,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const el = (_ses.data.servicios || [])[Number(_pt.slice(-1))];
       if (!el) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *pagar* para empezar de nuevo.'); return; }
       setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: _ses.data.pagarPara || '', servicioId: el.id, usuario: el.usuario, etiqueta: el.etiqueta, desde: Date.now() } });
-      return handleChatMessage(chatId, _ses.data.viaClabe ? 'pago_clabe' : 'pago_tarjeta', sendMsg);
+      return handleChatMessage(chatId, _ses.data.siguiente || (_ses.data.viaClabe ? 'pago_clabe' : 'pago_tarjeta'), sendMsg);
     }
     // Si acaba de mandar un comprobante y el bot le preguntó a nombre de quién
     // está, lo que escriba es esa respuesta, no un nombre para buscar.
@@ -4497,10 +4475,19 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (!elegido) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *OTRO* para buscar de nuevo.'); return; }
       // Se deja la cuenta elegida en la sesión: el cobro de tarjeta/OXXO la lee.
       setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, desde: Date.now() } });
+      let cuanto = '';
+      try {
+        const cobro = await montoACobrar(chatId, elegido.tel);
+        if (cobro.ok) cuanto = ` Su mensualidad es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`;
+      } catch (_) { /* sin monto se sigue igual */ }
       await sendMsg(chatId,
-        `Perfecto, vas a pagar la cuenta de *${elegido.name}*. ¿Cómo quieres pagar?\n\n`
-        + 'La *CLABE* es de esa cuenta: lo que se transfiera ahí se le abona a ella, desde cualquier banco.',
-        [], { buttons: [{ id: 'pago_clabe', title: '🏦 CLABE de esa cuenta' }, { id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' }] });
+        `Perfecto, vas a pagar la cuenta de *${elegido.name}*.${cuanto} ¿Cómo quieres pagar? Toca una opción 👇\n\n`
+        + '🏦 Transferencia: te doy la CLABE de *su* cuenta; lo que caiga ahí se le abona a ella.\n💳 Tarjeta: pagas desde tu teléfono.\n🏪 OXXO: te doy una ficha para pagar en caja.',
+        [], { buttons: [
+          { id: 'pago_clabe', title: '🏦 Transferencia' },
+          { id: 'pago_con_tarjeta', title: '💳 Tarjeta' },
+          { id: 'pago_con_oxxo', title: '🏪 OXXO (efectivo)' },
+        ] });
       return;
     }
     /*
@@ -4510,6 +4497,20 @@ async function handleChatMessage(chatId, text, sendMsg) {
      */
     // El menú principal no es "otra cosa": desde ahí OTRO tiene que funcionar.
     const _enOtraCosa = !!_ses.state && !String(_ses.state).startsWith('pago_otro_') && _ses.state !== 'awaiting_menu_choice';
+    /*
+     * "Pago de internet a nombre de Ana Lilia Hernández": así escribe la gente
+     * de verdad (106 de 169 pagos recientes vienen con "a nombre de"). No hay
+     * que enseñarles a escribir OTRO: se toma el nombre y se busca de una vez.
+     */
+    const _aNombreDe = (text.match(/a nombre de\s+(?:la\s+se[ñn]ora?\s+|el\s+se[ñn]or\s+|don\s+|do[ñn]a\s+)?([^\n,.;]{4,60})/i) || [])[1];
+    if (_aNombreDe && !_enOtraCosa && !_conComprobante && !_isBtn
+        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+      setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
+      return handleChatMessage(chatId, _aNombreDe.trim(), sendMsg);
+    }
+    if (/^(oficina|en la oficina|pagar en oficina|otras formas)[\s.!]*$/.test(_pt) && !_enOtraCosa) {
+      return handleChatMessage(chatId, 'pago_otras', sendMsg);
+    }
     if (/^(otro|pagar otro|pagar por otro|pagar (el|la) de|es de otra persona|de otra persona|de alguien m[aá]s)/.test(_pt)
         && !_enOtraCosa && !_conComprobante
         && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
@@ -4519,7 +4520,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     // Intención de pago (o el "PAGAR" que sugiere el recordatorio de corte) → botones.
-    if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago)/.test(_pt)) {
+    if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago|cu[aá]nto (debo|tengo que pagar|es|pago|es mi)|mi saldo|mi adeudo|qu[eé] debo)/.test(_pt)) {
       /*
        * WhatsApp solo muestra TRES botones y `sendWhatsAppMessage` corta el
        * resto sin avisar. Por eso el menú se arma completo según el caso en vez
@@ -4532,22 +4533,45 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // El cobro en línea se ofrece según el interruptor COBRO_LINEA_ACTIVO, no
       // por una comparación fija: así se amplía o se apaga desde las variables
       // de entorno, sin tocar código ni volver a desplegar. Vacío = solo el piloto.
-      const botonesPago = stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)
+      /*
+       * UN TOQUE POR FORMA DE PAGAR, CON LAS PALABRAS DE LA GENTE.
+       *
+       * Antes: "Mi CLABE fija" (nadie dice así), "Tarjeta u OXXO" (y luego
+       * otra pregunta), "Otras formas". Ahora cada botón es una forma y al
+       * tocarlo sale directo lo que necesita: la CLABE, el link con tarjeta o
+       * la ficha de OXXO, cada uno con su total. La oficina se pide por texto.
+       */
+      const esPiloto = stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE);
+      const botonesPago = esPiloto
         ? [
-          // La CLABE va primero: es la que de verdad le sirve a quien paga por
-          // transferencia o en ventanilla, que es como paga casi todo el pueblo.
-          { id: 'pago_clabe', title: '🏦 Mi CLABE fija' },
-          { id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' },
-          { id: 'pago_otras', title: '🏢 Otras formas' },
+          { id: 'pago_clabe', title: '🏦 Transferencia' },
+          { id: 'pago_con_tarjeta', title: '💳 Tarjeta' },
+          { id: 'pago_con_oxxo', title: '🏪 OXXO (efectivo)' },
         ]
         : [
           { id: 'pago_horario', title: '🏢 Horario en oficina' },
           { id: 'pago_datos', title: '💳 Datos de pago' },
         ];
-      const esPiloto = stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE);
+      let encabezado = '';
+      if (esPiloto) {
+        // Si se sabe cuánto debe, se le dice ANTES de preguntar cómo: es la
+        // primera duda de cualquiera ("¿cuánto es?").
+        try {
+          const ajenaMenu = cuentaAjena(chatId);
+          const servicioMenu = servicioEnSesion(chatId);
+          const varios = ajenaMenu || servicioMenu ? [] : await serviciosDeLaCuenta(normalizePhone(chatId));
+          if (varios.length <= 1) {
+            const cobro = await montoACobrar(chatId, ajenaMenu, servicioMenu);
+            if (cobro.ok) encabezado = `${ajenaMenu ? `La mensualidad de *${(wisphubClients.get(ajenaMenu) || {}).name || 'esa cuenta'}*` : 'Tu mensualidad'} es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.\n\n`;
+          }
+        } catch (_) { /* sin monto, el menú sale igual */ }
+      }
       await sendMsg(chatId,
-        '💳 ¿Cómo quieres pagar? Elige una opción:'
-        + (esPiloto ? '\n\nSi vas a pagar la cuenta de *alguien más*, escribe *OTRO*.' : ''),
+        encabezado + '¿Cómo quieres pagar? Toca una opción 👇'
+        + (esPiloto
+          ? '\n\n🏦 Transferencia: te doy una CLABE que es solo tuya.\n💳 Tarjeta: pagas desde tu teléfono.\n🏪 OXXO: te doy una ficha para pagar en caja.'
+            + '\n\nSi vas a pagar la cuenta de *alguien más*, escríbeme *a nombre de quién* está. Si prefieres pagar en la oficina, escribe *oficina*.'
+          : ''),
         [], { buttons: botonesPago });
       return;
     }
@@ -5830,6 +5854,27 @@ function servicioEnSesion(chatId) {
  * su dinero en el contrato equivocado. Si Wisphub no contesta, se sigue como
  * antes (uno solo): no se detiene el cobro por una consulta.
  */
+/*
+ * Antes de cobrar por CUALQUIER vía, si la cuenta tiene varios contratos se
+ * pregunta cuál. Devuelve true si preguntó (y entonces quien llama se detiene);
+ * `siguiente` es el botón que se vuelve a disparar solo cuando el cliente
+ * elija, para que no tenga que volver a empezar.
+ */
+async function preguntarContratoSiHayVarios(chatId, sendMsg, siguiente) {
+  if (servicioEnSesion(chatId)) return false;
+  const ajena = cuentaAjena(chatId);
+  const tel = ajena || normalizePhone(chatId);
+  const varios = await serviciosDeLaCuenta(tel);
+  if (varios.length <= 1) return false;
+  setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajena, servicios: varios.slice(0, 3), siguiente, desde: Date.now() } });
+  const deQuienEs = ajena ? `*${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* tiene` : 'Tienes';
+  await sendMsg(chatId,
+    `${deQuienEs} *${varios.length} servicios* con nosotros. ¿Cuál vas a pagar? 👇`
+    + (varios.length > 3 ? '\n\n(Se muestran los primeros 3; si es otro, escríbele a un asesor.)' : ''),
+    [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'pago_servicio_' + i, title: (x.estado && /suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
+  return true;
+}
+
 async function serviciosDeLaCuenta(tel) {
   try {
     const h = await wisphubReactivar.serviciosDe(tel);
