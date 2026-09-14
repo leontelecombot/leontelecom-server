@@ -3677,6 +3677,18 @@ async function sweepCorteReminders(force = false) {
         // plantilla que es solo "{plan}" y el cliente no tiene plan), usamos la
         // predeterminada — WhatsApp rechaza un cuerpo de plantilla vacío.
         if (!msgCorte.replace(/\s+/g, ' ').trim()) msgCorte = renderCorteVars(CORTE_MSG_DEFAULT, datos);
+        /*
+         * A los del piloto se les dice que YA pueden pagar desde el teléfono.
+         *
+         * Sin esto nadie se entera de que la opción existe hasta que escribe
+         * PAGAR por su cuenta, y la mayoría no escribe: paga como siempre o no
+         * paga. El recordatorio de corte es el momento exacto en que tienen el
+         * dinero en la cabeza. Solo a quien de verdad le va a salir la opción;
+         * a los demás no se les promete nada.
+         */
+        if (stripeLeon.permitido(phone, TELEFONO_PILOTO_STRIPE)) {
+          msgCorte = (msgCorte.trim() + ' 💳 Ahora también puedes pagar desde tu teléfono, con tarjeta o en OXXO, sin ir a la oficina: responde PAGAR y te digo cómo.').slice(0, 1000);
+        }
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
         sent++;

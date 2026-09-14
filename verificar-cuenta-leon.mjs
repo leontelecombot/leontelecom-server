@@ -503,6 +503,28 @@ console.log('\n=== 17. EL PANEL NO SE CONTRADICE A SÍ MISMO ===');
      'y ya no se pintan a la vez, que era lo que los desincronizaba');
 }
 
+console.log('\n=== 18. LOS DEL PILOTO SE ENTERAN DE QUE PUEDEN PAGAR DESDE EL TELÉFONO ===');
+{
+  /*
+   * Sin esto nadie se entera de que la opción existe hasta que escribe PAGAR
+   * por su cuenta, y la mayoría no escribe: paga como siempre o no paga. El
+   * recordatorio de corte es el momento exacto en que tienen el dinero en la
+   * cabeza. Y solo a quien de verdad le va a salir la opción: a los otros mil
+   * no se les promete nada.
+   */
+  const fs = await import('node:fs');
+  const servidor = fs.readFileSync('./index.js', 'utf8');
+  const bloque = servidor.slice(servidor.indexOf('async function sweepCorteReminders'), servidor.indexOf('async function sweepCorteReminders') + 12000);
+  es(/if \(stripeLeon\.permitido\(phone, TELEFONO_PILOTO_STRIPE\)\)/.test(bloque),
+     'el recordatorio de corte pregunta si ese cliente está en el piloto');
+  es(/Ahora también puedes pagar desde tu teléfono/.test(bloque), 'y solo a ése le dice que ya puede pagar desde el teléfono');
+  es(/responde PAGAR/.test(bloque), 'diciéndole exactamente qué escribir');
+  es(/\.slice\(0, 1000\)/.test(bloque), 'sin pasarse del tope de la plantilla de WhatsApp');
+  // Y el mensaje entra dentro del tope aunque la plantilla del panel sea larga.
+  const extra = ' 💳 Ahora también puedes pagar desde tu teléfono, con tarjeta o en OXXO, sin ir a la oficina: responde PAGAR y te digo cómo.';
+  es(extra.length < 140, `el añadido es corto (${extra.length} caracteres), deja espacio a la plantilla`);
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));
