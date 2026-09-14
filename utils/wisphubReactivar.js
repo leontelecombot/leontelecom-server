@@ -202,6 +202,7 @@ async function intentarMarcarPagada({ idFactura, monto, referencia }) {
         fecha_vencimiento: f.fecha_vencimiento,
         fecha_pago: new Date().toISOString(),
         estado: 2,                     // 2 = Pagada. Puede ser ignorado.
+        saldo: 0,                      // con saldo 0 y total_cobrado, Wisphub deduce el estado
         total_cobrado: Number(monto) || Number(f.total) || 0,
         total_pasarela: Number(monto) || 0,
         referencia: String(referencia || '').slice(0, 100),
@@ -299,20 +300,30 @@ async function aplicarPago({ telefono, monto, referencia }) {
     }
 
     if (deuda && deuda.facturas.length) {
-      let restante = Number(monto) || 0;
+      const pago = Number(monto) || 0;
+      let restante = pago;
       for (const f of deuda.facturas) {
         const debe = Number(f.total) || 0;
         if (restante + 0.01 < debe) break;      // no alcanza para esta factura
         const r = await intentarMarcarPagada({ idFactura: f.id_factura, monto: debe, referencia })
           .catch((e) => ({ marcada: false, motivo: e.message }));
-        if (r.marcada) {
-          salida.facturasSaldadas += 1;
-          salida.deudaRestante = +(salida.deudaRestante - debe).toFixed(2);
-        } else {
-          salida.registroManual.push({ factura: f.id_factura, total: debe, motivo: r.motivo });
-        }
+        if (r.marcada) salida.facturasSaldadas += 1;
+        else salida.registroManual.push({ factura: f.id_factura, total: debe, motivo: r.motivo });
         restante = +(restante - debe).toFixed(2);
       }
+      /*
+       * Lo que el cliente todavía debe DESPUÉS de este pago.
+       *
+       * Se calcula con el dinero que entró, no con lo que Wisphub alcanzó a
+       * registrar. Antes se restaba solo lo que la API dejó marcar, y como la
+       * API casi nunca deja marcar nada, un cliente que pagaba sus $440
+       * completos seguía "debiendo $440": no se le reconectaba y encima se le
+       * decía que todavía debía. Era el caso NORMAL, no uno raro.
+       *
+       * Lo que Wisphub no dejó registrar va en `registroManual`, y de eso se
+       * entera la oficina. Pero el cliente ya pagó, y se reconecta.
+       */
+      salida.deudaRestante = +Math.max(0, deuda.total - pago).toFixed(2);
       salida.sobrante = Math.max(0, restante);
       if (salida.sobrante > 0.01) {
         salida.avisos.push(`Sobraron $${salida.sobrante.toFixed(2)}: no alcanzaba para la siguiente factura o pagó de más`);

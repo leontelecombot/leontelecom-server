@@ -184,6 +184,12 @@ const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'leontelecom-verify';
 const WHATSAPP_API_VERSION = 'v22.0';
+/*
+ * A dónde se le habla a Meta. En producción no se toca. Las pruebas lo apuntan
+ * a un WhatsApp de mentira en la misma máquina para LEER lo que el bot le
+ * contestaría a un cliente, que es lo único que de verdad importa comprobar.
+ */
+const WHATSAPP_GRAPH = (process.env.WHATSAPP_API_BASE || 'https://graph.facebook.com').replace(/\/+$/, '');
 // Plantilla aprobada para avisos masivos (corte/reparación/reactivado) — permite
 // enviar a TODOS aunque hayan pasado +24h sin chatear. Cuerpo con un parámetro {{1}}.
 const WHATSAPP_AVISO_TEMPLATE = process.env.WHATSAPP_AVISO_TEMPLATE || '';
@@ -481,7 +487,7 @@ const _alertLast = new Map(); // tipo -> ts del último aviso
 
 // --- Anti-flood por número (rate-limit ligero del webhook) ---
 const _msgRate = new Map();     // chatId -> [timestamps]
-const RATE_MAX = 12;            // máx mensajes por ventana y número
+const RATE_MAX = Number(process.env.RATE_MAX) || 12;   // máx mensajes por ventana y número (las pruebas lo suben)
 const RATE_WINDOW_MS = 30000;   // ventana de 30 s
 
 // --- Bienvenida automática a NUEVOS clientes de Wisphub ---
@@ -931,7 +937,7 @@ async function sendWhatsAppTemplate(to, message, opts = {}) {
       parameters: [{ type: 'payload', payload: String(opts.buttonPayload) }]
     });
   }
-  const res = await fetch(`https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const res = await fetch(`${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -2536,7 +2542,7 @@ async function sendWhatsAppMessage(to, text, mediaUrls = [], _options = {}) {
     return;
   }
 
-  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   const headers = {
     'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
     'Content-Type': 'application/json'
@@ -2639,7 +2645,7 @@ async function sendWhatsAppMessage(to, text, mediaUrls = [], _options = {}) {
 
 async function downloadWhatsAppMedia(mediaId) {
   const urlResponse = await fetch(
-    `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${mediaId}`,
+    `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${mediaId}`,
     { headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
   );
   if (!urlResponse.ok) throw new Error(`WhatsApp media URL failed: ${urlResponse.status}`);
@@ -2686,7 +2692,7 @@ async function storeIncomingFile(base64, contentType, ext) {
 // Envía un documento (PDF, etc.) por WhatsApp a partir de un link público.
 async function sendWhatsAppDocument(to, link, filename, caption) {
   if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return false;
-  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   const doc = { link, filename: String(filename || 'documento.pdf').slice(0, 240) };
   // El caption viaja DENTRO del mismo mensaje que el documento (anclados: no se
   // pueden separar ni entrelazar con otros casos).
@@ -2706,7 +2712,7 @@ async function sendWhatsAppDocument(to, link, filename, caption) {
 // foto y su información llegan pegadas ("hermanitos") y jamás se cruzan con otro caso.
 async function sendWhatsAppImageCaption(to, link, caption) {
   if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return false;
-  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   try {
     const r = await fetch(base, {
       method: 'POST',
@@ -2732,7 +2738,7 @@ async function sendWhatsAppMediaButtons(to, media, bodyText, buttons) {
       ? { type: 'document', document: { link: media.docUrl, filename: String(media.docName || 'documento.pdf').slice(0, 240) } }
       : null;
   if (!header) return false;
-  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   try {
     const r = await fetch(base, {
       method: 'POST',
@@ -4191,13 +4197,17 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       try {
-        const cobro = await montoACobrar(chatId);
+        const ajena = cuentaAjena(chatId);
+        const cobro = await montoACobrar(chatId, ajena);
         if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
 
         const t = stripeLeon.calcularCargo(cobro.monto, 'tarjeta');
         const o = stripeLeon.calcularCargo(cobro.monto, 'oxxo');
+        const deQuien = ajena
+          ? `La mensualidad de *${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* es de`
+          : 'Tu mensualidad es de';
         await sendMsg(chatId,
-          `Tu mensualidad es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}. ¿Cómo prefieres pagarla?\n\n`
+          `${deQuien} *$${cobro.monto.toFixed(2)}*${cobro.deTexto}. ¿Cómo prefieres pagarla?\n\n`
           + `💳 *Con tarjeta* — total $${(t.totalCentavos / 100).toFixed(2)}\n`
           + `   (cargo por pagar en línea: $${(t.cargoCentavos / 100).toFixed(2)})\n\n`
           + `🏪 *En efectivo en OXXO* — total $${(o.totalCentavos / 100).toFixed(2)}\n`
@@ -4221,27 +4231,41 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
       const forma = _pt === 'pago_con_oxxo' ? 'oxxo' : 'tarjeta';
       try {
-        const c = wisphubClients.get(normalizePhone(chatId)) || {};
-        const cobro = await montoACobrar(chatId);
+        /*
+         * ¿Para quién es el pago? Para quien escribe, salvo que antes haya
+         * dicho que va a pagar la cuenta de alguien más. En ese caso el link
+         * lleva la cuenta del otro y quien escribe solo pone la tarjeta: al
+         * confirmarse, se reactiva el servicio del dueño y se les avisa a los
+         * dos.
+         */
+        const paraOtro = cuentaAjena(chatId);
+        const telCuenta = paraOtro || normalizePhone(chatId);
+        const c = wisphubClients.get(telCuenta) || {};
+        const cobro = await montoACobrar(chatId, telCuenta);
         if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
 
         const pago = await stripeLeon.generarLinkPago({
-          telefono: normalizePhone(chatId), monto: cobro.monto, nombre: c.name,
+          telefono: telCuenta, monto: cobro.monto, nombre: c.name,
           urlBase: SERVER_BASE_URL, forma,
+          pagadoPor: paraOtro ? normalizePhone(chatId) : undefined,
         });
+        if (paraOtro) clearSession(chatId);
 
+        // Cuando paga por otro, el servicio que se reactiva no es el suyo.
+        const suServicio = paraOtro ? `el servicio de *${c.name || telCuenta}*` : 'tu servicio';
         const cabeza = forma === 'oxxo'
-          ? '🏪 Aquí sale tu ficha para pagar en OXXO:'
+          ? (paraOtro ? '🏪 Aquí sale la ficha para pagar en OXXO:' : '🏪 Aquí sale tu ficha para pagar en OXXO:')
           : '💳 Aquí puedes pagar con tu tarjeta, sin salir de tu casa:';
         const cola = forma === 'oxxo'
           ? '\n\nAbre el link y te da la ficha con el código de barras. Llévala a cualquier OXXO y págala en caja.\n\n'
             + '⏱️ Tienes 30 minutos para abrir el link, pero la *ficha te dura varios días*.\n\n'
-            + 'Cuando la tienda reporte el pago te avisamos por aquí y tu servicio se reactiva solo. Puede tardar unas horas. *No mandes comprobante*, nosotros lo vemos.'
-          : '\n\nEn cuanto se confirme te avisamos por aquí y tu servicio se reactiva solo — no hace falta comprobante.\n\n'
+            + `Cuando la tienda reporte el pago te avisamos por aquí y ${suServicio} se reactiva solo. Puede tardar unas horas. *No mandes comprobante*, nosotros lo vemos.`
+          : `\n\nEn cuanto se confirme te avisamos por aquí y ${suServicio} se reactiva solo — no hace falta comprobante.\n\n`
             + '⏱️ Tienes 30 minutos para abrir el link.';
 
         await sendMsg(chatId,
           `${cabeza}\n\n`
+          + (paraOtro ? `• Cuenta de: *${c.name || telCuenta}*\n` : '')
           + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${cobro.deTexto}\n`
           + `• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n`
           + `• *Total: $${pago.total.toFixed(2)}*\n\n`
@@ -4371,6 +4395,72 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
       return;
     }
+    /*
+     * ═══════════ PAGAR LA CUENTA DE ALGUIEN MÁS ═══════════
+     *
+     * Aquí la gente paga por su mamá, por su suegra, por el vecino que no tiene
+     * WhatsApp. Antes el cobro iba amarrado al teléfono de quien escribe, así
+     * que eso no se podía: la persona pagaba SU cuenta sin querer, o se daba
+     * por vencida y se iba a la oficina.
+     *
+     * El flujo: escribe OTRO, dice de quién (teléfono o nombre como está en el
+     * contrato), confirma, y de ahí sigue el cobro normal pero con la cuenta
+     * del otro. Al confirmarse el pago, se reactiva el servicio del dueño y se
+     * les avisa a los dos.
+     */
+    /*
+     * Lo que dijo hace media hora ya no cuenta. Sin esto, quien dijo OTRO un
+     * martes y se distrajo pagaría la cuenta ajena el jueves, cuando vuelva a
+     * escribir PAGAR para la suya.
+     */
+    const _ses = sesionDePagoAjeno(chatId);
+    if (_ses.state === 'pago_otro_buscar' && !_isBtn && !_emergencyNow) {
+      // "menú", "salir" o un saludo lo sacan de aquí: si no, cualquier cosa que
+      // escribiera se buscaría como nombre y no habría forma de salir.
+      if (/^(men[uú]|salir|cancelar|inicio|hola|regresar|volver)[\s.!]*$/.test(_pt)) {
+        clearSession(chatId);
+        await sendMsg(chatId, 'Listo, lo dejamos ahí. Cuando quieras pagar tu cuenta escribe *pagar*; si es la de alguien más, escribe *OTRO*.');
+        return;
+      }
+      const digitos = text.replace(/\D/g, '');
+      const nombreBuscado = text.trim().toLowerCase();
+      const encontrados = [];
+      for (const [tel, c] of wisphubClients.entries()) {
+        const porTel = digitos.length >= 7 && tel.endsWith(digitos.slice(-10));
+        const porNombre = nombreBuscado.length >= 4 && String(c.name || '').toLowerCase().includes(nombreBuscado);
+        if ((porTel || porNombre) && tel !== normalizePhone(chatId)) encontrados.push({ tel, name: c.name || tel });
+        if (encontrados.length >= 3) break;
+      }
+      if (!encontrados.length) {
+        await sendMsg(chatId, 'No encontré una cuenta con eso. Escríbeme el *número de teléfono* que tiene registrado, o el *nombre completo* como aparece en su contrato. Si prefieres salir, escribe *menú*.');
+        return;
+      }
+      setSession(chatId, { state: 'pago_otro_confirmar', data: { candidatos: encontrados, desde: Date.now() } });
+      const botones = encontrados.map((e, i) => ({ id: 'pago_otro_es_' + i, title: String(e.name).slice(0, 20) }));
+      await sendMsg(chatId,
+        encontrados.length === 1
+          ? `¿Es la cuenta de *${encontrados[0].name}*?`
+          : 'Encontré estas cuentas. ¿Cuál es?',
+        [], { buttons: botones });
+      return;
+    }
+    if (_ses.state === 'pago_otro_confirmar' && /^pago_otro_es_\d$/.test(_pt)) {
+      const elegido = (_ses.data.candidatos || [])[Number(_pt.slice(-1))];
+      if (!elegido) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *OTRO* para buscar de nuevo.'); return; }
+      // Se deja la cuenta elegida en la sesión: el cobro de tarjeta/OXXO la lee.
+      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, desde: Date.now() } });
+      await sendMsg(chatId,
+        `Perfecto, vas a pagar la cuenta de *${elegido.name}*. ¿Cómo quieres pagar?`,
+        [], { buttons: [{ id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' }] });
+      return;
+    }
+    if (/^(otro|pagar otro|pagar por otro|pagar (el|la) de|es de otra persona|de otra persona|de alguien m[aá]s)/.test(_pt)
+        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+      setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
+      await sendMsg(chatId, '¿De quién es la cuenta que quieres pagar? Escríbeme su *número de teléfono* o su *nombre completo* como está en el contrato.');
+      return;
+    }
+
     // Intención de pago (o el "PAGAR" que sugiere el recordatorio de corte) → botones.
     if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago)/.test(_pt)) {
       /*
@@ -4397,7 +4487,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
           { id: 'pago_horario', title: '🏢 Horario en oficina' },
           { id: 'pago_datos', title: '💳 Datos de pago' },
         ];
-      await sendMsg(chatId, '💳 ¿Cómo quieres pagar? Elige una opción:', [], { buttons: botonesPago });
+      const esPiloto = stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE);
+      await sendMsg(chatId,
+        '💳 ¿Cómo quieres pagar? Elige una opción:'
+        + (esPiloto ? '\n\nSi vas a pagar la cuenta de *alguien más*, escribe *OTRO*.' : ''),
+        [], { buttons: botonesPago });
       return;
     }
 
@@ -5432,6 +5526,22 @@ app.get('/api/cuenta-cobro/estado', async (_req, res) => {
   }
 });
 
+/*
+ * SOLO PARA PRUEBAS (PRUEBAS=1). Envejece la sesión de un chat para comprobar
+ * que lo que alguien dijo hace media hora ya no cuenta, sin esperar media hora.
+ * En producción esta ruta no existe.
+ */
+if (process.env.PRUEBAS === '1') {
+  app.post('/api/pruebas/envejecer-sesion', (req, res) => {
+    const tel = normalizePhone(String((req.body || {}).telefono || ''));
+    const ms = Number((req.body || {}).ms || 0);
+    const ses = getSession(tel);
+    if (!ses.state) return res.json({ ok: false, motivo: 'sin sesión' });
+    setSession(tel, { ...ses, data: { ...(ses.data || {}), desde: Date.now() - ms } });
+    res.json({ ok: true, estado: ses.state });
+  });
+}
+
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'leontelecom-server' });
 });
@@ -5628,8 +5738,30 @@ function sumarAlMes(monto, canal) {
  * Si Wisphub no contesta, se cae al precio de su plan antes que dejarlo sin
  * poder pagar.
  */
-async function montoACobrar(chatId) {
-  const tel = normalizePhone(chatId);
+/*
+ * La cuenta ajena que alguien dijo que iba a pagar, si todavía vale.
+ *
+ * Vale media hora. Es el tiempo que dura el link de pago, y es más de lo que
+ * tarda cualquiera en terminar. Después de eso se olvida sola: la persona que
+ * vuelve al día siguiente y escribe PAGAR quiere pagar lo suyo, no lo del otro.
+ */
+const PAGO_AJENO_VIGENCIA_MS = 30 * 60 * 1000;
+function sesionDePagoAjeno(chatId) {
+  const ses = getSession(chatId);
+  if (!ses.state || !String(ses.state).startsWith('pago_otro_')) return ses;
+  const desde = Number((ses.data || {}).desde || 0);
+  if (!desde || Date.now() - desde > PAGO_AJENO_VIGENCIA_MS) { clearSession(chatId); return { state: null, data: {} }; }
+  return ses;
+}
+function cuentaAjena(chatId) {
+  const ses = sesionDePagoAjeno(chatId);
+  return ses.state === 'pago_otro_listo' ? String((ses.data || {}).pagarPara || '') : '';
+}
+
+async function montoACobrar(chatId, telefonoCuenta) {
+  // Normalmente la cuenta es la de quien escribe. Cuando alguien paga por otro,
+  // la cuenta es la de ese otro, y quien escribe solo pone la tarjeta.
+  const tel = normalizePhone(telefonoCuenta || chatId);
   const c = wisphubClients.get(tel) || {};
   let monto = 0;
   let deTexto = '';
@@ -5643,7 +5775,9 @@ async function montoACobrar(chatId) {
   if (monto <= 0) { monto = parseFloat(c.precioPlan) || 0; deTexto = ''; }
 
   if (monto <= 0) {
-    return { ok: false, mensaje: 'No veo un saldo pendiente en tu cuenta ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏' };
+    const ajena = telefonoCuenta && normalizePhone(telefonoCuenta) !== normalizePhone(chatId);
+    const cual = ajena ? `en la cuenta de *${c.name || tel}*` : 'en tu cuenta';
+    return { ok: false, mensaje: `No veo un saldo pendiente ${cual} ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏` };
   }
   return { ok: true, monto, deTexto };
 }
@@ -6066,11 +6200,20 @@ app.post('/webhook/stripe', async (req, res) => {
      */
     if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
         && evento.type === 'checkout.session.completed' && o.payment_status === 'unpaid') {
+      /*
+       * La ficha la tiene quien la sacó, que no siempre es el dueño del
+       * servicio. Si alguien pagó por su mamá, el aviso de "ya está tu ficha"
+       * le sirve a él, y a la mamá le llegaría de la nada.
+       */
       const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
-      if (tel) {
-        await sendWhatsAppMessage(tel,
-          '🧾 Ya se generó tu ficha de pago. Llévala a OXXO y págala en caja.\n\n'
-          + 'En cuanto la tienda reporte el pago te avisamos por aquí y tu servicio se reactiva solo. '
+      const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
+      if (quien) {
+        const ajeno = quien !== tel;
+        const nombreDuenio = (wisphubClients.get(tel) || {}).name || tel;
+        await sendWhatsAppMessage(quien,
+          (ajeno ? `🧾 Ya se generó la ficha para pagar el servicio de *${nombreDuenio}*. ` : '🧾 Ya se generó tu ficha de pago. ')
+          + 'Llévala a OXXO y págala en caja.\n\n'
+          + `En cuanto la tienda reporte el pago te avisamos por aquí y ${ajeno ? 'su' : 'tu'} servicio se reactiva solo. `
           + 'Puede tardar unas horas después de pagar. *No mandes comprobante*, nosotros lo vemos.').catch(() => {});
       }
       return res.json({ recibido: true, ficha: true });
@@ -6079,10 +6222,13 @@ app.post('/webhook/stripe', async (req, res) => {
     if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
         && evento.type === 'checkout.session.async_payment_failed') {
       const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
-      if (tel) {
-        await sendWhatsAppMessage(tel,
-          '⚠️ Tu ficha de pago venció sin pagarse, así que tu servicio sigue pendiente. '
-          + 'Escribe *pagar* para generar otra, o paga como siempre por depósito. 🙏').catch(() => {});
+      const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
+      if (quien) {
+        const ajeno = quien !== tel;
+        await sendWhatsAppMessage(quien,
+          (ajeno ? `⚠️ La ficha de pago del servicio de *${(wisphubClients.get(tel) || {}).name || tel}* venció sin pagarse, así que sigue pendiente. `
+                 : '⚠️ Tu ficha de pago venció sin pagarse, así que tu servicio sigue pendiente. ')
+          + `Escribe *${ajeno ? 'OTRO' : 'pagar'}* para generar otra, o paga como siempre por depósito. 🙏`).catch(() => {});
       }
       return res.json({ recibido: true, fichaVencida: true });
     }

@@ -55,6 +55,8 @@ const srv = createServer((req, res) => {
     if (u.pathname === '/api/facturas/' && req.method === 'GET') {
       const q = u.searchParams;
       estado.consultasFactura.push(Object.fromEntries(q));
+      // Para probar qué pasa cuando la deuda NO se puede leer.
+      if (estado.facturasCaidas) return responder({ detail: 'Error interno' }, 500);
       // El filtro `cliente` recibe el USUARIO. Con el id devuelve vacío.
       if (q.get('cliente') !== estado.cliente.usuario) return responder({ count: 0, results: [] });
       // `estado` es NUMÉRICO: 1=Pendiente, 2=Pagada. Con texto, vacío.
@@ -168,13 +170,34 @@ console.log('\n=== 4. MARCAR PAGADA: SE INTENTA Y SE COMPRUEBA ===');
   estado.estadoEsEscribible = false;
 }
 
+console.log('\n=== 4a. PAGA COMPLETO Y LA API NO DEJA MARCAR: SE RECONECTA IGUAL ===');
+{
+  /*
+   * ES EL CASO NORMAL, no uno raro: la API casi nunca deja marcar la factura.
+   * Antes esto dejaba al cliente cortado después de pagar sus $440 completos,
+   * y encima le decía que "todavía debe $440". La factura sin registrar es un
+   * pendiente de la OFICINA; la reconexión es un derecho del cliente que pagó.
+   */
+  estado.facturas = [fac(925, 440, 'Pendiente de Pago', '2026-09-16')];
+  estado.cliente.estado = 'Suspendido';
+  estado.estadoEsEscribible = false;
+  estado.activaciones.length = 0;
+  const r = await wisp.aplicarPago({ telefono: '529516549145', monto: 440, referencia: 'pi_completo' });
+  r.reactivado === true ? OK('paga sus $440 completos y SÍ se reconecta aunque Wisphub no dejara marcar la factura') : MAL('¡lo dejó cortado! ' + r.avisos.join(' | '));
+  r.deudaRestante === 0 ? OK('y ya no debe nada') : MAL('dice que debe ' + r.deudaRestante);
+  r.registroManual.length === 1 && r.registroManual[0].factura === 925 ? OK('la factura que no se pudo marcar queda para registrar a mano') : MAL('registroManual: ' + JSON.stringify(r.registroManual));
+  estado.activaciones.length === 1 ? OK('se mandó reactivar una sola vez') : MAL('activaciones: ' + estado.activaciones.length);
+  const put = estado.puts.at(-1);
+  put && put.saldo === 0 && put.total_cobrado === 440 ? OK('el intento de marcar manda saldo 0 y total_cobrado, como pide Wisphub') : MAL('put: ' + JSON.stringify(put));
+}
+
 console.log('\n=== 4b. NO SE REACTIVA A QUIEN NO ALCANZÓ A PAGAR ===');
 {
   estado.facturas = [fac(930, 440, 'Pendiente de Pago', '2026-09-16')];
   estado.cliente.estado = 'Suspendido';
   const r = await wisp.aplicarPago({ telefono: '529516549145', monto: 200, referencia: 'parcial' });
   r.reactivado === false ? OK('paga $200 de $440 y NO se reconecta') : MAL('¡lo reconectó!');
-  r.deudaRestante === 440 ? OK('la deuda sigue completa: no se saldó nada') : MAL('deuda ' + r.deudaRestante);
+  r.deudaRestante === 240 ? OK('le quedan $240 por pagar, ni $440 ni $0') : MAL('deuda ' + r.deudaRestante);
   /todavía debe/.test(r.avisos.join(' ')) ? OK('y dice cuánto falta') : MAL(r.avisos.join(' | '));
 }
 
@@ -221,12 +244,19 @@ console.log('\n=== 4e. PAGA HORAS ANTES DEL CORTE (todavía activo) ===');
 
 console.log('\n=== 4f. SI NO SE PUEDE LEER LA DEUDA, NO SE REGALA SERVICIO ===');
 {
+  /*
+   * Antes esto "pasaba" por el bug que arregló 4a: la deuda sí se leía, y lo
+   * que impedía reconectar era que la factura no se dejaba marcar. Ahora la
+   * consulta de facturas de verdad falla, que es lo que se quería probar.
+   */
   estado.facturas = [fac(960, 440, 'Pendiente de Pago', '2026-09-16')];
   estado.cliente.estado = 'Suspendido';
-  estado.cliente.usuario = 'otro@redwifi';   // el filtro ya no coincide: deuda ilegible
+  estado.facturasCaidas = true;
   const r = await wisp.aplicarPago({ telefono: '529516549145', monto: 440, referencia: 'ciego' });
-  r.reactivado === false ? OK('sin poder confirmar la deuda, NO reactiva') : MAL('¡reactivó a ciegas!');
-  estado.cliente.usuario = '1472piloto@redwifi';
+  r.reactivado === false ? OK('sin poder confirmar la deuda, NO reactiva') : MAL('¡reactivó a ciegas! ' + JSON.stringify(r));
+  r.deudaRestante === null ? OK('y deja claro que la deuda no se supo, no que sea cero') : MAL('deudaRestante ' + r.deudaRestante);
+  /No se pudo confirmar la deuda/.test(r.avisos.join(' ')) ? OK('con el motivo en los avisos') : MAL(r.avisos.join(' | '));
+  estado.facturasCaidas = false;
 }
 
 console.log('\n=== 4g. UN TELÉFONO CON VARIOS SERVICIOS ===');

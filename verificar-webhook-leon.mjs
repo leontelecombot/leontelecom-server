@@ -357,7 +357,7 @@ console.log('\n=== 8. TARJETA Y OXXO SE COTIZAN POR SEPARADO ===');
   !/generarLinkPago/.test(cotiza)
     ? OK('y todavía NO genera ningún link: primero elige') : MAL('generó el link antes de preguntar');
 
-  const genera = (fuente.match(/_pt === 'pago_con_tarjeta' \|\| _pt === 'pago_con_oxxo'[\s\S]{0,3200}?\n    \}/) || [])[0] || '';
+  const genera = (fuente.match(/_pt === 'pago_con_tarjeta' \|\| _pt === 'pago_con_oxxo'[\s\S]{0,5200}?\n    \}/) || [])[0] || '';
   genera ? OK('se encuentra el paso que genera el link') : MAL('no se encontró');
   /forma = _pt === 'pago_con_oxxo' \? 'oxxo' : 'tarjeta'/.test(genera)
     ? OK('el link sale amarrado a lo que el cliente escogió') : MAL('no amarra la forma');
