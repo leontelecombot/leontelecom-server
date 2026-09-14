@@ -461,6 +461,32 @@ console.log('\n=== 15. CUÁNTO DINERO HA ENTRADO ===');
      'y desglosado por vía, que dice qué está adoptando la gente');
 }
 
+console.log('\n=== 16. "A MÍ NO ME SALE LA OPCIÓN" ===');
+{
+  /*
+   * Es la pregunta del primer día, y del otro lado no había forma de
+   * contestarla más que adivinando. Se responde donde la oficina ya busca
+   * clientes, no en una pantalla aparte que nadie recuerda que existe. Y con
+   * el motivo, porque cada uno se arregla en otro lado.
+   */
+  const fs = await import('node:fs');
+  const servidor = fs.readFileSync('./index.js', 'utf8');
+  const panel = fs.readFileSync('./public/admin-dashboard.html', 'utf8');
+
+  es(/function conCobroEnLinea/.test(servidor), 'la búsqueda de clientes dice si le sale la opción');
+  for (const motivo of [
+    'el cobro en línea está apagado para todos',
+    'falta configurar Stripe en el servidor',
+    'falta dar de alta la cuenta a la que llega el dinero',
+    'Stripe todavía no aprueba la cuenta de cobro',
+    'no está entre los clientes del piloto',
+  ]) es(servidor.includes(motivo), `y distingue el caso: ${motivo}`);
+
+  es(/map\(conCobroEnLinea\)/.test(servidor), 'también cuando la búsqueda va en vivo a Wisphub');
+  es(/Sí puede pagar en línea/.test(panel), 'el panel lo enseña en la ficha del cliente');
+  es(/cobroEnLineaPorque/.test(panel), 'con el motivo cuando no le sale');
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));

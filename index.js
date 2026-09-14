@@ -7054,6 +7054,30 @@ function mapWisphubAccount(c) {
 // API: Buscar cliente + estado de cuenta.
 // Por NÚMERO → consulta Wisphub EN VIVO (datos frescos, incluye suspendidos).
 // Por NOMBRE → busca en lo sincronizado (clientes activos).
+/*
+ * ¿A ESTE CLIENTE LE SALE LA OPCIÓN DE PAGAR EN LÍNEA, Y POR QUÉ NO?
+ *
+ * Es la pregunta del primer día: alguien llama diciendo "a mí no me aparece", y
+ * del otro lado no había forma de contestarle más que adivinando. Se responde
+ * donde la oficina ya busca clientes, no en una pantalla aparte que nadie
+ * recuerda que existe.
+ *
+ * Y se dice el MOTIVO, no solo sí o no: cada motivo se arregla en otro lado.
+ */
+function conCobroEnLinea(cliente) {
+  const tel = String((cliente && cliente.phone) || '').replace(/\D/g, '');
+  const puede = tel ? stripeLeon.permitido(tel, TELEFONO_PILOTO_STRIPE) : false;
+  let porque = '';
+  if (!puede) {
+    if (!stripeLeon.activo()) porque = 'el cobro en línea está apagado para todos';
+    else if (!stripeLeon.hayLlave()) porque = 'falta configurar Stripe en el servidor';
+    else if (!stripeLeon.cuentaConectada()) porque = 'falta dar de alta la cuenta a la que llega el dinero';
+    else if (!stripeLeon.cuentaLista()) porque = 'Stripe todavía no aprueba la cuenta de cobro';
+    else porque = 'no está entre los clientes del piloto';
+  }
+  return { ...cliente, cobroEnLinea: puede, cobroEnLineaPorque: porque };
+}
+
 app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ results: [], source: 'none' });
@@ -7068,7 +7092,7 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
       if (r.ok) {
         const d = await r.json();
         const items = d.results || (Array.isArray(d) ? d : []);
-        const results = items.map(mapWisphubAccount);
+        const results = items.map(mapWisphubAccount).map(conCobroEnLinea);
         return res.json({ results, source: 'wisphub-live', total: results.length });
       }
     } catch (e) { /* si falla, cae al respaldo en memoria */ }
@@ -7081,11 +7105,11 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
     const byPhone = digits.length >= 3 && phone.includes(digits);
     const byName = String(c.name || '').toLowerCase().includes(ql);
     if (byPhone || byName) {
-      out.push({
+      out.push(conCobroEnLinea({
         name: c.name, phone, status: c.status, saldo: c.saldo,
         fechaCorte: c.fechaCorte, plan: c.plan, precioPlan: c.precioPlan,
         estadoFacturas: c.estadoFacturas, id: c.wisphubId
-      });
+      }));
       if (out.length >= 20) break;
     }
   }

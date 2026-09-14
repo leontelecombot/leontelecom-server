@@ -1314,6 +1314,20 @@
       +   '<div>📅 Corte: <strong>'+esc(c.fechaCorte||'—')+'</strong></div>'
       +   '<div>🧾 Facturas: <strong>'+fact+'</strong></div>'
       + '</div>'
+      /*
+       * ¿Le sale la opción de pagar en línea, y por qué no?
+       *
+       * Es la pregunta del primer día: alguien llama diciendo "a mí no me
+       * aparece". Se contesta aquí, donde la oficina ya busca al cliente, y con
+       * el motivo, porque cada uno se arregla en otro lado.
+       */
+      + (c.cobroEnLinea === undefined ? '' :
+          '<div style="font-size:.85em;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);color:'
+          + (c.cobroEnLinea ? '#1a7f4b' : 'var(--muted)') + '">'
+          + (c.cobroEnLinea
+              ? '💳 <strong>Sí puede pagar en línea</strong>'
+              : '💳 No le aparece el pago en línea' + (c.cobroEnLineaPorque ? ' — ' + esc(c.cobroEnLineaPorque) : ''))
+          + '</div>')
       + (c.id ? '<button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="loadInvoices(\''+esc(String(c.id))+'\',this)">📄 Ver facturas</button><div class="inv-box"></div>' : '')
       + '</div>';
   }
