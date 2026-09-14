@@ -524,6 +524,19 @@ console.log('\n=== 8. LA CUENTA AJENA QUE NO DEBE ===');
   es(!stripe.sesiones.some((s) => s.telefono === E), 'y no genera ningún cobro');
 }
 
+console.log('\n=== 9. "OTRO" NO SE ROBA LAS RESPUESTAS DE OTRA CONVERSACIÓN ===');
+{
+  // A está a media conversación de reportar una falla. Ahí "otro" es una
+  // respuesta a esa pregunta, no una orden de pagar por alguien.
+  let n = enviados.length;
+  await entra(A, 'quiero reportar algo');
+  await respuestas(n);
+  n = enviados.length;
+  await entra(A, 'otro');
+  const r = await respuestas(n, 1, 2500);
+  es(!dice(r, /De quién es la cuenta/), 'a media conversación de un reporte, "otro" no abre el flujo de pagar por otro');
+}
+
 console.log(`\n${ok} bien, ${mal} mal`);
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);

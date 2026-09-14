@@ -4414,14 +4414,19 @@ async function handleChatMessage(chatId, text, sendMsg) {
      * escribir PAGAR para la suya.
      */
     const _ses = sesionDePagoAjeno(chatId);
-    if (_ses.state === 'pago_otro_buscar' && !_isBtn && !_emergencyNow) {
-      // "menú", "salir" o un saludo lo sacan de aquí: si no, cualquier cosa que
-      // escribiera se buscaría como nombre y no habría forma de salir.
-      if (/^(men[uú]|salir|cancelar|inicio|hola|regresar|volver)[\s.!]*$/.test(_pt)) {
-        clearSession(chatId);
-        await sendMsg(chatId, 'Listo, lo dejamos ahí. Cuando quieras pagar tu cuenta escribe *pagar*; si es la de alguien más, escribe *OTRO*.');
-        return;
-      }
+    // Si acaba de mandar un comprobante y el bot le preguntó a nombre de quién
+    // está, lo que escriba es esa respuesta, no un nombre para buscar.
+    const _conComprobante = pendingImage.has(_pendKey) || pendingDoc.has(_pendKey);
+    // "menú", "salir" o un saludo sacan de CUALQUIER paso de pagar por otro: si
+    // no, lo escrito se buscaría como nombre, o el menú principal se abriría con
+    // la cuenta ajena todavía pegada.
+    if (String(_ses.state || '').startsWith('pago_otro_') && !_isBtn
+        && /^(men[uú]|salir|cancelar|inicio|hola|regresar|volver)[\s.!]*$/.test(_pt)) {
+      clearSession(chatId);
+      await sendMsg(chatId, 'Listo, lo dejamos ahí. Cuando quieras pagar tu cuenta escribe *pagar*; si es la de alguien más, escribe *OTRO*.');
+      return;
+    }
+    if (_ses.state === 'pago_otro_buscar' && !_isBtn && !_emergencyNow && !_conComprobante) {
       const digitos = text.replace(/\D/g, '');
       const nombreBuscado = text.trim().toLowerCase();
       const encontrados = [];
@@ -4454,7 +4459,15 @@ async function handleChatMessage(chatId, text, sendMsg) {
         [], { buttons: [{ id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' }] });
       return;
     }
+    /*
+     * "otro" solo abre este flujo cuando no está a media conversación de otra
+     * cosa: en el paso de elegir plan o de dar una ubicación, "otro" es una
+     * respuesta a ESA pregunta y no hay que robársela.
+     */
+    // El menú principal no es "otra cosa": desde ahí OTRO tiene que funcionar.
+    const _enOtraCosa = !!_ses.state && !String(_ses.state).startsWith('pago_otro_') && _ses.state !== 'awaiting_menu_choice';
     if (/^(otro|pagar otro|pagar por otro|pagar (el|la) de|es de otra persona|de otra persona|de alguien m[aá]s)/.test(_pt)
+        && !_enOtraCosa && !_conComprobante
         && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
       setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
       await sendMsg(chatId, '¿De quién es la cuenta que quieres pagar? Escríbeme su *número de teléfono* o su *nombre completo* como está en el contrato.');
