@@ -318,8 +318,17 @@ console.log('\n=== 11. "50 CLIENTES" QUIERE DECIR 50 CLIENTES ===');
   cobro.usarPadron({ total: () => TOTAL, telefonos: () => padron });
   process.env.COBRO_LINEA_TELEFONOS = '50';
 
+  // Los 200 que más lo necesitan: suspendidos o con adeudo.
+  const necesitan = padron.slice(300, 500);
+  let guardado = null;
+  cobro.usarPadron({ total: () => TOTAL, telefonos: () => padron, prioritarios: () => necesitan });
+  cobro.usarPiloto({ obtener: () => guardado, guardar: (d) => { guardado = d; } });
+
   const dentro = padron.filter((t) => cobro.permitido(t, '529516549145'));
   es(dentro.length === 50, `de 1,050 clientes entran EXACTAMENTE 50 (entraron ${dentro.length})`);
+  es(dentro.every((t) => necesitan.includes(t)),
+     'y los 50 son de los que batallan para pagar, no clientes al azar');
+  es(!!guardado && guardado.telefonos.length === 50, 'la decisión queda guardada, no se rehace cada vez');
 
   // El mismo cliente tiene que obtener SIEMPRE la misma respuesta.
   const otraVez = padron.filter((t) => cobro.permitido(t, '529516549145'));
@@ -331,7 +340,18 @@ console.log('\n=== 11. "50 CLIENTES" QUIERE DECIR 50 CLIENTES ===');
   const masGrande = padron.filter((t) => cobro.permitido(t, '529516549145'));
   es(dentro.every((t) => masGrande.includes(t)),
      'al subir a 200, los 50 de antes siguen dentro');
-  es(masGrande.length === 200, `y ahora entran exactamente 200 (entraron ${masGrande.length})`);
+  es(masGrande.length === 200, 'y ahora son 200');
+
+  /*
+   * Y si un cliente del piloto paga y lo reactivan, NO pierde la opción. Sin
+   * esto vería el botón un día y no al otro, y llamaría a preguntar por qué.
+   */
+  const sanado = dentro[0];
+  cobro.usarPadron({ total: () => TOTAL, telefonos: () => padron,
+    prioritarios: () => necesitan.filter((t) => t !== sanado) });
+  es(cobro.permitido(sanado, '') === true,
+     'quien ya estaba dentro no se sale aunque deje de tener adeudo');
+
 
   // Pedir más de los que hay se los da a todos, sin romperse.
   process.env.COBRO_LINEA_TELEFONOS = '5000';
@@ -360,6 +380,7 @@ console.log('\n=== 12. SIN SABER CUÁNTOS CLIENTES HAY, NO SE INVENTA ===');
   estado.puedeCobrar = true; estado.faltante = [];
   await cobro.estadoCuenta();
   cobro.usarPadron({ total: () => 0, telefonos: () => [] });
+  cobro.usarPiloto({ obtener: () => null, guardar: () => {} });
   process.env.COBRO_LINEA_TELEFONOS = '50';
   const piloto = '529516549145';
   es(cobro.permitido(piloto, piloto) === true, 'el piloto sigue entrando');

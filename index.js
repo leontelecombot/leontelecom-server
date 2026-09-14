@@ -1247,7 +1247,8 @@ function buildStateSnapshot() {
      * hacer otra: dos cuentas conectadas, el dinero partido entre las dos y
      * ninguna forma sencilla de juntarlo.
      */
-    stripeCuentaLeon: stripeCuentaLeon || null
+    stripeCuentaLeon: stripeCuentaLeon || null,
+    stripePilotoLeon: stripePilotoLeon || null
   };
 }
 
@@ -1267,6 +1268,27 @@ function buildStateSnapshot() {
 stripeLeon.usarPadron({
   total: () => wisphubClients.size,
   telefonos: () => Array.from(wisphubClients.keys()),
+  /*
+   * Quiénes deberían entrar primero al piloto: los que están suspendidos o con
+   * adeudo. Son los que de verdad van a usar el pago en línea. Un piloto hecho
+   * con clientes que pagan puntual en la oficina mide mal, y puede hacer
+   * parecer que la cosa no sirve cuando lo que pasa es que a esos no les hacía
+   * falta.
+   */
+  prioritarios: () => Array.from(wisphubClients.entries())
+    .filter(([, c]) => /suspend|corte|adeud|moroso/i.test(String((c && c.status) || '')))
+    .map(([tel]) => tel),
+});
+
+/*
+ * Quiénes quedaron dentro del piloto. Se guarda con el resto del estado porque
+ * la decisión se toma una vez: si se perdiera en un reinicio, se elegirían
+ * otros 50 y los primeros perderían la opción de un día para otro.
+ */
+let stripePilotoLeon = null;
+stripeLeon.usarPiloto({
+  obtener: () => stripePilotoLeon,
+  guardar: (datos) => { stripePilotoLeon = datos; schedulePersist(); },
 });
 
 let stripeCuentaLeon = null;
@@ -1299,6 +1321,13 @@ function hydrateState(s) {
    * La cuenta de cobro de León, primero que nada: el módulo tiene que saberla
    * ANTES de que llegue el primer pago, no después.
    */
+  if (s.stripePilotoLeon && Array.isArray(s.stripePilotoLeon.telefonos)) {
+    stripePilotoLeon = s.stripePilotoLeon;
+    stripeLeon.usarPiloto({
+      obtener: () => stripePilotoLeon,
+      guardar: (datos) => { stripePilotoLeon = datos; schedulePersist(); },
+    });
+  }
   if (s.stripeCuentaLeon && s.stripeCuentaLeon.id) {
     stripeCuentaLeon = s.stripeCuentaLeon;
     stripeLeon.usarCuenta({

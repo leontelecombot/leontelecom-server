@@ -31,6 +31,14 @@ Entre el teléfono piloto y `*` hay un salto de 1 a 1,430 clientes, y en el
 primer mes de mover dinero de verdad conviene enterarse de los problemas con 50
 personas, no con todas.
 
+**Y los 50 no se eligen al azar: entran primero los suspendidos o con adeudo.**
+Son los que de verdad van a usar el pago en línea. Un piloto hecho con clientes
+que pagan puntual en la oficina mide mal, y puede hacer parecer que la cosa no
+sirve cuando lo que pasa es que a esos no les hacía falta.
+
+La lista se decide UNA vez y se guarda. Quien entró se queda, aunque pague y lo
+reactiven: si dependiera de su estado, vería el botón un día y no al otro.
+
 Quién entra se decide con el número de teléfono, no al azar, así que **el mismo
 cliente obtiene siempre la misma respuesta**: nadie ve el botón un día y lo
 pierde al siguiente. Y al subir el cupo solo se agrega gente, nunca se le quita

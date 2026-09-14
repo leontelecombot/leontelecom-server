@@ -141,7 +141,7 @@ function permitido(telefono, piloto) {
       return !!piloto && tel === String(piloto).replace(/\D/g, '');
     }
     if (meta >= total) return true;
-    return entreLosPrimeros(tel, meta);
+    return enElPiloto(tel, meta);
   }
 
   return lista.split(',').map((x) => x.replace(/\D/g, '')).filter(Boolean).includes(tel);
@@ -163,6 +163,57 @@ function dentroDelCupo(tel, corte) {
   if (corte >= 10000) return true;
   const h = crypto.createHash('sha256').update(tel).digest();
   return (h.readUInt32BE(0) % 10000) < corte;
+}
+
+/* ═══════════════════ LOS ELEGIDOS DEL PILOTO ═══════════════════
+ *
+ * Cuando el cupo se da por número —"empezamos con 50"— hay que decidir CUÁLES
+ * 50, y esa decisión se toma una sola vez y se guarda.
+ *
+ * Por qué no se recalcula cada vez: si dependiera del estado del cliente,
+ * alguien suspendido entraría al piloto, pagaría, lo reactivarían, y al día
+ * siguiente perdería la opción de pagar en línea. Vería el botón un día y no
+ * al otro, y llamaría a la oficina a preguntar por qué. Una vez dentro, dentro.
+ *
+ * Por qué se prefiere a los suspendidos: son los que de verdad van a usarlo.
+ * Un piloto hecho con clientes que pagan puntual en la oficina mide mal, y
+ * puede hacer parecer que la cosa no sirve cuando lo que pasa es que a esos no
+ * les hacía falta.
+ */
+let _piloto = null;          // { meta, telefonos: [] }
+let _guardaPiloto = null;
+
+function usarPiloto(io) {
+  if (io && typeof io.obtener === 'function' && typeof io.guardar === 'function') {
+    _guardaPiloto = io;
+    const g = io.obtener();
+    if (g && Array.isArray(g.telefonos)) _piloto = g;
+  }
+}
+
+function enElPiloto(tel, meta) {
+  const yaEstan = (_piloto && Array.isArray(_piloto.telefonos)) ? _piloto.telefonos : [];
+  if (yaEstan.includes(tel)) return true;
+  if (yaEstan.length >= meta) return false;   // el cupo ya se llenó con otros
+
+  /*
+   * Falta gente por elegir. Se completa la lista de una sola vez, no de a uno:
+   * elegir por llamada dejaría el cupo a quien mandó mensaje primero, y el
+   * primero suele ser quien menos lo necesita.
+   */
+  const necesitan = (_padron && typeof _padron.prioritarios === 'function') ? _padron.prioritarios() : [];
+  const todos = (_padron && typeof _padron.telefonos === 'function') ? _padron.telefonos() : [];
+  if (!todos.length) return false;
+
+  const limpio = (x) => String(x).replace(/\D/g, '');
+  const porHuella = (a, b) => huella(limpio(a)) - huella(limpio(b));
+  const pri = necesitan.map(limpio).filter(Boolean).sort(porHuella);
+  const resto = todos.map(limpio).filter((t) => t && !pri.includes(t)).sort(porHuella);
+
+  const elegidos = [...new Set([...yaEstan, ...pri, ...resto])].slice(0, meta);
+  _piloto = { meta, telefonos: elegidos };
+  if (_guardaPiloto) _guardaPiloto.guardar(_piloto);
+  return elegidos.includes(tel);
 }
 
 /*
@@ -1047,7 +1098,7 @@ function verificarFirma(cuerpoCrudo, cabecera, secreto, toleranciaSeg = 300) {
 }
 
 module.exports = {
-  hayLlave, activo, permitido, usarRegistro, usarCuenta, usarPadron,
+  hayLlave, activo, permitido, usarRegistro, usarCuenta, usarPadron, usarPiloto,
   cuentaConectada, cuentaLista, crearCuentaConectada, enlaceOnboarding, estadoCuenta, olvidarCuenta,
   generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,
   verificarFirma, calcularCargo, clabeValida,
