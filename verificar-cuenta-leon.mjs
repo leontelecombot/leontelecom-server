@@ -438,6 +438,29 @@ console.log('\n=== 14. EL TABLERO DICE A CUÁNTA GENTE LE ESTÁ ENTRANDO DINERO 
      'y cuando es un número dice que son los que más lo necesitan');
 }
 
+console.log('\n=== 15. CUÁNTO DINERO HA ENTRADO ===');
+{
+  /*
+   * Es el número que le dice a León si esto sirve, y no existía. El panel
+   * mostraba cuántos clientes tienen CLABE y cuánto está atorado, pero no
+   * cuánto entró. Sin eso no hay forma de juzgar el piloto de 50 más que "yo
+   * siento que sí".
+   */
+  const fs = await import('node:fs');
+  const servidor = fs.readFileSync('./index.js', 'utf8');
+  const panel = fs.readFileSync('./public/admin-dashboard.html', 'utf8');
+
+  es(/function sumarAlMes/.test(servidor), 'cada pago suma al total del mes');
+  es(/sumarAlMes\(monto, canal\)/.test(servidor), 'y se suma donde se registra el pago, no en otro lado');
+  es(/stripeCobrado: Object\.fromEntries/.test(servidor), 'el total se guarda con el resto del estado');
+  es(/MESES_QUE_SE_GUARDAN = 6/.test(servidor), 'se conservan seis meses, para ver si crece');
+  es(/cobrado: \(\(\) =>/.test(servidor), 'y el tablero lo recibe');
+  es(/e\.cobrado/.test(panel), 'el panel lo pinta');
+  es(/mes pasado/.test(panel), 'con el mes anterior al lado, que es lo que deja comparar');
+  es(/por \$\{esc\(v\)\}|por \${esc\(v\)}/.test(panel) || /n\} por /.test(panel),
+     'y desglosado por vía, que dice qué está adoptando la gente');
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));

@@ -1248,7 +1248,8 @@ function buildStateSnapshot() {
      * ninguna forma sencilla de juntarlo.
      */
     stripeCuentaLeon: stripeCuentaLeon || null,
-    stripePilotoLeon: stripePilotoLeon || null
+    stripePilotoLeon: stripePilotoLeon || null,
+    stripeCobrado: Object.fromEntries(stripeCobrado)
   };
 }
 
@@ -1321,6 +1322,9 @@ function hydrateState(s) {
    * La cuenta de cobro de León, primero que nada: el módulo tiene que saberla
    * ANTES de que llegue el primer pago, no después.
    */
+  if (s.stripeCobrado && typeof s.stripeCobrado === 'object') {
+    for (const [k, v] of Object.entries(s.stripeCobrado)) stripeCobrado.set(String(k), v);
+  }
   if (s.stripePilotoLeon && Array.isArray(s.stripePilotoLeon.telefonos)) {
     stripePilotoLeon = s.stripePilotoLeon;
     stripeLeon.usarPiloto({
@@ -5552,8 +5556,49 @@ function registrarPagoYRevisarDoble({ telefono, monto, canal, ref }) {
   const sospechoso = previos.find((p) => p.ref !== ref);
   previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref });
   stripePagosRecientes.set(tel, previos.slice(-6));
+  sumarAlMes(monto, canal);
   schedulePersist();
   return sospechoso || null;
+}
+
+/*
+ * CUÁNTO DINERO HA ENTRADO POR EL COBRO EN LÍNEA.
+ *
+ * Es el número que le dice a León si esto sirve o no, y no existía: el panel
+ * mostraba cuántos clientes tienen CLABE y cuánto está atorado, pero no cuánto
+ * entró. Sin eso no hay forma de juzgar el piloto de 50 clientes más que "yo
+ * siento que sí".
+ *
+ * Se guarda por mes y por vía, porque no es lo mismo que entren por
+ * transferencia que con tarjeta: la vía dice qué está adoptando la gente.
+ * Se conservan seis meses, que es de sobra para ver si la cosa crece.
+ */
+const stripeCobrado = new Map();   // '2026-09' -> { pagos, pesos, porVia: { clabe, tarjeta, oxxo } }
+const MESES_QUE_SE_GUARDAN = 6;
+
+function mesDe(cuando) {
+  const d = new Date(cuando || Date.now());
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function sumarAlMes(monto, canal) {
+  const pesos = Number(monto) || 0;
+  if (pesos <= 0) return;
+  const mes = mesDe();
+  const m = stripeCobrado.get(mes) || { pagos: 0, pesos: 0, porVia: {} };
+  m.pagos += 1;
+  m.pesos = +(m.pesos + pesos).toFixed(2);
+  const via = String(canal || 'otro');
+  m.porVia[via] = (m.porVia[via] || 0) + 1;
+  stripeCobrado.set(mes, m);
+
+  // Se tiran los meses viejos aquí y no en un barrido aparte: es una línea, y
+  // un barrido más es una cosa más que se puede olvidar de encender.
+  if (stripeCobrado.size > MESES_QUE_SE_GUARDAN) {
+    for (const viejo of [...stripeCobrado.keys()].sort().slice(0, stripeCobrado.size - MESES_QUE_SE_GUARDAN)) {
+      stripeCobrado.delete(viejo);
+    }
+  }
 }
 
 /*
@@ -7818,6 +7863,14 @@ app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
      * está entrando dinero sin tener que acordarse de cómo se configura.
      */
     alcance: describirAlcance(alcance),
+    /*
+     * Lo que de verdad quiere saber: cuánto ha entrado. Se manda el mes en
+     * curso y el anterior, que es lo que permite ver si crece.
+     */
+    cobrado: (() => {
+      const meses = [...stripeCobrado.keys()].sort().slice(-2).reverse();
+      return meses.map((mes) => ({ mes, ...stripeCobrado.get(mes) }));
+    })(),
     conClabe: [...stripeClientes.values()].filter((d) => d && d.clienteId).length,
     rezagados: stripeSaldosRezagados.size,
     atorado: +atorado.toFixed(2),
