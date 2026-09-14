@@ -44,6 +44,9 @@ const C = '529513333333';   // Ana Pérez Gómez: comparte nombre con B a propó
 const D = '529514444444';   // fuera del piloto
 const E = '529515555555';   // Elena Cruz: sin deuda y sin precio de plan (no hay nada que cobrar)
 const F = '529516666666';   // Fermín Ortiz: DOS contratos con el mismo teléfono (casa y local)
+const G = '529517777777';   // Gloria Núñez: debe y le cortan mañana (sí le toca aviso)
+// Mañana, en fecha local, como la guarda Wisphub (fecha_corte).
+const MANANA = (() => { const d = new Date(Date.now() + 24 * 3600 * 1000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); })();
 
 // ── WhatsApp de mentira: guarda lo que el bot manda ────────────────────────
 const enviados = [];   // { a, texto, botones: [{id,title}] }
@@ -53,7 +56,9 @@ const metaFalso = createServer((req, res) => {
   req.on('end', () => {
     try {
       const m = JSON.parse(cuerpo || '{}');
-      const texto = m.type === 'interactive' ? (m.interactive?.body?.text || '') : (m.text?.body || '');
+      const texto = m.type === 'interactive' ? (m.interactive?.body?.text || '')
+        : m.type === 'template' ? ((((m.template || {}).components || []).find((c) => c.type === 'body') || {}).parameters || []).map((x) => x.text).join(' ')
+        : (m.text?.body || '');
       const botones = m.type === 'interactive' && m.interactive?.type === 'button'
         ? (m.interactive.action?.buttons || []).map((b) => ({ id: b.reply.id, title: b.reply.title }))
         : [];
@@ -106,6 +111,17 @@ const stripeFalso = createServer((req, res) => {
 });
 await new Promise((r) => stripeFalso.listen(PUERTO_STRIPE, '127.0.0.1', r));
 
+// El padrón, como lo devuelve Wisphub. B, D y G tienen corte MAÑANA y deben.
+const PADRON = [
+  { id_servicio: 101, usuario: 'clienteA', nombre: 'Andrés', apellidos: 'López', estado: 'Suspendido', telefono: A, precio_plan: '300.00' },
+  { id_servicio: 102, usuario: 'clienteB', nombre: 'Ana', apellidos: 'Pérez', estado: 'Suspendido', telefono: B, precio_plan: '440.00', fecha_corte: MANANA },
+  { id_servicio: 103, usuario: 'clienteC', nombre: 'Ana', apellidos: 'Pérez Gómez', estado: 'Activo', telefono: C, precio_plan: '350.00' },
+  { id_servicio: 104, usuario: 'clienteD', nombre: 'Diego', apellidos: 'Ruiz', estado: 'Suspendido', telefono: D, precio_plan: '350.00', fecha_corte: MANANA },
+  { id_servicio: 105, usuario: 'clienteE', nombre: 'Elena', apellidos: 'Cruz', estado: 'Activo', telefono: E, precio_plan: '' },
+  { id_servicio: 106, usuario: 'clienteF-casa', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Activo', telefono: F, precio_plan: '300.00' },
+  { id_servicio: 108, usuario: 'clienteG', nombre: 'Gloria', apellidos: 'Núñez', estado: 'Suspendido', telefono: G, precio_plan: '320.00', fecha_corte: MANANA },
+];
+
 // ── Wisphub de mentira: deudas, servicios y la lista de reactivaciones ──────
 const wisphub = {
   servicios: {   // teléfono -> servicio como lo devuelve /api/clientes/?telefono=
@@ -113,6 +129,7 @@ const wisphub = {
     [B]: { id_servicio: 102, usuario: 'clienteB', nombre: 'Ana', apellidos: 'Pérez', estado: 'Suspendido', telefono: B },
     [C]: { id_servicio: 103, usuario: 'clienteC', nombre: 'Ana', apellidos: 'Pérez Gómez', estado: 'Activo', telefono: C },
     [D]: { id_servicio: 104, usuario: 'clienteD', nombre: 'Diego', apellidos: 'Ruiz', estado: 'Suspendido', telefono: D },
+    [G]: { id_servicio: 108, usuario: 'clienteG', nombre: 'Gloria', apellidos: 'Núñez', estado: 'Suspendido', telefono: G },
   },
   // Un teléfono con DOS contratos: la casa (activa) y el local (suspendido).
   extras: {
@@ -121,7 +138,7 @@ const wisphub = {
       { id_servicio: 107, usuario: 'clienteF-local', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Suspendido', telefono: F, direccion: 'Local, Av. Juárez', plan_internet: { nombre: 'Plan 50' } },
     ],
   },
-  deuda: { clienteA: 300, clienteB: 440, clienteC: 0, clienteD: 350, 'clienteF-casa': 0, 'clienteF-local': 500 },
+  deuda: { clienteA: 300, clienteB: 440, clienteC: 0, clienteD: 350, 'clienteF-casa': 0, 'clienteF-local': 500, clienteG: 320 },
   activaciones: [],   // los servicios que se mandaron reactivar
   puts: 0,
 };
@@ -138,7 +155,11 @@ const wisphubFalso = createServer((req, res) => {
     }
     if (u.pathname === '/api/clientes/') {
       const tel = (u.searchParams.get('telefono') || '').replace(/\D/g, '');
-      if (!tel) return res.end(JSON.stringify({ count: 0, results: [] }));   // la sincronización: se queda la lista sembrada
+      if (!tel) {
+        // La sincronización completa: el mismo padrón que se sembró, con fecha de corte.
+        const offset = Number(u.searchParams.get('offset') || 0);
+        return res.end(JSON.stringify({ count: PADRON.length, results: offset ? [] : PADRON }));
+      }
       const extra = Object.entries(wisphub.extras).find(([t]) => t.endsWith(tel.slice(-10)));
       if (extra) return res.end(JSON.stringify({ count: extra[1].length, results: extra[1] }));
       const s = Object.values(wisphub.servicios).find((x) => x.telefono.endsWith(tel.slice(-10)));
@@ -174,6 +195,7 @@ fs.writeFileSync(RUTA_STORE, JSON.stringify({
     [D]: { usuario: 'clienteD', name: 'Diego Ruiz', precioPlan: '350.00', status: 'Suspendido' },
     [E]: { usuario: 'clienteE', name: 'Elena Cruz', precioPlan: '', status: 'Activo' },
     [F]: { usuario: 'clienteF-casa', name: 'Fermín Ortiz', precioPlan: '300.00', status: 'Activo' },
+    [G]: { usuario: 'clienteG', name: 'Gloria Núñez', precioPlan: '320.00', status: 'Suspendido' },
   },
   wisphubClientesAl: new Date().toISOString(),
 }));
@@ -202,6 +224,9 @@ const srv = spawn('node', ['index.js'], {
     WISPHUB_REACTIVAR_ACTIVO: 'true',
     ADMIN_PASSWORD: 'prueba-local-larga',
     ALERT_ADMIN_NUMBER: '',
+    AGENT_WHATSAPP_NUMBER: '529519999999',
+    CORTE_REMINDER_ENABLED: 'true',
+    WHATSAPP_AVISO_TEMPLATE: 'aviso_prueba',
     SERVER_BASE_URL: BASE,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -641,6 +666,34 @@ console.log('\n=== 11. Y LA CLABE ES DE UN CONTRATO, NO DEL TELÉFONO ===');
   es(dice(r, /Tu mensualidad: \$500\.00/), 'con la deuda del LOCAL ($500), no la de la casa');
   const cli = stripe.clientes.find((c) => c.metadata.telefono === F);
   es(cli && cli.metadata.servicioId === '107', 'el cliente de Stripe de esa CLABE lleva el contrato (107): lo que caiga ahí es del local');
+}
+
+console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN TIENE PRÓRROGA ===');
+{
+  const ASESOR = '529519999999';
+  // El asesor le da 3 días a Diego con un solo mensaje.
+  let n = enviados.length;
+  await entra(ASESOR, 'PRORROGA 951 444 4444 3 se le descompuso el carro');
+  let r = await respuestas(n, 2);
+  es(r.some((m) => m.a === ASESOR && /Prórroga registrada para \*Diego Ruiz\*/.test(m.texto)), 'el asesor registra una prórroga con "PRORROGA <tel> 3"');
+  es(r.some((m) => m.a === D && /te dimos hasta el/.test(m.texto)), 'y a Diego le llega hasta cuándo tiene');
+
+  // Sesión de dueño para forzar el barrido de avisos de corte.
+  const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  es(!!login.token, 'el dueño entra al panel');
+  const lista = await fetch(BASE + '/admin/api/prorrogas', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+  es(lista.total === 1 && lista.prorrogas[0].telefono === D && lista.prorrogas[0].nombre === 'Diego Ruiz', 'y la ve en el panel, con nombre y fecha');
+
+  n = enviados.length;
+  const corrida = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
+  r = await respuestas(n, 1, 6000);
+  const c = corrida.result || corrida;
+  if (c.sent !== 1) console.log('    corrida:', JSON.stringify(corrida).slice(0, 300));
+  es(c.sent === 1, `se manda UN aviso de corte (a Gloria, que sí debe) · enviados ${c.sent}`);
+  es(r.some((m) => m.a === G), 'Gloria recibe el aviso');
+  es(!r.some((m) => m.a === B), 'Ana Pérez NO: pagó por el bot hace un rato, aunque Wisphub todavía la tenga como deudora');
+  es(!r.some((m) => m.a === D), 'Diego NO: tiene prórroga');
+  es(c.yaPagaron === 1 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagó, ${c.conProrroga} con prórroga`);
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);

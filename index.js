@@ -460,6 +460,14 @@ let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matuti
 let agentLastInbound = new Map(); // num → ISO del último mensaje del asesor
 let agentPingSent = new Map();    // num → ISO del último recordatorio enviado (uno por ventana)
 let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
+/*
+ * PRÓRROGAS. "Dame chance hasta el viernes" es de las cosas que más se piden,
+ * y hasta ahora vivía en la cabeza del asesor: el bot le seguía mandando el
+ * aviso de corte al cliente al que ya le habían dado plazo. Ahora el asesor
+ * la registra con un mensaje (PRORROGA 9511234567 3) y el aviso se calla
+ * hasta que venza.
+ */
+let prorrogas = {};         // telefono → { hasta: 'YYYY-MM-DD', por, cuando, motivo }
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
 // Bitácora de corridas del aviso de corte: una línea por día, para ver de un vistazo
 // qué días SÍ salieron los avisos y cuáles se saltaron. Hace falta porque en Render
@@ -1231,6 +1239,7 @@ function buildStateSnapshot() {
     stripeClientes: Object.fromEntries(stripeClientes),
     // Para cazar pagos dobles entre canales tras un reinicio de Render.
     stripePagosRecientes: Object.fromEntries(stripePagosRecientes),
+    prorrogas,
     stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX),
     /*
      * Los avisos de Stripe ya procesados.
@@ -1411,6 +1420,7 @@ function hydrateState(s) {
   if (s.agentLastInbound && typeof s.agentLastInbound === 'object') agentLastInbound = new Map(Object.entries(s.agentLastInbound));
   if (s.agentPingSent && typeof s.agentPingSent === 'object') agentPingSent = new Map(Object.entries(s.agentPingSent));
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
+  if (s.prorrogas && typeof s.prorrogas === 'object') prorrogas = s.prorrogas;
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
@@ -3046,6 +3056,21 @@ async function handleAgentCommand(agentNumber, text) {
     return;
   }
 
+  // PRORROGA [número] [días] [motivo] — le da plazo al cliente y calla el aviso de corte
+  const prorrogaMatch = text.trim().match(/^PR[OÓ]RROGA\s+(\d[\d\s-]{6,})\s+(\d{1,2})\s*(?:d[ií]as?)?\s*(.*)$/i);
+  if (prorrogaMatch) {
+    const clientId = normalizeClientNumber(prorrogaMatch[1]);
+    const p = darProrroga(clientId, prorrogaMatch[2], agentNumber, prorrogaMatch[3]);
+    const nombre = (wisphubClients.get(clientId) || {}).name || clientId;
+    const [y, m, d] = p.hasta.split('-');
+    const hastaTxt = `${d}/${m}/${y}`;
+    await sendWhatsAppMessage(agentNumber, `📅 Prórroga registrada para *${nombre}* hasta el *${hastaTxt}* (${p.dias} día${p.dias !== 1 ? 's' : ''}). No le va a llegar aviso de corte hasta entonces.`);
+    try {
+      await sendWhatsAppMessage(clientId, `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
+    } catch (_) { /* si no se le pudo avisar, la prórroga vale igual */ }
+    return;
+  }
+
   // LIBERAR [número] — cierra el relay y devuelve al bot
   const liberarMatch = v.match(/^LIBERAR\s+(\d+)/);
   if (liberarMatch) {
@@ -3552,6 +3577,48 @@ function facturaDebe(fact) {
   if (/\b(no|sin)\s+pagad/.test(f)) return true;    // "No Pagado", "sin pagar"
   return !f.includes('pagad');                       // "Pendiente de Pago", "Vencida"…
 }
+/*
+ * ¿Ya pagó, aunque Wisphub todavía no lo sepa?
+ *
+ * La factura en Wisphub se marca a mano (la API no deja), así que entre que
+ * el cliente paga y la oficina lo registra pueden pasar días. En ese hueco
+ * Wisphub dice "debe" y el bot le mandaba "mañana te cortamos" a alguien que
+ * ya pagó por el propio bot. Aquí se mira lo que el bot SÍ sabe: los pagos
+ * en línea que entraron y los comprobantes que la oficina ya dio por buenos.
+ */
+const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_RECIENTE) || 20);
+function pagoRecienteDe(telefono) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (!tel) return null;
+  const desde = Date.now() - CORTE_DIAS_PAGO_RECIENTE * 24 * 3600 * 1000;
+  const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && p.cuando >= desde);
+  if (enLinea.length) { const u = enLinea[enLinea.length - 1]; return { cuando: u.cuando, canal: u.canal || 'en línea' }; }
+  for (const c of caseLog) {
+    if (c.clientId !== tel || c.type !== 'pago' || c.status !== 'recibido') continue;
+    const t = new Date(c.ts).getTime();
+    if (t >= desde) return { cuando: t, canal: 'comprobante' };
+  }
+  return null;
+}
+function fechaLocalISO(d = new Date()) {
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function prorrogaVigente(telefono) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  const p = prorrogas[tel];
+  if (!p || !p.hasta) return null;
+  if (p.hasta < fechaLocalISO()) { delete prorrogas[tel]; schedulePersist(); return null; }
+  return p;
+}
+function darProrroga(telefono, dias, por, motivo = '') {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  const n = Math.max(1, Math.min(31, Number(dias) || 0));
+  const hasta = new Date(); hasta.setDate(hasta.getDate() + n);
+  prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/\D/g, ''), cuando: new Date().toISOString(), motivo: String(motivo || '').slice(0, 200) };
+  schedulePersist();
+  return prorrogas[tel];
+}
+
 function clienteDebe(c) {
   const low = s => String(s || '').toLowerCase();
   const e = low(c && c.status);
@@ -3660,11 +3727,13 @@ async function sweepCorteReminders(force = false) {
     // Map vivo se cortaría en silencio y media lista se quedaría sin aviso.
     // Aquí mismo se saca de la lista a quien YA PAGÓ: ese no debe recibir nada.
     const candidatos = [];
-    let alCorriente = 0;
+    let alCorriente = 0, yaPagaron = 0, conProrroga = 0;
     for (const [phone, c] of wisphubClients.entries()) {
       const fc = parseFechaCorte(c.fechaCorte);
       if (!fc || fc !== manana) continue;
       if (!clienteDebe(c)) { alCorriente++; continue; }
+      if (pagoRecienteDe(phone)) { yaPagaron++; continue; }
+      if (prorrogaVigente(phone)) { conProrroga++; continue; }
       candidatos.push([phone, c, fc]);
     }
 
@@ -3712,7 +3781,7 @@ async function sweepCorteReminders(force = false) {
       if (new Date(v).getTime() < old) delete corteReminders[k];
     }
     schedulePersist();
-    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente`);
+    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente, ${yaPagaron} porque ya pagaron por el bot, ${conProrroga} con prórroga`);
     // Que el filtro se coma a TODOS es señal de que el criterio "debe" no está leyendo lo
     // que creemos (ojo: en el criterio de finanzas "No Pagado" CONTIENE "pagad", así que
     // cuenta como al corriente; si Wisphub usa ese texto, el filtro se apoya solo en el
@@ -3721,7 +3790,7 @@ async function sweepCorteReminders(force = false) {
     if (!candidatos.length && alCorriente) {
       alertAdmin('corte-filtro', `Hoy NINGÚN cliente pasó el filtro de deuda: los ${alCorriente} con corte el ${manana} salieron todos "al corriente". Revisa saldo y estado de facturas en el panel antes de dar ese cero por bueno.`);
     }
-    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, candidatos: candidatos.length, forzada: !!force });
+    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, candidatos: candidatos.length, forzada: !!force });
     // Si AYER no quedó constancia, hubo gente que cortó sin recibir su aviso. Se avisa
     // SOLO el día siguiente al hueco (no los 7 días que el hueco sigue apareciendo en la
     // lista), para que la alerta signifique algo y no se vuelva ruido que nadie lee.
@@ -3729,7 +3798,7 @@ async function sweepCorteReminders(force = false) {
     if (huecos[0] === mexicoDateStr(new Date(Date.now() - 86400000))) {
       alertAdmin('corte-hueco', `Sin avisos de corte el/los día(s): ${huecos.join(', ')}. Revisa el despertador de GitHub Actions (parece que Render se durmió).`);
     }
-    return { manana, sent, failed, yaEnviados, alCorriente };
+    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga };
   } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 
@@ -4588,7 +4657,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const _notif = await notifyAgentRequest(chatId, [
         '📅 SOLICITUD DE PRÓRROGA / PLAZO DE PAGO',
         _nom ? `Cliente: ${_nom}` : '',
-        `Mensaje: ${text}`
+        `Mensaje: ${text}`,
+        `Para dársela, responde: PRORROGA ${normalizePhone(chatId).replace(/^52/, '')} 3   (los días que quieras)`
       ].filter(Boolean).join('\n'), '').catch(() => false);
       await sendMsg(chatId, agentNotifiedMsg(_notif, _nom, 'asesor'));
       return;
@@ -5589,6 +5659,34 @@ async function revisarCuentaLeon() {
     }
   }
 }
+
+/*
+ * Prórrogas desde el panel: verlas, darlas y quitarlas. Lo mismo que el
+ * asesor hace por WhatsApp con PRORROGA, pero con la lista a la vista.
+ */
+app.get('/admin/api/prorrogas', verifyAdminToken, (_req, res) => {
+  const hoy = fechaLocalISO();
+  const lista = Object.entries(prorrogas)
+    .filter(([, p]) => p && p.hasta >= hoy)
+    .map(([tel, p]) => ({ telefono: tel, nombre: (wisphubClients.get(tel) || {}).name || '', ...p }))
+    .sort((a, b) => a.hasta.localeCompare(b.hasta));
+  res.json({ prorrogas: lista, total: lista.length });
+});
+app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'), (req, res) => {
+  const tel = normalizePhone(String((req.body || {}).telefono || ''));
+  const dias = Number((req.body || {}).dias || 0);
+  if (!tel || tel.length < 12) return res.status(400).json({ error: 'Falta el teléfono' });
+  if (!(dias >= 1 && dias <= 31)) return res.status(400).json({ error: 'Los días van de 1 a 31' });
+  const p = darProrroga(tel, dias, (req.admin && req.admin.username) || 'panel', (req.body || {}).motivo);
+  res.json({ ok: true, telefono: tel, ...p });
+});
+app.delete('/admin/api/prorrogas/:telefono', verifyAdminToken, requirePermission('clients'), (req, res) => {
+  const tel = normalizePhone(String(req.params.telefono || ''));
+  const habia = !!prorrogas[tel];
+  delete prorrogas[tel];
+  schedulePersist();
+  res.json({ ok: true, habia });
+});
 
 app.get('/api/cuenta-cobro/estado', async (_req, res) => {
   try {
