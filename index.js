@@ -4198,7 +4198,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
       try {
         const ajena = cuentaAjena(chatId);
-        const cobro = await montoACobrar(chatId, ajena);
+        const telCuenta = ajena || normalizePhone(chatId);
+        let servicio = servicioEnSesion(chatId);
+        if (!servicio) {
+          const varios = await serviciosDeLaCuenta(telCuenta);
+          if (varios.length > 1) {
+            // Varios contratos: que diga cuál antes de cotizar nada.
+            setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajena, servicios: varios.slice(0, 3), desde: Date.now() } });
+            const deQuienEs = ajena ? `*${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* tiene` : 'Tienes';
+            await sendMsg(chatId,
+              `${deQuienEs} *${varios.length} servicios* con nosotros. ¿Cuál vas a pagar?`
+              + (varios.length > 3 ? '\n\n(Se muestran los primeros 3; si es otro, escríbele a un asesor.)' : ''),
+              [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'pago_servicio_' + i, title: (x.estado && /suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
+            return;
+          }
+          if (varios.length === 1) servicio = { servicioId: varios[0].id, usuario: varios[0].usuario, etiqueta: varios[0].etiqueta };
+        }
+        const cobro = await montoACobrar(chatId, ajena, servicio);
         if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
 
         const t = stripeLeon.calcularCargo(cobro.monto, 'tarjeta');
@@ -4241,13 +4257,16 @@ async function handleChatMessage(chatId, text, sendMsg) {
         const paraOtro = cuentaAjena(chatId);
         const telCuenta = paraOtro || normalizePhone(chatId);
         const c = wisphubClients.get(telCuenta) || {};
-        const cobro = await montoACobrar(chatId, telCuenta);
+        const servicio = servicioEnSesion(chatId);
+        const cobro = await montoACobrar(chatId, telCuenta, servicio);
         if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
 
         const pago = await stripeLeon.generarLinkPago({
           telefono: telCuenta, monto: cobro.monto, nombre: c.name,
           urlBase: SERVER_BASE_URL, forma,
           pagadoPor: paraOtro ? normalizePhone(chatId) : undefined,
+          // Con esto el webhook abona y reactiva ESE contrato, sin adivinar.
+          servicioId: servicio ? servicio.servicioId : undefined,
         });
         if (paraOtro) clearSession(chatId);
 
@@ -4266,6 +4285,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId,
           `${cabeza}\n\n`
           + (paraOtro ? `• Cuenta de: *${c.name || telCuenta}*\n` : '')
+          + (servicio && servicio.etiqueta ? `• Servicio: ${servicio.etiqueta}\n` : '')
           + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${cobro.deTexto}\n`
           + `• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n`
           + `• *Total: $${pago.total.toFixed(2)}*\n\n`
@@ -4319,8 +4339,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       try {
-        const tel = normalizePhone(chatId);
+        // La CLABE es de la cuenta que se está pagando (la propia o la de otro)
+        // y, si esa cuenta tiene varios contratos, del contrato elegido.
+        const ajenaClabe = cuentaAjena(chatId);
+        const tel = ajenaClabe || normalizePhone(chatId);
         const c = wisphubClients.get(tel);
+        const servicioClabe = servicioEnSesion(chatId);
 
         /*
          * Solo a clientes de verdad.
@@ -4342,7 +4366,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
           return;
         }
 
-        const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name });
+        if (!servicioClabe) {
+          const varios = await serviciosDeLaCuenta(tel);
+          if (varios.length > 1) {
+            setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajenaClabe, servicios: varios.slice(0, 3), viaClabe: true, desde: Date.now() } });
+            await sendMsg(chatId,
+              `${ajenaClabe ? `*${c.name}* tiene` : 'Tienes'} *${varios.length} servicios* con nosotros, y cada uno tiene su propia CLABE. ¿Cuál vas a pagar?`,
+              [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'pago_servicio_' + i, title: (x.estado && /suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
+            return;
+          }
+        }
+
+        const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name, servicioId: servicioClabe ? servicioClabe.servicioId : undefined });
 
         /*
          * DECIRLE CUÁNTO TRANSFERIR, con el cargo ya sumado.
@@ -4364,7 +4399,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
         let deuda = 0;
         let cuantas = 0;
         try {
-          const d = await wisphubReactivar.deudaDelCliente(c.usuario || '');
+          // La deuda del contrato elegido, no la del primero que aparezca.
+          const d = await wisphubReactivar.deudaDelCliente((servicioClabe && servicioClabe.usuario) || c.usuario || '');
           deuda = d.total;
           cuantas = d.facturas.length;
         } catch (e) {
@@ -4414,6 +4450,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
      * escribir PAGAR para la suya.
      */
     const _ses = sesionDePagoAjeno(chatId);
+    // Eligió cuál de sus servicios paga: se guarda y se sigue por donde iba.
+    if (_ses.state === 'pago_servicio_elegir' && /^pago_servicio_\d$/.test(_pt)) {
+      const el = (_ses.data.servicios || [])[Number(_pt.slice(-1))];
+      if (!el) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *pagar* para empezar de nuevo.'); return; }
+      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: _ses.data.pagarPara || '', servicioId: el.id, usuario: el.usuario, etiqueta: el.etiqueta, desde: Date.now() } });
+      return handleChatMessage(chatId, _ses.data.viaClabe ? 'pago_clabe' : 'pago_tarjeta', sendMsg);
+    }
     // Si acaba de mandar un comprobante y el bot le preguntó a nombre de quién
     // está, lo que escriba es esa respuesta, no un nombre para buscar.
     const _conComprobante = pendingImage.has(_pendKey) || pendingDoc.has(_pendKey);
@@ -4455,8 +4498,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // Se deja la cuenta elegida en la sesión: el cobro de tarjeta/OXXO la lee.
       setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, desde: Date.now() } });
       await sendMsg(chatId,
-        `Perfecto, vas a pagar la cuenta de *${elegido.name}*. ¿Cómo quieres pagar?`,
-        [], { buttons: [{ id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' }] });
+        `Perfecto, vas a pagar la cuenta de *${elegido.name}*. ¿Cómo quieres pagar?\n\n`
+        + 'La *CLABE* es de esa cuenta: lo que se transfiera ahí se le abona a ella, desde cualquier banco.',
+        [], { buttons: [{ id: 'pago_clabe', title: '🏦 CLABE de esa cuenta' }, { id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' }] });
       return;
     }
     /*
@@ -5761,7 +5805,7 @@ function sumarAlMes(monto, canal) {
 const PAGO_AJENO_VIGENCIA_MS = 30 * 60 * 1000;
 function sesionDePagoAjeno(chatId) {
   const ses = getSession(chatId);
-  if (!ses.state || !String(ses.state).startsWith('pago_otro_')) return ses;
+  if (!ses.state || !/^pago_(otro_|servicio_)/.test(String(ses.state))) return ses;
   const desde = Number((ses.data || {}).desde || 0);
   if (!desde || Date.now() - desde > PAGO_AJENO_VIGENCIA_MS) { clearSession(chatId); return { state: null, data: {} }; }
   return ses;
@@ -5770,16 +5814,47 @@ function cuentaAjena(chatId) {
   const ses = sesionDePagoAjeno(chatId);
   return ses.state === 'pago_otro_listo' ? String((ses.data || {}).pagarPara || '') : '';
 }
+/*
+ * El servicio que el cliente ya eligió, cuando su teléfono tiene varios.
+ * Vive en la misma sesión que el pago por otro y caduca igual.
+ */
+function servicioEnSesion(chatId) {
+  const ses = sesionDePagoAjeno(chatId);
+  const d = ses.data || {};
+  return ses.state === 'pago_otro_listo' && d.servicioId ? { servicioId: String(d.servicioId), usuario: d.usuario || '', etiqueta: d.etiqueta || '' } : null;
+}
+/*
+ * ¿Cuántos contratos tiene esta cuenta? Si son varios, antes de cobrar hay
+ * que preguntar CUÁL: 26 teléfonos del padrón tienen dos o tres, y pagar "el
+ * de la casa" cuando se quería pagar "el del local" deja al cliente cortado y
+ * su dinero en el contrato equivocado. Si Wisphub no contesta, se sigue como
+ * antes (uno solo): no se detiene el cobro por una consulta.
+ */
+async function serviciosDeLaCuenta(tel) {
+  try {
+    const h = await wisphubReactivar.serviciosDe(tel);
+    return (h.servicios || []).map((x) => ({
+      id: String(x.id_servicio || x.id || ''),
+      usuario: x.usuario || '',
+      etiqueta: [x.plan_internet && (x.plan_internet.nombre || x.plan_internet), x.direccion || x.colonia || x.localidad].filter(Boolean).join(' · ') || `Servicio ${x.id_servicio}`,
+      estado: x.estado || '',
+    })).filter((x) => x.id);
+  } catch (e) {
+    console.warn('[cobro] no se pudieron leer los servicios de', tel, '·', e.message);
+    return [];
+  }
+}
 
-async function montoACobrar(chatId, telefonoCuenta) {
+async function montoACobrar(chatId, telefonoCuenta, servicio = null) {
   // Normalmente la cuenta es la de quien escribe. Cuando alguien paga por otro,
-  // la cuenta es la de ese otro, y quien escribe solo pone la tarjeta.
+  // la cuenta es la de ese otro, y quien escribe solo pone la tarjeta. Si el
+  // teléfono tiene varios contratos, la deuda es la del que eligió.
   const tel = normalizePhone(telefonoCuenta || chatId);
   const c = wisphubClients.get(tel) || {};
   let monto = 0;
   let deTexto = '';
   try {
-    const d = await wisphubReactivar.deudaDelCliente(c.usuario || '');
+    const d = await wisphubReactivar.deudaDelCliente((servicio && servicio.usuario) || c.usuario || '');
     monto = d.total;
     deTexto = d.facturas.length > 1 ? ` (${d.facturas.length} mensualidades)` : '';
   } catch (e) {
@@ -6333,7 +6408,7 @@ app.post('/webhook/stripe', async (req, res) => {
            * como "pagó de más".
            */
           const mensualidad = Number(o.metadata.mensualidad || 0) / 100 || (o.amount_total || 0) / 100;
-          const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id });
+          const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id, idServicio: o.metadata.servicioId || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
             await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
@@ -6380,9 +6455,16 @@ app.post('/webhook/stripe', async (req, res) => {
     if (evento.type === 'customer_cash_balance_transaction.created' && o.type === 'funded') {
       const clienteId = String(o.customer || '');
       // De vuelta del cliente de Stripe al teléfono: el registro es el mapa.
+      // La clave puede traer el servicio (`tel~servicio`): esa CLABE es de UN
+      // contrato en particular, y así se abona sin adivinar.
       let telefono = '';
-      for (const [tel, datos] of stripeClientes) {
-        if (datos && datos.clienteId === clienteId) { telefono = tel; break; }
+      let servicioDelDeposito = '';
+      for (const [clave, datos] of stripeClientes) {
+        if (datos && datos.clienteId === clienteId) {
+          const partes = stripeLeon.partirClave(clave);
+          telefono = partes.tel; servicioDelDeposito = partes.servicioId || String(datos.servicioId || '');
+          break;
+        }
       }
       /*
        * Si el registro no lo conoce, PREGUNTARLE A STRIPE de quién es.
@@ -6400,7 +6482,9 @@ app.post('/webhook/stripe', async (req, res) => {
           const tel = String((c && c.metadata && c.metadata.telefono) || '').replace(/\D/g, '');
           if (tel) {
             telefono = tel;
-            const yaTiene = (stripeClientes.get(tel) || {}).clienteId;
+            servicioDelDeposito = String((c.metadata && c.metadata.servicioId) || '').replace(/\D/g, '');
+            const claveReg = stripeLeon.claveDeRegistro(tel, servicioDelDeposito);
+            const yaTiene = (stripeClientes.get(claveReg) || {}).clienteId;
             if (yaTiene && yaTiene !== clienteId) {
               /*
                * Ese teléfono YA tiene su cliente de Stripe, y no es este. El
@@ -6413,9 +6497,9 @@ app.post('/webhook/stripe', async (req, res) => {
               alertAdmin('stripe-leon',
                 `Entró dinero de ${tel} a un cliente de Stripe distinto del suyo (${clienteId} en vez de ${yaTiene}). Se le abonó igual y su CLABE NO se cambió, pero conviene revisar en Stripe por qué hay dos.`);
             } else {
-              stripeClientes.set(tel, { ...(stripeClientes.get(tel) || {}), clienteId });
+              stripeClientes.set(claveReg, { ...(stripeClientes.get(claveReg) || {}), clienteId, ...(servicioDelDeposito ? { servicioId: servicioDelDeposito } : {}) });
               schedulePersist();
-              console.warn('[stripe-leon] cliente recuperado de Stripe ·', clienteId, '→', tel);
+              console.warn('[stripe-leon] cliente recuperado de Stripe ·', clienteId, '→', claveReg);
             }
           }
         } catch (e) {
@@ -6507,7 +6591,7 @@ app.post('/webhook/stripe', async (req, res) => {
             `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado automáticamente, no hace falta comprobante. ¡Gracias! 🙌`);
         } catch (e) { console.error('[stripe-leon] no salió el aviso del depósito a', telefono, e.message); }
         try {
-          const w = await wisphubReactivar.aplicarPago({ telefono, monto: pesos, referencia: o.id });
+          const w = await wisphubReactivar.aplicarPago({ telefono, monto: pesos, referencia: o.id, idServicio: servicioDelDeposito || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado por depósito ·', telefono, '· tarea', w.tareaId);
             await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});

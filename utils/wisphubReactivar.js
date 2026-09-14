@@ -250,7 +250,7 @@ async function reactivarServicio(idServicio) {
  * salir aunque Wisphub esté caído. Que falle la reconexión es un problema; que
  * además se pierda el aviso del pago sería el doble de problema.
  */
-async function aplicarPago({ telefono, monto, referencia }) {
+async function aplicarPago({ telefono, monto, referencia, idServicio }) {
   const salida = { buscado: false, cliente: null, ambiguo: false, serviciosPosibles: [],
     facturasPendientes: 0, facturasSaldadas: 0,
     registroManual: [], deudaRestante: null, sobrante: 0, aFavor: false,
@@ -261,6 +261,18 @@ async function aplicarPago({ telefono, monto, referencia }) {
   try {
     const hallazgo = await serviciosDe(telefono);
     salida.buscado = true;
+    /*
+     * EL IDENTIFICADOR QUE QUITA LA DUDA.
+     *
+     * Cuando el pago trae el id del servicio (porque el cliente eligió cuál de
+     * sus servicios estaba pagando, o porque su CLABE es de ESE servicio), no
+     * hay nada que adivinar: se abona y se reactiva exactamente ese, aunque el
+     * teléfono tenga tres contratos. La ambigüedad solo aplica cuando el pago
+     * llegó sin decir cuál.
+     */
+    const elegido = idServicio ? hallazgo.servicios.find((x) => String(x.id_servicio) === String(idServicio)) : null;
+    if (idServicio && !elegido) salida.avisos.push(`El servicio ${idServicio} ya no aparece en ese teléfono; se aplica como antes`);
+    if (elegido) { hallazgo.servicios = [elegido]; hallazgo.ambiguo = false; salida.servicioElegido = elegido.id_servicio; }
     const c = hallazgo.servicios[0];
     if (!c) { salida.avisos.push(`No se encontró un cliente con el teléfono ${telefono}`); return salida; }
 

@@ -526,7 +526,7 @@ async function stripe(ruta, cuerpo, opciones = {}) {
  * sería silencioso y del peor tipo, porque los dos creerían que ya quedó.
  * `pagadoPor` es solo para el registro y para avisarle a quien pagó.
  */
-async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma }) {
+async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma, servicioId }) {
   const cuenta = cuentaConectada();
   if (!cuenta) throw new Error('Todavía no se ha dado de alta la cuenta a la que le cae el dinero');
   if (!cuentaLista()) throw new Error('La cuenta de cobro todavía no está aprobada por Stripe');
@@ -595,6 +595,8 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
     metadata: {
       telefono: String(telefono), pagadoPor: String(pagadoPor || telefono),
       tipo: 'mensualidad-leontelecom',
+      // El contrato exacto que se paga, cuando el teléfono tiene varios.
+      ...(servicioId ? { servicioId: String(servicioId) } : {}),
       // Con qué tarifa se cotizó, para poder cuadrar después.
       forma,
       // Para que el webhook sepa que hay que recordar la tarjeta de este cliente.
@@ -611,7 +613,7 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
       mensualidad: String(c.baseCentavos),
     },
     payment_intent_data: {
-      metadata: { telefono: String(telefono), pagadoPor: String(pagadoPor || telefono), tipo: 'mensualidad-leontelecom', forma },
+      metadata: { telefono: String(telefono), pagadoPor: String(pagadoPor || telefono), tipo: 'mensualidad-leontelecom', forma, ...(servicioId ? { servicioId: String(servicioId) } : {}) },
       description: `Mensualidad León Telecom · ${nombre || telefono}`,
       /*
        * Stripe transfiere a la cuenta conectada el total MENOS la comisión de
@@ -729,14 +731,33 @@ function clabeValida(c) {
   return /^\d{18}$/.test(String(c || ''));
 }
 
-async function clabeDelCliente({ telefono, nombre }) {
+/*
+ * UNA CLABE POR SERVICIO, NO POR TELÉFONO.
+ *
+ * 26 teléfonos del padrón tienen más de un contrato. Con una sola CLABE por
+ * teléfono, un depósito no dice cuál de los dos se está pagando y alguien lo
+ * tiene que adivinar. Con `servicioId`, la CLABE es de ESE servicio: quien
+ * deposite ahí está pagando ese contrato y ningún otro, aunque lo pague la
+ * abuela desde otro banco. La clave del registro y el cliente de Stripe llevan
+ * el servicio; sin `servicioId` todo sigue igual que antes (una por teléfono).
+ */
+function claveDeRegistro(tel, servicioId) {
+  return servicioId ? `${tel}~${String(servicioId).replace(/\D/g, '')}` : tel;
+}
+function partirClave(clave) {
+  const [tel, servicioId] = String(clave || '').split('~');
+  return { tel: tel || '', servicioId: servicioId || '' };
+}
+
+async function clabeDelCliente({ telefono, nombre, servicioId }) {
   if (!activo()) throw new Error('El cobro en línea está apagado');
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) throw new Error('Falta el teléfono');
+  const clave = claveDeRegistro(tel, servicioId);
 
-  if (_enVuelo.has(tel)) return _enVuelo.get(tel);
+  if (_enVuelo.has(clave)) return _enVuelo.get(clave);
   const trabajo = (async () => {
-    const guardado = await _registro.obtener(tel);
+    const guardado = await _registro.obtener(clave);
 
     /*
      * Si ya se le había entregado una CLABE, se devuelve ESA y no se le vuelve
@@ -752,8 +773,14 @@ async function clabeDelCliente({ telefono, nombre }) {
       // Respaldo: quizá el cliente ya existe en Stripe y lo que se perdió fue
       // el registro. Buscarlo evita crear un duplicado.
       try {
-        const busca = await stripe(`customers/search?query=${encodeURIComponent(`metadata['telefono']:'${tel}'`)}`);
-        clienteId = ((busca.data && busca.data[0]) || {}).id || null;
+        const consulta = servicioId
+          ? `metadata['telefono']:'${tel}' AND metadata['servicioId']:'${String(servicioId).replace(/\D/g, '')}'`
+          : `metadata['telefono']:'${tel}'`;
+        const busca = await stripe(`customers/search?query=${encodeURIComponent(consulta)}`);
+        // Sin servicio, solo sirve un cliente que tampoco tenga servicio: el de
+        // un servicio concreto no es "el del teléfono".
+        const candidatos = (busca.data || []).filter((c) => servicioId || !((c.metadata || {}).servicioId));
+        clienteId = (candidatos[0] || {}).id || null;
       } catch (e) {
         // Que la búsqueda falle no debe impedir cobrar: se sigue al alta.
         console.warn('[stripe-leon] no se pudo buscar el cliente', tel, '·', e.message);
@@ -763,10 +790,10 @@ async function clabeDelCliente({ telefono, nombre }) {
     if (!clienteId) {
       const creado = await stripe('customers', {
         name: nombre || tel,
-        metadata: { telefono: tel, origen: 'leontelecom' },
+        metadata: { telefono: tel, origen: 'leontelecom', ...(servicioId ? { servicioId: String(servicioId).replace(/\D/g, '') } : {}) },
       }, {
-        // Mismo teléfono = mismo cliente, aunque la petición se repita.
-        idempotencia: 'leon-cliente-' + tel,
+        // Mismo teléfono (y servicio) = mismo cliente, aunque la petición se repita.
+        idempotencia: 'leon-cliente-' + clave,
       });
       clienteId = creado.id;
     }
@@ -812,11 +839,12 @@ async function clabeDelCliente({ telefono, nombre }) {
       throw new Error('Stripe no devolvió una CLABE válida para ' + tel);
     }
 
-    await _registro.guardar(tel, datos);
+    if (servicioId) datos.servicioId = String(servicioId).replace(/\D/g, '');
+    await _registro.guardar(clave, datos);
     return datos;
-  })().finally(() => _enVuelo.delete(tel));
+  })().finally(() => _enVuelo.delete(clave));
 
-  _enVuelo.set(tel, trabajo);
+  _enVuelo.set(clave, trabajo);
   return trabajo;
 }
 
@@ -1098,6 +1126,7 @@ function verificarFirma(cuerpoCrudo, cabecera, secreto, toleranciaSeg = 300) {
 }
 
 module.exports = {
+  claveDeRegistro, partirClave,
   hayLlave, activo, permitido, usarRegistro, usarCuenta, usarPadron, usarPiloto,
   cuentaConectada, cuentaLista, crearCuentaConectada, enlaceOnboarding, estadoCuenta, olvidarCuenta,
   generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,

@@ -43,6 +43,7 @@ const B = '529512222222';   // Ana Pérez, suspendida; la cuenta que A va a paga
 const C = '529513333333';   // Ana Pérez Gómez: comparte nombre con B a propósito
 const D = '529514444444';   // fuera del piloto
 const E = '529515555555';   // Elena Cruz: sin deuda y sin precio de plan (no hay nada que cobrar)
+const F = '529516666666';   // Fermín Ortiz: DOS contratos con el mismo teléfono (casa y local)
 
 // ── WhatsApp de mentira: guarda lo que el bot manda ────────────────────────
 const enviados = [];   // { a, texto, botones: [{id,title}] }
@@ -65,7 +66,7 @@ const metaFalso = createServer((req, res) => {
 await new Promise((r) => metaFalso.listen(PUERTO_META, '127.0.0.1', r));
 
 // ── Stripe de mentira: la cuenta de León está lista y las sesiones se anotan ─
-const stripe = { sesiones: [] };
+const stripe = { sesiones: [], clientes: [] };
 const stripeFalso = createServer((req, res) => {
   let cuerpo = '';
   req.on('data', (c) => { cuerpo += c; });
@@ -90,6 +91,16 @@ const stripeFalso = createServer((req, res) => {
       return responder({ id: s.id, url: s.url });
     }
     if (req.url.startsWith('/v1/customers/search')) return responder({ data: [] });
+    if (req.url === '/v1/customers') {
+      const c = { id: 'cus_' + (stripe.clientes.length + 1), metadata: { telefono: p.get('metadata[telefono]'), servicioId: p.get('metadata[servicioId]') || '' } };
+      stripe.clientes.push(c);
+      return responder(c);
+    }
+    if (/^\/v1\/customers\/[^/]+\/funding_instructions/.test(req.url)) {
+      const id = req.url.split('/')[3];
+      const n = Number(id.replace('cus_', '')) || 1;
+      return responder({ bank_transfer: { financial_addresses: [{ spei: { clabe: String(646180100000000000 + n), bank_name: 'STP', reference: '1234' } }] } });
+    }
     responder({ error: { message: 'ruta falsa no implementada: ' + req.url } }, 404);
   });
 });
@@ -103,7 +114,14 @@ const wisphub = {
     [C]: { id_servicio: 103, usuario: 'clienteC', nombre: 'Ana', apellidos: 'Pérez Gómez', estado: 'Activo', telefono: C },
     [D]: { id_servicio: 104, usuario: 'clienteD', nombre: 'Diego', apellidos: 'Ruiz', estado: 'Suspendido', telefono: D },
   },
-  deuda: { clienteA: 300, clienteB: 440, clienteC: 0, clienteD: 350 },
+  // Un teléfono con DOS contratos: la casa (activa) y el local (suspendido).
+  extras: {
+    [F]: [
+      { id_servicio: 106, usuario: 'clienteF-casa', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Activo', telefono: F, direccion: 'Casa, Col. Centro', plan_internet: { nombre: 'Plan 20' } },
+      { id_servicio: 107, usuario: 'clienteF-local', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Suspendido', telefono: F, direccion: 'Local, Av. Juárez', plan_internet: { nombre: 'Plan 50' } },
+    ],
+  },
+  deuda: { clienteA: 300, clienteB: 440, clienteC: 0, clienteD: 350, 'clienteF-casa': 0, 'clienteF-local': 500 },
   activaciones: [],   // los servicios que se mandaron reactivar
   puts: 0,
 };
@@ -121,6 +139,8 @@ const wisphubFalso = createServer((req, res) => {
     if (u.pathname === '/api/clientes/') {
       const tel = (u.searchParams.get('telefono') || '').replace(/\D/g, '');
       if (!tel) return res.end(JSON.stringify({ count: 0, results: [] }));   // la sincronización: se queda la lista sembrada
+      const extra = Object.entries(wisphub.extras).find(([t]) => t.endsWith(tel.slice(-10)));
+      if (extra) return res.end(JSON.stringify({ count: extra[1].length, results: extra[1] }));
       const s = Object.values(wisphub.servicios).find((x) => x.telefono.endsWith(tel.slice(-10)));
       return res.end(JSON.stringify({ count: s ? 1 : 0, results: s ? [s] : [] }));
     }
@@ -153,6 +173,7 @@ fs.writeFileSync(RUTA_STORE, JSON.stringify({
     [C]: { usuario: 'clienteC', name: 'Ana Pérez Gómez', precioPlan: '350.00', status: 'Activo' },
     [D]: { usuario: 'clienteD', name: 'Diego Ruiz', precioPlan: '350.00', status: 'Suspendido' },
     [E]: { usuario: 'clienteE', name: 'Elena Cruz', precioPlan: '', status: 'Activo' },
+    [F]: { usuario: 'clienteF-casa', name: 'Fermín Ortiz', precioPlan: '300.00', status: 'Activo' },
   },
   wisphubClientesAl: new Date().toISOString(),
 }));
@@ -169,7 +190,7 @@ const srv = spawn('node', ['index.js'], {
     RATE_MAX: '1000',   // la prueba escribe más rápido que cualquier persona
     MONGODB_URI: '', DATABASE_URL: '',
     COBRO_LINEA_ACTIVO: 'true',
-    COBRO_LINEA_TELEFONOS: `${A},${B},${C}`,   // D queda fuera a propósito
+    COBRO_LINEA_TELEFONOS: `${A},${B},${C},${F}`,   // D queda fuera a propósito
     STRIPE_API_BASE: `http://127.0.0.1:${PUERTO_STRIPE}/v1/`,
     STRIPE_SECRET_KEY: 'sk_test_falsa',
     STRIPE_WEBHOOK_SECRET_LEON: SECRETO,
@@ -535,6 +556,60 @@ console.log('\n=== 9. "OTRO" NO SE ROBA LAS RESPUESTAS DE OTRA CONVERSACIÓN ===
   await entra(A, 'otro');
   const r = await respuestas(n, 1, 2500);
   es(!dice(r, /De quién es la cuenta/), 'a media conversación de un reporte, "otro" no abre el flujo de pagar por otro');
+}
+
+console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE PAGA ESE ===');
+{
+  let n = enviados.length;
+  await entra(F, 'pagar');
+  await respuestas(n);
+  n = enviados.length;
+  await toca(F, 'pago_tarjeta');
+  let r = await respuestas(n);
+  const bot = conBotones(r);
+  es(dice(r, /Tienes \*2 servicios\*/), 'antes de cotizar, le dice que tiene 2 servicios y pregunta cuál');
+  es(bot.botones.length === 2 && bot.botones.some((b) => /Local/.test(b.title)) && bot.botones.some((b) => /Casa/.test(b.title)), 'con un botón por contrato (casa y local)');
+  es(bot.botones.some((b) => /🔴/.test(b.title) && /Local/.test(b.title)), 'y el suspendido marcado en rojo');
+  const cual = bot.botones.findIndex((b) => /Local/.test(b.title));
+
+  n = enviados.length;
+  await toca(F, 'pago_servicio_' + cual);
+  r = await respuestas(n);
+  es(dice(r, /Tu mensualidad es de \*\$500\.00\*/), 'elige el local y se cotiza la deuda del LOCAL ($500), no la de la casa');
+
+  n = enviados.length;
+  const antes = stripe.sesiones.length;
+  await toca(F, 'pago_con_tarjeta');
+  r = await respuestas(n);
+  const s = stripe.sesiones[antes];
+  es(s && s.telefono === F, 'el link sale para su teléfono');
+  es(dice(r, /Servicio: Plan 50 · Local/), 'y el mensaje dice qué contrato está pagando');
+
+  const activacionesAntes = wisphub.activaciones.length;
+  await avisar({ ...sesionPagada(s), data: { object: { ...sesionPagada(s).data.object, metadata: { ...sesionPagada(s).data.object.metadata, servicioId: '107' } } } });
+  await respuestas(enviados.length, 2);
+  es(wisphub.activaciones.length === activacionesAntes + 1 && wisphub.activaciones.at(-1) === 107, 'al confirmarse, se reactiva el LOCAL (107) y no la casa (106)');
+}
+
+console.log('\n=== 11. Y LA CLABE ES DE UN CONTRATO, NO DEL TELÉFONO ===');
+{
+  await entra(F, 'menú'); await respuestas(enviados.length, 1, 1500);   // olvida el contrato que eligió antes
+  let n = enviados.length;
+  await entra(F, 'pagar');
+  await respuestas(n);
+  n = enviados.length;
+  await toca(F, 'pago_clabe');
+  let r = await respuestas(n);
+  if (!dice(r, /cada uno tiene su propia CLABE/)) console.log('    recibió:', JSON.stringify(r.map((m) => m.texto.slice(0, 160))));
+  es(dice(r, /cada uno tiene su propia CLABE/), 'al pedir la CLABE con dos contratos, se le explica que cada uno tiene la suya');
+  const cual = conBotones(r).botones.findIndex((b) => /Local/.test(b.title));
+  n = enviados.length;
+  await toca(F, 'pago_servicio_' + cual);
+  r = await respuestas(n);
+  es(dice(r, /6461801/), 'y sale la CLABE');
+  es(dice(r, /Tu mensualidad: \$500\.00/), 'con la deuda del LOCAL ($500), no la de la casa');
+  const cli = stripe.clientes.find((c) => c.metadata.telefono === F);
+  es(cli && cli.metadata.servicioId === '107', 'el cliente de Stripe de esa CLABE lleva el contrato (107): lo que caiga ahí es del local');
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);
