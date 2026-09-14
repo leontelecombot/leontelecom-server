@@ -113,7 +113,7 @@ await new Promise((r) => stripeFalso.listen(PUERTO_STRIPE, '127.0.0.1', r));
 
 // El padrón, como lo devuelve Wisphub. B, D y G tienen corte MAÑANA y deben.
 const PADRON = [
-  { id_servicio: 101, usuario: 'clienteA', nombre: 'Andrés', apellidos: 'López', estado: 'Suspendido', telefono: A, precio_plan: '300.00' },
+  { id_servicio: 101, usuario: 'clienteA', nombre: 'Andrés', apellidos: 'López', estado: 'Suspendido', telefono: A, precio_plan: '300.00', fecha_corte: MANANA },
   { id_servicio: 102, usuario: 'clienteB', nombre: 'Ana', apellidos: 'Pérez', estado: 'Suspendido', telefono: B, precio_plan: '440.00', fecha_corte: MANANA },
   { id_servicio: 103, usuario: 'clienteC', nombre: 'Ana', apellidos: 'Pérez Gómez', estado: 'Activo', telefono: C, precio_plan: '350.00' },
   { id_servicio: 104, usuario: 'clienteD', nombre: 'Diego', apellidos: 'Ruiz', estado: 'Suspendido', telefono: D, precio_plan: '350.00', fecha_corte: MANANA },
@@ -668,6 +668,27 @@ console.log('\n=== 11. Y LA CLABE ES DE UN CONTRATO, NO DEL TELÉFONO ===');
   es(cli && cli.metadata.servicioId === '107', 'el cliente de Stripe de esa CLABE lleva el contrato (107): lo que caiga ahí es del local');
 }
 
+console.log('\n=== 11b. SEIS MESES DE JALÓN ===');
+{
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(A, 'quiero pagar 6 meses');
+  let r = await respuestas(n);
+  es(dice(r, /Tu mensualidad es de \*\$1800\.00\* \(6 meses\)/), '"quiero pagar 6 meses" cotiza $1,800 (lo que debe + 5 meses de su plan de $300)');
+  n = enviados.length;
+  const antes = stripe.sesiones.length;
+  await toca(A, 'pago_con_tarjeta');
+  r = await respuestas(n);
+  const s = stripe.sesiones[antes];
+  es(s && s.mensualidad === '180000', 'el link lleva los $1,800 como mensualidad (sin el cargo)');
+  es(dice(r, /Mensualidad: \$1800\.00 \(6 meses\)/), 'y el mensaje lo dice claro');
+  // Se confirma el pago: queda cubierto y la oficina se entera.
+  const ev = sesionPagada(s); ev.data.object.metadata.meses = '6'; ev.data.object.amount_total = 180000 + 14400;
+  await avisar(ev);
+  await respuestas(enviados.length, 1, 3000);
+  // Que quedó cubierto se comprueba abajo: aunque su corte sea mañana, no le llega aviso.
+}
+
 console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN TIENE PRÓRROGA ===');
 {
   const ASESOR = '529519999999';
@@ -690,10 +711,11 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   const c = corrida.result || corrida;
   if (c.sent !== 1) console.log('    corrida:', JSON.stringify(corrida).slice(0, 300));
   es(c.sent === 1, `se manda UN aviso de corte (a Gloria, que sí debe) · enviados ${c.sent}`);
+  es(!r.some((m) => m.a === A), 'Andrés NO: pagó seis meses adelantados y está cubierto');
   es(r.some((m) => m.a === G), 'Gloria recibe el aviso');
   es(!r.some((m) => m.a === B), 'Ana Pérez NO: pagó por el bot hace un rato, aunque Wisphub todavía la tenga como deudora');
   es(!r.some((m) => m.a === D), 'Diego NO: tiene prórroga');
-  es(c.yaPagaron === 1 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagó, ${c.conProrroga} con prórroga`);
+  es(c.yaPagaron === 2 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagaron, ${c.conProrroga} con prórroga`);
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);

@@ -526,7 +526,7 @@ async function stripe(ruta, cuerpo, opciones = {}) {
  * sería silencioso y del peor tipo, porque los dos creerían que ya quedó.
  * `pagadoPor` es solo para el registro y para avisarle a quien pagó.
  */
-async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma, servicioId }) {
+async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma, servicioId, meses }) {
   const cuenta = cuentaConectada();
   if (!cuenta) throw new Error('Todavía no se ha dado de alta la cuenta a la que le cae el dinero');
   if (!cuentaLista()) throw new Error('La cuenta de cobro todavía no está aprobada por Stripe');
@@ -575,7 +575,7 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
           currency: 'mxn',
           unit_amount: c.baseCentavos,
           product_data: {
-            name: 'Mensualidad de internet · León Telecom',
+            name: (Number(meses) || 1) > 1 ? `Internet · ${Number(meses)} meses · León Telecom` : 'Mensualidad de internet · León Telecom',
             description: nombre ? `A nombre de ${nombre}` : undefined,
           },
         },
@@ -611,6 +611,8 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
        * de León Telecom.
        */
       mensualidad: String(c.baseCentavos),
+      // Cuántos meses cubre este pago (1 = solo el que toca).
+      meses: String(Math.max(1, Number(meses) || 1)),
     },
     payment_intent_data: {
       metadata: { telefono: String(telefono), pagadoPor: String(pagadoPor || telefono), tipo: 'mensualidad-leontelecom', forma, ...(servicioId ? { servicioId: String(servicioId) } : {}) },

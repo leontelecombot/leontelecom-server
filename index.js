@@ -3591,6 +3591,8 @@ function pagoRecienteDe(telefono) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
   const desde = Date.now() - CORTE_DIAS_PAGO_RECIENTE * 24 * 3600 * 1000;
+  const reg = stripeClientes.get(tel) || {};
+  if (reg.adelantadoHasta && reg.adelantadoHasta >= fechaLocalISO()) return { cuando: Date.now(), canal: `adelantado hasta ${reg.adelantadoHasta}` };
   const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && p.cuando >= desde);
   if (enLinea.length) { const u = enLinea[enLinea.length - 1]; return { cuando: u.cuando, canal: u.canal || 'en línea' }; }
   for (const c of caseLog) {
@@ -4323,6 +4325,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           pagadoPor: paraOtro ? normalizePhone(chatId) : undefined,
           // Con esto el webhook abona y reactiva ESE contrato, sin adivinar.
           servicioId: servicio ? servicio.servicioId : undefined,
+          meses: mesesEnSesion(chatId),
         });
         if (paraOtro) clearSession(chatId);
 
@@ -4501,7 +4504,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (_ses.state === 'pago_servicio_elegir' && /^pago_servicio_\d$/.test(_pt)) {
       const el = (_ses.data.servicios || [])[Number(_pt.slice(-1))];
       if (!el) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *pagar* para empezar de nuevo.'); return; }
-      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: _ses.data.pagarPara || '', servicioId: el.id, usuario: el.usuario, etiqueta: el.etiqueta, desde: Date.now() } });
+      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: _ses.data.pagarPara || '', servicioId: el.id, usuario: el.usuario, etiqueta: el.etiqueta, meses: _ses.data.meses || 1, desde: Date.now() } });
       return handleChatMessage(chatId, _ses.data.siguiente || (_ses.data.viaClabe ? 'pago_clabe' : 'pago_tarjeta'), sendMsg);
     }
     // Si acaba de mandar un comprobante y el bot le preguntó a nombre de quién
@@ -4577,6 +4580,21 @@ async function handleChatMessage(chatId, text, sendMsg) {
       setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
       return handleChatMessage(chatId, _aNombreDe.trim(), sendMsg);
     }
+    /*
+     * "3 meses", "pagar 6 meses", "adelantar dos meses": se guarda cuántos y
+     * se cotiza de una vez con el total. Solo en el piloto.
+     */
+    const _mesesTxt = _pt.match(/^(?:pagar|quiero pagar|adelantar|pago)?\s*(\d{1,2}|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s*mes(es)?(\s+(adelantad|por adelantado|de jal[oó]n|juntos).*)?[\s.!]*$/);
+    if (_mesesTxt && !_enOtraCosa && !_conComprobante
+        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+      const palabras = { dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12 };
+      const meses = Math.min(12, Math.max(1, palabras[_mesesTxt[1]] || Number(_mesesTxt[1]) || 1));
+      const previa = sesionDePagoAjeno(chatId);
+      const data = previa.state === 'pago_otro_listo' ? { ...previa.data } : {};
+      setSession(chatId, { state: 'pago_otro_listo', data: { ...data, pagarPara: data.pagarPara || '', meses, desde: Date.now() } });
+      if (meses === 1) return handleChatMessage(chatId, 'pagar', sendMsg);
+      return handleChatMessage(chatId, 'pago_tarjeta', sendMsg);
+    }
     if (/^(oficina|en la oficina|pagar en oficina|otras formas)[\s.!]*$/.test(_pt) && !_enOtraCosa) {
       return handleChatMessage(chatId, 'pago_otras', sendMsg);
     }
@@ -4639,7 +4657,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         encabezado + '¿Cómo quieres pagar? Toca una opción 👇'
         + (esPiloto
           ? '\n\n🏦 Transferencia: te doy una CLABE que es solo tuya.\n💳 Tarjeta: pagas desde tu teléfono.\n🏪 OXXO: te doy una ficha para pagar en caja.'
-            + '\n\nSi vas a pagar la cuenta de *alguien más*, escríbeme *a nombre de quién* está. Si prefieres pagar en la oficina, escribe *oficina*.'
+            + '\n\nSi vas a pagar la cuenta de *alguien más*, escríbeme *a nombre de quién* está. Si quieres adelantar varios meses, escribe cuántos (por ejemplo *3 meses*). Si prefieres pagar en la oficina, escribe *oficina*.'
           : ''),
         [], { buttons: botonesPago });
       return;
@@ -5940,6 +5958,11 @@ function cuentaAjena(chatId) {
  * El servicio que el cliente ya eligió, cuando su teléfono tiene varios.
  * Vive en la misma sesión que el pago por otro y caduca igual.
  */
+function mesesEnSesion(chatId) {
+  const ses = sesionDePagoAjeno(chatId);
+  const m = Number((ses.data || {}).meses || 0);
+  return ses.state === 'pago_otro_listo' && m > 1 ? Math.min(12, m) : 1;
+}
 function servicioEnSesion(chatId) {
   const ses = sesionDePagoAjeno(chatId);
   const d = ses.data || {};
@@ -5964,7 +5987,7 @@ async function preguntarContratoSiHayVarios(chatId, sendMsg, siguiente) {
   const tel = ajena || normalizePhone(chatId);
   const varios = await serviciosDeLaCuenta(tel);
   if (varios.length <= 1) return false;
-  setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajena, servicios: varios.slice(0, 3), siguiente, desde: Date.now() } });
+  setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajena, servicios: varios.slice(0, 3), siguiente, meses: mesesEnSesion(chatId), desde: Date.now() } });
   const deQuienEs = ajena ? `*${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* tiene` : 'Tienes';
   await sendMsg(chatId,
     `${deQuienEs} *${varios.length} servicios* con nosotros. ¿Cuál vas a pagar? 👇`
@@ -6004,6 +6027,18 @@ async function montoACobrar(chatId, telefonoCuenta, servicio = null) {
     console.warn('[stripe-leon] no se pudo leer la deuda de', tel, '·', e.message);
   }
   if (monto <= 0) { monto = parseFloat(c.precioPlan) || 0; deTexto = ''; }
+
+  /*
+   * MESES POR ADELANTADO. "Pago 6 meses de jalón" pasa más de lo que parece
+   * (gente que se va a trabajar fuera, o que cobra una vez al año). El monto
+   * es lo que debe hoy más los meses siguientes al precio de su plan.
+   */
+  const meses = mesesEnSesion(chatId);
+  if (meses > 1 && monto > 0) {
+    const precio = parseFloat(c.precioPlan) || monto;
+    monto = +(monto + (meses - 1) * precio).toFixed(2);
+    deTexto = ` (${meses} meses)`;
+  }
 
   if (monto <= 0) {
     const ajena = telefonoCuenta && normalizePhone(telefonoCuenta) !== normalizePhone(chatId);
@@ -6551,6 +6586,21 @@ app.post('/webhook/stripe', async (req, res) => {
            * como "pagó de más".
            */
           const mensualidad = Number(o.metadata.mensualidad || 0) / 100 || (o.amount_total || 0) / 100;
+          /*
+           * Pagó meses adelantados: se anota hasta cuándo, para que el aviso
+           * de corte no le llegue en esos meses, y se le dice a la oficina que
+           * registre los meses que vienen (Wisphub solo tiene la factura de hoy).
+           */
+          const mesesPagados = Number(o.metadata.meses || 1) || 1;
+          if (mesesPagados > 1) {
+            const w0 = wisphubClients.get(telefono) || {};
+            const base = parseFechaCorte(w0.fechaCorte) || fechaLocalISO();
+            const h = new Date(base + 'T12:00:00'); h.setMonth(h.getMonth() + (mesesPagados - 1));
+            const hasta = fechaLocalISO(h);
+            stripeClientes.set(telefono, { ...(stripeClientes.get(telefono) || {}), adelantadoHasta: hasta, adelantadoMeses: mesesPagados });
+            schedulePersist();
+            alertAdmin('meses-adelantados', `📅 ${w0.name || telefono} pagó *${mesesPagados} meses* de una vez ($${mensualidad.toFixed(2)}). Wisphub solo tiene la factura de este mes: hay que registrar los ${mesesPagados - 1} siguientes a mano. Queda cubierto hasta el ${hasta}.`);
+          }
           const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id, idServicio: o.metadata.servicioId || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
