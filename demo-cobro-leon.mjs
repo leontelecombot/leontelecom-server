@@ -157,9 +157,6 @@ a.volver{display:inline-block;margin-top:18px;font-size:13px;color:#6b3fa0}
   <div class="campo"><label>Información de la tarjeta</label><div class="inp">1234 1234 1234 1234 &nbsp; 💳</div></div>
   <div class="fila"><div class="campo"><div class="inp">MM / AA</div></div><div class="campo"><div class="inp">CVC</div></div></div>
   <div class="campo"><label>Nombre en la tarjeta</label><div class="inp">&nbsp;</div></div>
-  <div class="sep">otras formas de pago</div>
-  <div class="otro"><div class="ico" style="background:#e6203c">OXXO</div><div><b>OXXO</b> · efectivo en cualquier tienda<br><span style="color:#8792a2;font-size:12px">Se genera un voucher con referencia</span></div></div>
-  <div class="otro"><div class="ico" style="background:#0a7d34">SPEI</div><div><b>Transferencia SPEI</b> · desde tu banco<br><span style="color:#8792a2;font-size:12px">CLABE única; al llegar el dinero se confirma solo</span></div></div>
   <button class="pagar" onclick="location.href='/'">Pagar ${p(total)}</button>
   <p class="pie">Pago procesado de forma segura por Stripe</p>
  </div>
