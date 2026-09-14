@@ -7776,6 +7776,25 @@ app.post('/admin/api/cuenta-cobro', verifyAdminToken, requirePermission('reports
  * quién se le está ofreciendo, cuánta gente ya tiene su CLABE, y sobre todo si
  * hay dinero parado o pagos que se dieron la vuelta.
  */
+function describirAlcance(valor) {
+  const v = String(valor || '').trim();
+  if (!v) return 'solo el teléfono piloto';
+  if (v === '*') return `todos los clientes (${wisphubClients.size})`;
+  if (/^\d{1,3}\s*%$/.test(v)) {
+    const pct = parseInt(v, 10);
+    const cuantos = Math.round((pct / 100) * wisphubClients.size);
+    return `${pct}% del padrón · unos ${cuantos} clientes`;
+  }
+  if (/^\d{1,6}$/.test(v)) {
+    const meta = Number(v);
+    const total = wisphubClients.size;
+    if (meta >= total && total) return `todos los clientes (${total})`;
+    return `${meta} clientes${total ? ` de ${total}` : ''} · los que más batallan para pagar`;
+  }
+  const cuantos = v.split(',').filter((x) => x.replace(/\D/g, '')).length;
+  return `${cuantos} ${cuantos === 1 ? 'teléfono elegido' : 'teléfonos elegidos'} a mano`;
+}
+
 app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
   const alcance = (process.env.COBRO_LINEA_TELEFONOS || '').trim();
   const atorado = [...stripeSaldosRezagados.values()].reduce((a, r) => a + (Number(r.pesos) || 0), 0);
@@ -7791,7 +7810,14 @@ app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
     cuentaConectada: !!stripeLeon.cuentaConectada(),
     cuentaLista: stripeLeon.cuentaLista(),
     reactivacionActiva: wisphubReactivar.activo(),
-    alcance: alcance || 'solo el teléfono piloto',
+    /*
+     * El alcance en palabras, no en crudo.
+     *
+     * Decía "50" a secas, que se lee como 50 por ciento, o como 50 y quién
+     * sabe qué. Quien abre este tablero necesita entender a cuánta gente le
+     * está entrando dinero sin tener que acordarse de cómo se configura.
+     */
+    alcance: describirAlcance(alcance),
     conClabe: [...stripeClientes.values()].filter((d) => d && d.clienteId).length,
     rezagados: stripeSaldosRezagados.size,
     atorado: +atorado.toFixed(2),

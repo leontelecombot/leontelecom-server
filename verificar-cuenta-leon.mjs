@@ -422,6 +422,22 @@ console.log('\n=== 13. AL CLIENTE NO SE LE OFRECE LO QUE NO SE PUEDE CUMPLIR ===
      'y si aun así falla, no se le dice "intenta en un rato" a algo que no se va a arreglar solo');
 }
 
+console.log('\n=== 14. EL TABLERO DICE A CUÁNTA GENTE LE ESTÁ ENTRANDO DINERO ===');
+{
+  /*
+   * Decía "50" a secas, que se lee como 50 por ciento o como 50 y quién sabe
+   * qué. Quien abre ese tablero necesita entender a cuánta gente le está
+   * entrando dinero sin acordarse de cómo se configura.
+   */
+  const fs = await import('node:fs');
+  const servidor = fs.readFileSync('./index.js', 'utf8');
+  es(/function describirAlcance/.test(servidor), 'el alcance se traduce a palabras');
+  es(/alcance: describirAlcance\(alcance\)/.test(servidor), 'y es lo que se manda al tablero');
+  es(!/alcance: alcance \|\|/.test(servidor), 'ya no se manda el valor en crudo');
+  es(/los que más batallan para pagar/.test(servidor),
+     'y cuando es un número dice que son los que más lo necesitan');
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));
