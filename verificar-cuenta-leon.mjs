@@ -487,6 +487,22 @@ console.log('\n=== 16. "A MÍ NO ME SALE LA OPCIÓN" ===');
   es(/cobroEnLineaPorque/.test(panel), 'con el motivo cuando no le sale');
 }
 
+console.log('\n=== 17. EL PANEL NO SE CONTRADICE A SÍ MISMO ===');
+{
+  /*
+   * Se veía "Ya puede cobrar" arriba y "Falta que Stripe apruebe tu cuenta"
+   * justo debajo. Pasaba porque el tablero de abajo se pintaba antes de que la
+   * tarjeta de arriba refrescara lo que sabe el servidor. Un panel que se
+   * contradice a sí mismo hace dudar de todo lo demás que dice.
+   */
+  const fs = await import('node:fs');
+  const panel = fs.readFileSync('./public/admin-dashboard.html', 'utf8');
+  es(/loadCuentaCobro\(\)\.then\(loadCobroLinea\)/.test(panel),
+     'el tablero se pinta después de refrescar el estado de la cuenta');
+  es(!/loadCuentaCobro\(\); loadCobroLinea\(\);/.test(panel),
+     'y ya no se pintan a la vez, que era lo que los desincronizaba');
+}
+
 if (process.env.VER_PEDIDOS === '1') {
   console.log('\n--- lo que se le pidió a Stripe ---');
   for (const p of pedidos) console.log(' ', p.metodo, p.ruta, '·', decodeURIComponent(p.crudo || ''));

@@ -933,7 +933,14 @@
     else if(page==='soporte' && can('reports')){ loadTickets(); }
     else if(page==='avisos' && can('broadcast')){ loadScheduled(); loadHistory(); loadPromoBanner(); }
     else if(page==='clientes' && can('clients')){ loadClients(); if(can('wisphub')) loadWisphubStatus(); }
-    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro(); loadCobroLinea(); }
+    /*
+     * El orden importa: la tarjeta de la cuenta es la que le pregunta a Stripe
+     * y refresca lo que sabe el servidor. Si el tablero de abajo se pinta
+     * antes, lee lo anterior y puede decir "falta que Stripe apruebe tu cuenta"
+     * justo debajo de un "Ya puede cobrar". Un panel que se contradice a sí
+     * mismo hace dudar de todo lo demás que dice.
+     */
+    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro().then(loadCobroLinea); }
     else if(page==='cortes' && can('clients')){ loadCorteStats(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
