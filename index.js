@@ -3930,6 +3930,14 @@ function darProrroga(telefono, dias, por, motivo = '') {
 
 // Lo que se le dice al cliente cuando se le da (o se le ajusta) una prórroga,
 // se dé por WhatsApp o desde el panel: la misma frase en los dos lados.
+// "viernes 20/09/2026": con el día de la semana la fecha se entiende de un vistazo.
+function fechaConDia(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return String(iso || '');
+  const dia = new Intl.DateTimeFormat('es-MX', { weekday: 'long', timeZone: 'UTC' }).format(new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`));
+  return `${dia} ${m[3]}/${m[2]}/${m[1]}`;
+}
+
 const TEXTO_PRORROGA_NEGADA = '📅 Revisamos tu solicitud y por esta vez no podemos dar más tiempo: el servicio se suspende en tu fecha de corte si no hay pago. Puedes pagar por aquí en cualquier momento, escribe *pagar* y te muestro cómo. 🙏';
 
 // La solicitud deja de estar pendiente en cuanto alguien la resuelve (por WhatsApp o desde el panel).
@@ -3943,8 +3951,7 @@ function cerrarSolicitudProrroga(telefono, por = '') {
 }
 
 async function avisarProrroga(telefono, p) {
-  const [y, m, d] = String(p.hasta || '').split('-');
-  const hastaTxt = `${d}/${m}/${y}`;
+  const hastaTxt = fechaConDia(p.hasta);
   return avisarPorIniciativa(telefono, p.conAutomatico
     ? `📅 Listo, te dimos hasta el *${hastaTxt}*. Como tienes *cobro automático*, ese mes se cobra a tu tarjeta un día antes de que venza la prórroga (te aviso dos días antes), no en tu fecha de corte. Si prefieres pagar antes de otra forma, escribe *pagar*. 🙌`
     : `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
@@ -4030,7 +4037,8 @@ async function resumenCobranzaDiario(force = false, enviar = true) {
   const vencen = Object.entries(prorrogas).filter(([, p]) => p && p.hasta === manana).length;
   const rechazados = Object.entries(autoCobros).filter(([tel, log]) => (stripeClientes.get(tel) || {}).cobroAutomatico && Object.values(log || {}).some((per) => per && /^(rechazado|sin-tarjeta)$/.test(per.estado)) && !pagoRecienteDe(tel)).length;
   const sinRevisar = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').length;
-  const pedidas = Object.values(prorrogasPedidas).filter((x) => x && x.cuando).length;
+  const pedidasLista = Object.entries(prorrogasPedidas).filter(([, x]) => x && x.cuando).map(([tel, x]) => x.nombre || tel.replace(/^52/, ''));
+  const pedidas = pedidasLista.length;
   const desde = Date.now() - 86400000;
   let pagosBot = 0, montoBot = 0;
   for (const lista of stripePagosRecientes.values()) for (const p of lista || []) if (p && p.cuando >= desde) { pagosBot++; montoBot += Number(p.monto) || 0; }
@@ -4039,7 +4047,7 @@ async function resumenCobranzaDiario(force = false, enviar = true) {
     `• Cortan mañana y deben: ${debenManana}${nombres.length ? ` (${nombres.join(', ')}${debenManana > nombres.length ? '…' : ''})` : ''}`,
     `• Ya cubiertos para mañana: ${yaPagaron} pagaron, ${conProrroga} con prórroga, ${conAuto} con automático`,
     `• Prórrogas que vencen mañana: ${vencen}`,
-    pedidas ? `• Prórrogas pedidas sin responder: ${pedidas} (le llegaron al ${PRORROGA_WHATSAPP_NUMBER ? PRORROGA_WHATSAPP_NUMBER.replace(/^52/, '') : 'jefe'}; también en panel → Cobranza)` : '',
+    pedidas ? `• Prórrogas pedidas sin responder: ${pedidas} (${pedidasLista.slice(0, 5).join(', ')}${pedidas > 5 ? '…' : ''}; le llegaron al ${PRORROGA_WHATSAPP_NUMBER ? PRORROGA_WHATSAPP_NUMBER.replace(/^52/, '') : 'jefe'}, también en panel → Cobranza)` : '',
     `• Automáticos rechazados sin pagar: ${rechazados}`,
     `• Comprobantes sin revisar: ${sinRevisar}${sinRevisar ? ' (panel → Cobranza)' : ''}`,
     `• Pagos por el bot en 24 h: ${pagosBot} por $${montoBot.toFixed(2)}`,
@@ -5561,7 +5569,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (vistoC) monto = /^adelantado hasta /.test(vistoC.canal) ? ` ✅ Estás pagado hasta el *${vistoC.canal.slice(-10).split('-').reverse().join('/')}*.` : ` ✅ Ya tenemos tu pago de este mes (${canalTexto(vistoC.canal)}).`;
       else try { const cobro = await montoACobrar(chatId, ''); if (cobro.ok && clienteDebe(c)) monto = ` Tienes pendiente *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`; } catch (_) { /* sin monto */ }
       const prC = prorrogaVigente(telC);
-      const prTexto = prC ? `\n⏳ Tienes prórroga hasta el *${prC.hasta.split('-').reverse().join('/')}*: no se te corta antes.` : '';
+      const prTexto = prC ? `\n⏳ Tienes prórroga hasta el *${fechaConDia(prC.hasta)}*: no se te corta antes.` : '';
       await sendMsg(chatId,
         (suspendido ? '🔴 Tu servicio está *suspendido*.' : (corte ? `📅 Tu fecha de corte es el *${bonita}*.` : '📅 No tengo tu fecha de corte a la mano.'))
         + monto + prTexto
@@ -5784,7 +5792,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         // Con prórroga vigente, que sepa hasta cuándo tiene antes de elegir cómo pagar.
         const prMenu = !cuentaAjena(chatId) ? prorrogaVigente(normalizePhone(chatId)) : null;
         if (prMenu && !vistoMenu) {
-          encabezado += `⏳ Tienes prórroga hasta el *${prMenu.hasta.split('-').reverse().join('/')}*: no se te corta antes de esa fecha, y puedes pagar cuando quieras.\n\n`;
+          encabezado += `⏳ Tienes prórroga hasta el *${fechaConDia(prMenu.hasta)}*: no se te corta antes de esa fecha, y puedes pagar cuando quieras.\n\n`;
         }
         // Si se sabe cuánto debe, se le dice ANTES de preguntar cómo: es la
         // primera duda de cualquiera ("¿cuánto es?").
@@ -5845,7 +5853,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // Si ya tiene una prórroga, se le recuerda hasta cuándo; no se abre otro caso.
       const _prV = prorrogaVigente(normalizePhone(chatId));
       if (_prV) {
-        await sendMsg(chatId, `⏳ Ya tienes una prórroga hasta el *${_prV.hasta.split('-').reverse().join('/')}*: no se te corta antes de esa fecha. Si necesitas más días, escribe *asesor* y lo revisa una persona.`);
+        await sendMsg(chatId, `⏳ Ya tienes una prórroga hasta el *${fechaConDia(_prV.hasta)}*: no se te corta antes de esa fecha. Si necesitas más días, escribe *asesor* y lo revisa una persona.`);
         return;
       }
       // Si ya la pidió hace poco y nadie ha contestado, no se manda dos veces.

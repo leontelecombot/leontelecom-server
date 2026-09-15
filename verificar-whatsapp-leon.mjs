@@ -1022,7 +1022,7 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   n = enviados.length;
   await entra(D, '¿cuándo es mi corte?');
   r = await respuestas(n);
-  es(dice(r, /Tienes prórroga hasta el \*\d\d\/\d\d\/\d{4}\*/), '"¿cuándo es mi corte?" le dice hasta cuándo tiene prórroga');
+  es(dice(r, /Tienes prórroga hasta el \*(lunes|martes|miércoles|jueves|viernes|sábado|domingo) \d\d\/\d\d\/\d{4}\*/), '"¿cuándo es mi corte?" le dice hasta cuándo tiene prórroga');
   n = enviados.length;
   await entra(D, 'me dan chance de pagar hasta el lunes?');
   r = await respuestas(n);
@@ -1057,7 +1057,7 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   const acorta = await fetch(BASE + '/admin/api/prorrogas', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: D, dias: 1 }) }).then((x) => x.json());
   r = await respuestas(n, 1, 4000);
   es(acorta.ok && acorta.dias === 1, 'desde el panel se le deja la prórroga en 1 día');
-  es(acorta.avisado === true && r.some((m) => m.a === D && m.tipo === 'template' && /te dimos hasta el \*\d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'y a Diego le llega por plantilla la nueva fecha, igual que si se la diera el asesor por WhatsApp');
+  es(acorta.avisado === true && r.some((m) => m.a === D && m.tipo === 'template' && /te dimos hasta el \*(lunes|martes|miércoles|jueves|viernes|sábado|domingo) \d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'y a Diego le llega por plantilla la nueva fecha, igual que si se la diera el asesor por WhatsApp');
   n = enviados.length;
   const corrida2 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
   r = await respuestas(n, 1, 6000);
@@ -1463,7 +1463,7 @@ console.log('\n=== 19c. CON PRÓRROGA, EL AUTOMÁTICO SE COBRA UN DÍA ANTES DE 
   n = enviados.length;
   await entra(I, 'pagar');
   r = await respuestas(n);
-  es(dice(r, /Tienes prórroga hasta el \*\d\d\/\d\d\/\d{4}\*/) && dice(r, /¿Cómo quieres pagar\?/), 'y si escribe "pagar", el menú le recuerda hasta cuándo tiene prórroga antes de preguntar cómo');
+  es(dice(r, /Tienes prórroga hasta el \*(lunes|martes|miércoles|jueves|viernes|sábado|domingo) \d\d\/\d\d\/\d{4}\*/) && dice(r, /¿Cómo quieres pagar\?/), 'y si escribe "pagar", el menú le recuerda hasta cuándo tiene prórroga antes de preguntar cómo');
   // Se le deja la prórroga en 1 día: vence mañana, así que HOY se cobra.
   const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
   await fetch(BASE + '/admin/api/prorrogas', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I, dias: 1 }) });
@@ -1563,7 +1563,7 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   await toca(JEFE, sol.botones[0].id);
   r = await respuestas(n, 2);
   es(r.some((m) => m.a === JEFE && /Prórroga registrada para \*Elena Cruz\*/.test(m.texto) && /5 días/.test(m.texto)), 'con un toque queda la prórroga de 5 días, aunque quien decide no sea asesor');
-  es(r.some((m) => m.a === E && m.tipo === 'template' && /te dimos hasta el \*\d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'y a Elena le llega por plantilla hasta qué día tiene');
+  es(r.some((m) => m.a === E && m.tipo === 'template' && /te dimos hasta el \*(lunes|martes|miércoles|jueves|viernes|sábado|domingo) \d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'y a Elena le llega por plantilla hasta qué día tiene');
   pr = await fetch(BASE + '/admin/api/prorrogas', { headers: H_ }).then((x) => x.json());
   es(!(pr.pendientes || []).some((x) => x.telefono === E) && (pr.prorrogas || []).some((x) => x.telefono === E && /WhatsApp/.test(x.motivo)), 'en el panel ya no está pendiente y la prórroga dice que la pidió por WhatsApp');
   // Hugo también pide; esta vez se le niega con el botón y se le dice cómo pagar.
@@ -1586,7 +1586,7 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   // Mientras está pedida, cuenta en el resumen de cobranza y en "Hoy en cobranza".
   {
     const hoy = await fetch(BASE + '/admin/api/cobranza/resumen', { headers: H_ }).then((x) => x.json());
-    es(hoy.pedidas === 1 && /Prórrogas pedidas sin responder: 1/.test(hoy.texto) && /9516529988/.test(hoy.texto), 'el resumen de cobranza dice cuántas prórrogas pedidas siguen sin responder y a quién le llegaron');
+    es(hoy.pedidas === 1 && /Prórrogas pedidas sin responder: 1 \(Hugo Sáenz/.test(hoy.texto) && /9516529988/.test(hoy.texto), 'el resumen de cobranza dice cuántas prórrogas pedidas siguen sin responder, de quién y a quién le llegaron');
     // Tres horas después sin respuesta, al jefe se le recuerda una vez, por plantilla.
     n = enviados.length;
     const rec = await fetch(BASE + '/api/pruebas/prorroga-pedida-vieja', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H, horas: 4 }) }).then((x) => x.json());
