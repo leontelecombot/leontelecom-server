@@ -270,7 +270,7 @@ console.log('\n=== 6e. LA CLABE SOLO PARA CLIENTES DE VERDAD ===');
    * a ningún servicio: entra, no tiene dueño, y alguien lo devuelve a mano.
    */
   const fuente = await import('node:fs').then((fs) => fs.readFileSync('index.js', 'utf8'));
-  const bloque = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,6000}?\n    \}/) || [])[0] || '';
+  const bloque = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,9000}?\n    \}/) || [])[0] || '';
   bloque ? OK('se encuentra el manejador de la CLABE') : MAL('no se encontró');
 
   /if \(!c \|\| !c\.name\)/.test(bloque)
@@ -347,7 +347,7 @@ console.log('\n=== 8. TARJETA Y OXXO SE COTIZAN POR SEPARADO ===');
    */
   const fuente = await import('node:fs').then((fs) => fs.readFileSync('index.js', 'utf8'));
 
-  const cotiza = (fuente.match(/_pt === 'pago_tarjeta'[\s\S]{0,3000}?\n    \}/) || [])[0] || '';
+  const cotiza = (fuente.match(/_pt === 'pago_tarjeta'[\s\S]{0,5000}?\n    \}/) || [])[0] || '';
   cotiza ? OK('se encuentra el paso que cotiza las dos formas') : MAL('no se encontró');
 
   /calcularCargo\(cobro\.monto, 'tarjeta'\)/.test(cotiza) && /calcularCargo\(cobro\.monto, 'oxxo'\)/.test(cotiza)
@@ -357,7 +357,7 @@ console.log('\n=== 8. TARJETA Y OXXO SE COTIZAN POR SEPARADO ===');
   !/generarLinkPago/.test(cotiza)
     ? OK('y todavía NO genera ningún link: primero elige') : MAL('generó el link antes de preguntar');
 
-  const genera = (fuente.match(/_pt === 'pago_con_tarjeta' \|\| _pt === 'pago_con_oxxo'[\s\S]{0,5200}?\n    \}/) || [])[0] || '';
+  const genera = (fuente.match(/_pt === 'pago_con_tarjeta' \|\| _pt === 'pago_con_oxxo'[\s\S]{0,9000}?\n    \}/) || [])[0] || '';
   genera ? OK('se encuentra el paso que genera el link') : MAL('no se encontró');
   /forma = _pt === 'pago_con_oxxo' \? 'oxxo' : 'tarjeta'/.test(genera)
     ? OK('el link sale amarrado a lo que el cliente escogió') : MAL('no amarra la forma');
@@ -377,7 +377,7 @@ console.log('\n=== 8. TARJETA Y OXXO SE COTIZAN POR SEPARADO ===');
                    : MAL(sinForma.length + ' llamada(s) sin forma');
 
   // La tarifa de la CLABE también tiene que ser la suya, no la de tarjeta.
-  const clabe = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,6000}?\n    \}/) || [])[0] || '';
+  const clabe = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,9000}?\n    \}/) || [])[0] || '';
   /calcularCargo\(deuda, 'clabe'\)/.test(clabe)
     ? OK('y el mensaje de la CLABE cobra la tarifa de transferencia') : MAL('la CLABE no usa su tarifa');
 }
