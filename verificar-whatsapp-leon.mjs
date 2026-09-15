@@ -1129,7 +1129,7 @@ console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ==
   es(fgl.name && !fgl.contratos, 'Gloria buscada por nombre: sin lista de contratos, porque tiene uno');
   // La ficha trae los últimos movimientos: Diego pagó por comprobante ajeno y tiene prórroga; Andrés tiene pago y automático.
   const hd = Array.isArray(fd.historial) ? fd.historial : [];
-  es(hd.length >= 1 && hd.some((h) => h.tipo === 'prorroga' && /carro/.test(h.texto) && /hasta el \d{4}-\d\d-\d\d/.test(h.texto)), `Diego: la ficha trae su historial corto con la prórroga y el motivo (${hd.length} renglones)`);
+  es(hd.length >= 1 && hd.some((h) => h.tipo === 'prorroga' && /carro/.test(h.texto) && /hasta el \d\d\/\d\d\/\d{4}/.test(h.texto)), `Diego: la ficha trae su historial corto con la prórroga y el motivo (${hd.length} renglones)`);
   es(hd.length <= 5 && hd.every((h, i) => i === 0 || h.cuando <= hd[i - 1].cuando), 'y viene ordenado de lo más reciente a lo más viejo, máximo 5');
   es(Array.isArray(fa.historial) && fa.historial.some((h) => h.tipo === 'pago' && /Pagó \$/.test(h.texto)) && fa.historial.some((h) => h.tipo === 'automatico'), 'Andrés: la ficha trae en el historial su pago y lo que pasó con su automático');
 }

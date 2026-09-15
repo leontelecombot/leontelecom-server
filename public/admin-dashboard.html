@@ -661,7 +661,7 @@
     <div class="card-body">
       <div id="userAlert" class="alert"></div>
       <div style="margin-bottom:14px"><button class="btn btn-primary" style="width:auto;padding:11px 18px" onclick="openUserModal()">➕ Nuevo usuario</button></div>
-      <div id="usersList"></div>
+      <div id="usersList" style="overflow-x:auto"></div>
     </div>
   </div>
 </div>
@@ -1719,7 +1719,8 @@
       const d = await r.json();
       const lista = d.prorrogas || [];
       if(!lista.length){ caja.innerHTML = '<div class="empty">Nadie tiene prórroga ahorita.</div>'; return; }
-      caja.innerHTML = '<table class="data-table"><thead><tr><th>Cliente</th><th>Hasta</th><th>Quién la dio</th><th>Motivo</th><th></th></tr></thead><tbody>'
+      // En celular la tabla se desplaza de lado dentro de su caja; sin esto, la ✕ de quitar quedaba fuera de la pantalla.
+      caja.innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Cliente</th><th>Hasta</th><th>Quién la dio</th><th>Motivo</th><th></th></tr></thead><tbody>'
         + lista.map(p => {
           const [y,m,dd] = String(p.hasta).split('-');
           // De un vistazo: cuánto le queda, si ya pagó y si ya se le recordó.
@@ -1733,7 +1734,7 @@
             <td>${dd}/${m}/${y}<br><span style="color:var(--muted);font-size:.85em">${cuando}</span></td>
             <td>${esc(p.porTexto || p.por || '')}</td><td>${esc(p.motivo || '')}</td>
             <td style="text-align:right"><button class="btn btn-danger btn-sm" onclick="quitarProrroga('${esc(p.telefono)}')" title="Quitar la prórroga">✕</button></td></tr>`;
-        }).join('') + '</tbody></table>';
+        }).join('') + '</tbody></table></div>';
     }catch(e){ caja.innerHTML = '<div class="empty">No se pudieron cargar las prórrogas.</div>'; }
   }
   async function mandarEstadoCuenta(tel, btn){
@@ -1856,7 +1857,7 @@
 
       const atorado = Number(e.atorado||0);
       let html = `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-          <button class="btn btn-primary" style="width:auto;padding:10px 16px" onclick="barrerSaldos()" id="clBarrerBtn">
+          <button class="btn btn-primary" style="width:auto;max-width:100%;padding:10px 16px;white-space:normal" onclick="barrerSaldos()" id="clBarrerBtn">
             🔎 Buscar dinero atorado y moverlo ahora</button>
           <span style="font-size:.82em;color:var(--muted)">se hace solo cada 10 minutos; esto es para no esperar</span>
         </div>`;

@@ -8789,10 +8789,11 @@ function historialDe(telefono, maximo = 5) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return [];
   const filas = [];
+  const ddmm = (iso) => /^\d{4}-\d{2}-\d{2}$/.test(String(iso || '')) ? iso.split('-').reverse().join('/') : String(iso || '');
   for (const p of stripePagosRecientes.get(tel) || []) {
     if (!p || !p.cuando) continue;
     filas.push({ cuando: new Date(p.cuando).toISOString(), tipo: 'pago',
-      texto: `Pagó $${(Number(p.monto) || 0).toFixed(2)} por ${p.canal || 'el bot'}` + (p.pagadoPor ? ` (lo hizo el ${p.pagadoPor})` : '') + (p.cubreHasta ? ` · cubre hasta el ${p.cubreHasta}` : '') });
+      texto: `Pagó $${(Number(p.monto) || 0).toFixed(2)} por ${p.canal || 'el bot'}` + (p.pagadoPor ? ` (lo hizo el ${p.pagadoPor})` : '') + (p.cubreHasta ? ` · cubre hasta el ${ddmm(p.cubreHasta)}` : '') });
   }
   const nombresCaso = { pago: 'Comprobante', 'estado-cuenta': 'Estado de cuenta', asesor: 'Pidió asesor', emergencia: 'Emergencia', imagen: 'Mandó imagen' };
   for (const c of caseLog) {
@@ -8806,11 +8807,11 @@ function historialDe(telefono, maximo = 5) {
     filas.push({ cuando: c.ts, tipo: c.type || 'otro', texto: encabezado + ': ' + String(c.resumen || '').slice(0, 120) + estado });
   }
   const pr = prorrogas[tel];
-  if (pr && pr.cuando) filas.push({ cuando: pr.cuando, tipo: 'prorroga', texto: `Prórroga de ${pr.dias} día(s) hasta el ${pr.hasta}` + (pr.por ? ` (la dio ${pr.por})` : '') + (pr.motivo ? ` · ${pr.motivo}` : '') });
+  if (pr && pr.cuando) filas.push({ cuando: pr.cuando, tipo: 'prorroga', texto: `Prórroga de ${pr.dias} día(s) hasta el ${ddmm(pr.hasta)}` + (pr.por ? ` (la dio ${pr.por})` : '') + (pr.motivo ? ` · ${pr.motivo}` : '') });
   for (const [corte, per] of Object.entries(autoCobros[tel] || {})) {
     if (!per || !per.cuando || !per.estado) continue;
     const textos = { cobrado: 'se cobró', rechazado: 'tarjeta rechazada', 'sin-tarjeta': 'sin tarjeta guardada', 'ya-pago': 'ya había pagado', 'sin-deuda': 'sin deuda', 'en-proceso': 'en proceso' };
-    filas.push({ cuando: per.cuando, tipo: 'automatico', texto: `Cobro automático del corte ${corte}: ${textos[per.estado] || per.estado}` + (per.motivo ? ` · ${per.motivo}` : '') });
+    filas.push({ cuando: per.cuando, tipo: 'automatico', texto: `Cobro automático del corte ${ddmm(corte)}: ${textos[per.estado] || per.estado}` + (per.motivo ? ` · ${per.motivo}` : '') });
   }
   return filas.filter((f) => f.cuando).sort((a, b) => String(b.cuando).localeCompare(String(a.cuando))).slice(0, maximo);
 }
