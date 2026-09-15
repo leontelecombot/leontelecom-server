@@ -1414,7 +1414,10 @@ console.log('\n=== 19c. CON PRÓRROGA, EL AUTOMÁTICO SE COBRA UN DÍA ANTES DE 
   const h2 = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
   r = await respuestas(n, 1, 4000);
   es(h2.cobrados === 1 && stripe.cobros.length === cobrosAntes + 1 && r.some((m) => m.a === I && /Se cobró tu mensualidad/.test(m.texto)), 'cuando la prórroga vence mañana, hoy sí se cobra a la tarjeta (un día antes de que venza)');
-  await fetch(BASE + '/admin/api/prorrogas/' + I, { method: 'DELETE', headers: { Authorization: 'Bearer ' + login.token } });
+  n = enviados.length;
+  const quitada = await fetch(BASE + '/admin/api/prorrogas/' + I, { method: 'DELETE', headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+  r = await respuestas(n, 1, 4000);
+  es(quitada.habia === true && quitada.avisado === true && r.some((m) => m.a === I && m.tipo === 'template' && /retiró la prórroga/.test(m.texto) && /\*\d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'si la oficina quita la prórroga, a Inés le llega por plantilla y con su fecha de pago de siempre');
 }
 
 console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO" ===');

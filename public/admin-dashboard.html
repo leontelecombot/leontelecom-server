@@ -1735,8 +1735,12 @@
     }catch(e){ showAlert('prAlert','No se pudo dar la prórroga.','error'); }
   }
   async function quitarProrroga(tel){
-    if(!confirm('¿Quitar la prórroga? El aviso de corte le volverá a salir cuando toque.')) return;
-    try{ await fetchAuth('/admin/api/prorrogas/'+encodeURIComponent(tel), { method:'DELETE' }); loadProrrogas(); }catch(e){}
+    if(!confirm('¿Quitar la prórroga? Se le avisa al cliente por WhatsApp y el aviso de corte le volverá a salir cuando toque.')) return;
+    try{
+      const d = await (await fetchAuth('/admin/api/prorrogas/'+encodeURIComponent(tel), { method:'DELETE' })).json();
+      showAlert('prAlert', d.avisado ? 'Prórroga quitada. Ya se le avisó al cliente.' : 'Prórroga quitada (no se le pudo avisar por WhatsApp).', 'success');
+      loadProrrogas();
+    }catch(e){ showAlert('prAlert','No se pudo quitar la prórroga.','error'); }
   }
 
   async function loadCobroLinea(){

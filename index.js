@@ -6686,12 +6686,21 @@ app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'),
   }
   res.json({ ok: true, telefono: tel, avisado, ...p });
 });
-app.delete('/admin/api/prorrogas/:telefono', verifyAdminToken, requirePermission('clients'), (req, res) => {
+app.delete('/admin/api/prorrogas/:telefono', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const tel = normalizePhone(String(req.params.telefono || ''));
   const habia = !!prorrogas[tel];
   delete prorrogas[tel];
   schedulePersist();
-  res.json({ ok: true, habia });
+  // Quitarla sin decirle es dejarlo creer que tiene días que ya no tiene.
+  let avisado = false;
+  if (habia && !String(req.query.sinAviso || '') && wisphubClients.has(tel)) {
+    const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte);
+    try {
+      await avisarPorIniciativa(tel, `📅 La oficina retiró la prórroga que tenías. Tu fecha de pago vuelve a ser la de siempre${corte ? ` (*${corte.split('-').reverse().join('/')}*)` : ''}. Si tienes duda, escribe *asesor*; para pagar, escribe *pagar*. 🙏`);
+      avisado = true;
+    } catch (e) { console.warn('[prorroga] no se pudo avisar que se quitó a', tel, '·', e.message); }
+  }
+  res.json({ ok: true, habia, avisado });
 });
 
 app.get('/api/cuenta-cobro/estado', async (_req, res) => {
