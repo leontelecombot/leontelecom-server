@@ -6960,6 +6960,51 @@ app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'),
   }
   res.json({ ok: true, telefono: tel, avisado, ...p });
 });
+/*
+ * EXPORTAR A CSV: prórrogas (vigentes y pedidas), comprobantes y pagos por el bot.
+ *
+ * La oficina concilia contra Wisphub y contra el banco en Excel; sin esto
+ * copiaba a mano de la pantalla. Con BOM para que Excel abra los acentos bien.
+ */
+function enviarCsv(res, nombre, columnas, filas) {
+  const celda = (v) => { const t = v == null ? '' : String(v); return /[",\n;]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const cuerpo = [columnas.map(celda).join(','), ...filas.map((f) => columnas.map((c) => celda(f[c])).join(','))].join('\r\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${nombre}-${fechaLocalISO()}.csv"`);
+  res.send('\ufeff' + cuerpo);
+}
+app.get('/admin/api/exportar/prorrogas.csv', verifyAdminToken, (_req, res) => {
+  const hoy = fechaLocalISO();
+  const filas = [];
+  for (const [tel, p] of Object.entries(prorrogas)) {
+    if (!p || !p.hasta) continue;
+    filas.push({ tipo: p.hasta >= hoy ? 'vigente' : 'vencida', telefono: tel.replace(/^52/, ''), nombre: (wisphubClients.get(tel) || {}).name || '', hasta: p.hasta, dias: p.dias || '', por: p.por || '', cuando: p.cuando ? String(p.cuando).slice(0, 16).replace('T', ' ') : '', motivo: p.motivo || '', yaPago: pagoRecienteDe(tel) ? 'sí' : 'no' });
+  }
+  for (const [tel, x] of Object.entries(prorrogasPedidas)) {
+    if (!x || !x.cuando) continue;
+    filas.push({ tipo: 'pedida sin responder', telefono: tel.replace(/^52/, ''), nombre: x.nombre || (wisphubClients.get(tel) || {}).name || '', hasta: '', dias: x.dias || '', por: '', cuando: new Date(x.cuando).toISOString().slice(0, 16).replace('T', ' '), motivo: x.texto || '', yaPago: pagoRecienteDe(tel) ? 'sí' : 'no' });
+  }
+  filas.sort((a, b) => String(b.cuando).localeCompare(String(a.cuando)));
+  enviarCsv(res, 'prorrogas', ['tipo', 'telefono', 'nombre', 'hasta', 'dias', 'por', 'cuando', 'motivo', 'yaPago'], filas);
+});
+app.get('/admin/api/exportar/comprobantes.csv', verifyAdminToken, (_req, res) => {
+  const filas = caseLog.filter((c) => c && c.type === 'pago').map((c) => ({
+    fecha: String(c.ts || '').slice(0, 16).replace('T', ' '), telefono: String(c.clientId || '').replace(/^52/, ''), nombre: c.name || '', estado: c.status || '',
+    servicio: c.servicioId || '', cubreHasta: c.cubreHasta || '', porAgente: c.porAgente || '', resumen: c.resumen || '', archivo: c.imageUrl || c.docUrl || '' }));
+  enviarCsv(res, 'comprobantes', ['fecha', 'telefono', 'nombre', 'estado', 'servicio', 'cubreHasta', 'porAgente', 'resumen', 'archivo'], filas);
+});
+app.get('/admin/api/exportar/pagos.csv', verifyAdminToken, (_req, res) => {
+  const filas = [];
+  for (const [tel, lista] of stripePagosRecientes) {
+    for (const p of lista || []) {
+      if (!p || !p.cuando) continue;
+      filas.push({ fecha: new Date(p.cuando).toISOString().slice(0, 16).replace('T', ' '), telefono: tel.replace(/^52/, ''), nombre: (wisphubClients.get(tel) || {}).name || '', monto: (Number(p.monto) || 0).toFixed(2), via: p.canal || '', pagadoPor: p.pagadoPor ? String(p.pagadoPor).replace(/^52/, '') : '', cubreHasta: p.cubreHasta || '', servicio: p.servicioId || '', referencia: p.ref || '' });
+    }
+  }
+  filas.sort((a, b) => b.fecha.localeCompare(a.fecha));
+  enviarCsv(res, 'pagos-bot', ['fecha', 'telefono', 'nombre', 'monto', 'via', 'pagadoPor', 'cubreHasta', 'servicio', 'referencia'], filas);
+});
+
 // Negar desde el panel una prórroga pedida por WhatsApp: se le avisa al cliente cómo pagar.
 app.post('/admin/api/prorrogas/negar', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const tel = normalizePhone(String((req.body || {}).telefono || ''));

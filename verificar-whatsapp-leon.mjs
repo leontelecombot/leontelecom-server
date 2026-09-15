@@ -1610,6 +1610,22 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
     es(malSi.length === 0, `${si.length} formas de pedir tiempo se entienden` + (malSi.length ? ' · fallan: ' + malSi.join(' | ') : ''));
     es(malNo.length === 0, `${no.length} frases que NO piden tiempo no se confunden` + (malNo.length ? ' · fallan: ' + malNo.join(' | ') : ''));
   }
+  // Los CSV del panel: prórrogas (vigentes y pedidas), comprobantes y pagos por el bot.
+  {
+    const csv = async (cual) => { const r = await fetch(BASE + '/admin/api/exportar/' + cual + '.csv?token=' + encodeURIComponent(login.token)); return { st: r.status, tipo: r.headers.get('content-type') || '', nombre: r.headers.get('content-disposition') || '', texto: await r.text() }; };
+    const pr_ = await csv('prorrogas');
+    const filasPr = pr_.texto.replace(/^\ufeff/, '').split('\r\n');
+    es(pr_.st === 200 && /text\/csv/.test(pr_.tipo) && /prorrogas-\d{4}-\d\d-\d\d\.csv/.test(pr_.nombre) && filasPr[0] === 'tipo,telefono,nombre,hasta,dias,por,cuando,motivo,yaPago', 'el CSV de prórrogas baja con nombre con fecha y sus columnas');
+    es(filasPr.some((l) => /^vigente,9515555555,Elena Cruz,\d{4}-\d\d-\d\d,5,/.test(l)) && filasPr.some((l) => /^vigente,9514444444,Diego Ruiz,/.test(l) && /se le descompuso el carro/.test(l)), 'trae la de Elena (5 días) y la de Diego con su motivo');
+    const co = await csv('comprobantes');
+    const filasCo = co.texto.replace(/^\ufeff/, '').split('\r\n');
+    es(co.st === 200 && filasCo[0] === 'fecha,telefono,nombre,estado,servicio,cubreHasta,porAgente,resumen,archivo' && filasCo.some((l) => /,9518888888,.*,recibido,/.test(l)), 'el CSV de comprobantes trae el de Hugo como recibido');
+    const pg = await csv('pagos');
+    const filasPg = pg.texto.replace(/^\ufeff/, '').split('\r\n');
+    es(pg.st === 200 && filasPg[0] === 'fecha,telefono,nombre,monto,via,pagadoPor,cubreHasta,servicio,referencia' && filasPg.some((l) => /^\d{4}-\d\d-\d\d \d\d:\d\d,9512222222,Ana Pérez,450\.00,tarjeta,9511111111,\d{4}-\d\d-\d\d,/.test(l)), 'el CSV de pagos trae el de Ana pagado por Andrés con monto, vía, quién pagó y hasta cuándo cubre');
+    const sinToken = await fetch(BASE + '/admin/api/exportar/pagos.csv');
+    es(sinToken.status === 401, 'sin sesión no se baja nada');
+  }
   // La ayuda del asesor menciona NO PRORROGA.
   n = enviados.length;
   await entra(ASESOR, 'ayuda');
