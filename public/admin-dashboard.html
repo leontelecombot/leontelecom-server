@@ -513,9 +513,9 @@
       <div class="card-body">
         <div id="prAlert" class="alert"></div>
         <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
-          Cuando un cliente pide más tiempo, dale plazo aquí (o el asesor por WhatsApp con
-          <code>PRORROGA 9511234567 3</code>). Al cliente le llega hasta cuándo tiene, y el
-          <b>aviso de corte no le sale</b> hasta que venza.
+          Cuando un cliente pide más tiempo por WhatsApp, la solicitud le llega <b>solo a quien decide</b>
+          (<span id="prQuien">…</span>) con botones para resolverla de un toque. También se puede resolver aquí.
+          Al cliente le llega hasta cuándo tiene, y el <b>aviso de corte no le sale</b> hasta que venza.
         </p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
           <div><label style="font-size:.78em;color:var(--muted)">Teléfono</label><br><input id="prTel" placeholder="951 123 4567" style="width:150px"></div>
@@ -1718,9 +1718,23 @@
       const r = await fetchAuth('/admin/api/prorrogas');
       const d = await r.json();
       const lista = d.prorrogas || [];
-      if(!lista.length){ caja.innerHTML = '<div class="empty">Nadie tiene prórroga ahorita.</div>'; return; }
+      const q = document.getElementById('prQuien'); if(q) q.textContent = d.quienDecide ? ('WhatsApp ' + d.quienDecide.replace(/(\d{3})(\d{3})(\d{4})$/, '$1 $2 $3')) : 'todos los asesores';
+      // Pedidas por WhatsApp y sin responder: se resuelven aquí con un toque.
+      const pend = d.pendientes || [];
+      const htmlPend = pend.length
+        ? '<div style="background:#fff7e6;border:1px solid #fde4b5;border-radius:10px;padding:10px 12px;margin-bottom:12px"><div style="font-weight:600;margin-bottom:6px">📨 Pedidas por WhatsApp, sin responder (' + pend.length + ')</div>'
+          + pend.map(x => `<div style="padding:8px 0;border-top:1px solid #fde4b5">
+              <div style="margin-bottom:6px"><b>${esc(x.nombre || x.telefono)}</b> <span style="color:var(--muted);font-size:.85em">${esc(x.telefono)} · ${esc(fechaCorta(x.cuando))}</span><br><span style="font-size:.88em">"${esc(x.texto)}"${x.dias ? ' · pide ' + x.dias + ' días' : ''}</span></div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-primary btn-sm" style="width:auto" onclick="resolverPedida('${esc(x.telefono)}',${x.dias || 3},this)">✅ Dar ${x.dias || 3} días</button>
+              <button class="btn btn-edit btn-sm" style="width:auto" onclick="resolverPedida('${esc(x.telefono)}',${(x.dias || 3) === 3 ? 5 : 3},this)">📅 Dar ${(x.dias || 3) === 3 ? 5 : 3} días</button>
+              <button class="btn btn-danger btn-sm" style="width:auto" onclick="resolverPedida('${esc(x.telefono)}',0,this)">❌ No dar</button>
+              </div>
+            </div>`).join('') + '</div>'
+        : '';
+      if(!lista.length){ caja.innerHTML = htmlPend + '<div class="empty">Nadie tiene prórroga ahorita.</div>'; return; }
       // En celular la tabla se desplaza de lado dentro de su caja; sin esto, la ✕ de quitar quedaba fuera de la pantalla.
-      caja.innerHTML = '<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Cliente</th><th>Hasta</th><th>Quién la dio</th><th>Motivo</th><th></th></tr></thead><tbody>'
+      caja.innerHTML = htmlPend + '<div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Cliente</th><th>Hasta</th><th>Quién la dio</th><th>Motivo</th><th></th></tr></thead><tbody>'
         + lista.map(p => {
           const [y,m,dd] = String(p.hasta).split('-');
           // De un vistazo: cuánto le queda, si ya pagó y si ya se le recordó.
@@ -1779,6 +1793,19 @@
       showAlert('prAlert', d.enviados ? `Resumen enviado a ${d.enviados} asesor(es): ${d.debenManana} deben mañana, ${d.sinRevisar} comprobantes sin revisar.` : 'No se pudo mandar (¿números de asesor o plantilla sin configurar?).', d.enviados ? 'success' : 'error');
     }catch(e){ showAlert('prAlert','No se pudo mandar el resumen.','error'); }
     if(btn){ btn.disabled = false; btn.textContent = '📋 Resumen de cobranza ahora'; }
+  }
+  // Resolver de un toque una prórroga pedida por WhatsApp: dar N días o negarla.
+  async function resolverPedida(telefono, dias, btn){
+    if(btn){ btn.disabled = true; }
+    try{
+      const r = dias > 0
+        ? await fetchAuth('/admin/api/prorrogas', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ telefono, dias, motivo: 'la pidió por WhatsApp' }) })
+        : await fetchAuth('/admin/api/prorrogas/negar', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ telefono }) });
+      const d = await r.json();
+      if(!r.ok){ showAlert('prAlert', d.error || 'No se pudo resolver.', 'error'); if(btn) btn.disabled = false; return; }
+      showAlert('prAlert', dias > 0 ? `Prórroga de ${dias} días dada.${d.avisado ? ' Ya se le avisó por WhatsApp.' : ''}` : `Prórroga negada.${d.avisado ? ' Ya se le avisó cómo pagar.' : ' (No se le pudo avisar por WhatsApp.)'}`, 'success');
+      loadProrrogas();
+    }catch(e){ showAlert('prAlert','No se pudo resolver.','error'); if(btn) btn.disabled = false; }
   }
   async function darProrroga(){
     const telefono = document.getElementById('prTel').value.trim();

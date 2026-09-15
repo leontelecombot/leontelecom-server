@@ -112,6 +112,15 @@ const AGENT_WHATSAPP_NUMBERS = [...new Set(
 )];
 const AGENT_WHATSAPP_NUMBER = AGENT_WHATSAPP_NUMBERS[0] || '';
 function isAgentNumber(n) { const x = _normAgentNum(n); return !!x && AGENT_WHATSAPP_NUMBERS.includes(x); }
+/*
+ * QUIÉN DECIDE LAS PRÓRROGAS. Dar plazo es decisión de una sola persona, no
+ * de todos los asesores: las solicitudes se le mandan SOLO a este número, con
+ * botones para resolverlas de un toque (dar 3 días, dar 5, no dar). Ese número
+ * no necesita ser asesor: sus respuestas de prórroga se aceptan igual.
+ */
+const PRORROGA_WHATSAPP_NUMBER = _normAgentNum(process.env.PRORROGA_WHATSAPP_NUMBER || '9516529988');
+function esQuienApruebaProrrogas(n) { const x = _normAgentNum(n); return !!x && x === PRORROGA_WHATSAPP_NUMBER; }
+function esRespuestaDeProrroga(text) { return /^\s*(NO\s+)?PR[OÓ]RROGA\b/i.test(String(text || '')); }
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'leon123'; // Change in production!
 // Secreto para firmar los tokens del panel. Si no se define, se deriva de la
 // contraseña (estable entre reinicios). Definir ADMIN_SECRET en Render es lo ideal.
@@ -468,6 +477,8 @@ let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (ev
  * hasta que venza.
  */
 let prorrogas = {};         // telefono → { hasta: 'YYYY-MM-DD', por, cuando, motivo }
+// Solicitudes que ya se le mandaron a quien decide y siguen sin respuesta.
+let prorrogasPedidas = {};  // telefono → { cuando: ts, nombre, texto, dias }
 /*
  * COBRO AUTOMÁTICO MENSUAL. El cliente que lo acepta paga una vez con
  * tarjeta y la deja guardada; de ahí en adelante, dos días antes de su fecha
@@ -1271,6 +1282,7 @@ function buildStateSnapshot() {
     // Para cazar pagos dobles entre canales tras un reinicio de Render.
     stripePagosRecientes: Object.fromEntries(stripePagosRecientes),
     prorrogas,
+    prorrogasPedidas,
     autoCobros,
     /*
      * Solo las sesiones de PAGO (a quién le paga, qué contrato, cuántos
@@ -1473,6 +1485,7 @@ function hydrateState(s) {
   if (s.agentPingSent && typeof s.agentPingSent === 'object') agentPingSent = new Map(Object.entries(s.agentPingSent));
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
   if (s.prorrogas && typeof s.prorrogas === 'object') prorrogas = s.prorrogas;
+  if (s.prorrogasPedidas && typeof s.prorrogasPedidas === 'object') prorrogasPedidas = s.prorrogasPedidas;
   if (s.autoCobros && typeof s.autoCobros === 'object') autoCobros = s.autoCobros;
   if (s.sesionesDePago && typeof s.sesionesDePago === 'object') {
     const limite = Date.now() - 30 * 60 * 1000;   // misma vigencia que la sesión de pago
@@ -2873,6 +2886,64 @@ async function sendToAllAgents(text, media = [], opts = {}) {
     }
   })));
 }
+/*
+ * LA SOLICITUD DE PRÓRROGA VA SOLO A QUIEN DECIDE, CON BOTONES.
+ *
+ * Antes se mandaba a todos los asesores como un caso más, con la instrucción
+ * de escribir "PRORROGA 9511234567 3". Ahora le llega a una sola persona con
+ * tres botones: dar los días que pidió el cliente (o 3), dar 5, o no dar. El
+ * toque en el botón entra como el mismo comando de siempre. Si el envío
+ * normal falla (ventana de 24 h), va por plantilla explicando cómo responder.
+ */
+async function pedirProrrogaAQuienDecide(chatId, nombre, texto) {
+  const tel = normalizePhone(chatId);
+  const corto = tel.replace(/^52/, '');
+  const c = wisphubClients.get(tel) || {};
+  const v = normalizeText(texto);
+  let dias = 0;
+  const m = v.match(/\b(\d{1,2})\s*d[ií]as?\b/);
+  if (m) dias = parseInt(m[1], 10);
+  else if (/\b(una|1)\s+semana\b|\b8\s+d[ií]as\b/.test(v)) dias = 7;
+  else if (/\bquincena\b|\b15\s+d[ií]as\b/.test(v)) dias = 15;
+  if (dias < 1 || dias > 30) dias = 0;
+  // Primer botón: los días que pidió (o 3); segundo: la otra opción usual.
+  const primero = dias || 3;
+  const segundo = primero === 3 ? 5 : 3;
+  const botones = [
+    { id: `PRORROGA ${corto} ${primero} la pidió por WhatsApp`, title: `✅ Dar ${primero} día${primero !== 1 ? 's' : ''}` },
+    { id: `PRORROGA ${corto} ${segundo} la pidió por WhatsApp`, title: `📅 Dar ${segundo} días` },
+    { id: `NO PRORROGA ${corto}`, title: '❌ No dar' },
+  ];
+  const susp = /suspend|cort/i.test(String(c.status || ''));
+  const corte = parseFechaCorte(c.fechaCorte);
+  const lineas = [
+    '📅 SOLICITUD DE PRÓRROGA',
+    `Cliente: ${c.name || nombre || corto} · ${corto}` + (c.name && nombre && c.name !== nombre ? ` (en WhatsApp: ${nombre})` : ''),
+    `Servicio: ${susp ? '🔴 suspendido' : '🟢 activo'}` + (corte ? ` · corte ${corte.split('-').reverse().join('/')}` : '') + (parseFloat(c.saldo) > 0 ? ` · debe $${parseFloat(c.saldo).toFixed(2)}` : ''),
+    `Dice: "${String(texto || '').replace(/\s+/g, ' ').trim().slice(0, 200)}"`,
+    dias ? `Pide ${dias} día${dias !== 1 ? 's' : ''}.` : '',
+    '',
+    'Toca un botón, o escribe PRORROGA ' + corto + ' [días] / NO PRORROGA ' + corto + '.',
+  ].filter((x) => x !== '');
+  const cuerpo = lineas.join('\n');
+  prorrogasPedidas[tel] = { cuando: Date.now(), nombre: c.name || nombre || '', texto: String(texto || '').slice(0, 200), dias };
+  logCase(chatId, c.name || nombre || '', 'prorroga', `Pide prórroga: ${String(texto || '').slice(0, 160)}`);
+  schedulePersist();
+  if (!PRORROGA_WHATSAPP_NUMBER) { await sendToAllAgents(cuerpo, [], { buttons: botones }); return true; }
+  return agentQueue(PRORROGA_WHATSAPP_NUMBER, async () => {
+    try { await sendWhatsAppMessage(PRORROGA_WHATSAPP_NUMBER, cuerpo, [], { buttons: botones }); return true; }
+    catch (e) {
+      console.warn('[prórroga] envío normal falló a quien decide (¿ventana de 24h?), probando plantilla:', e.message);
+      try { await sendWhatsAppTemplate(PRORROGA_WHATSAPP_NUMBER, cuerpo); return true; }
+      catch (e2) {
+        console.error('[prórroga] plantilla también falló:', e2.message);
+        alertAdmin('aviso-no-entregado', `No pude mandar una solicitud de prórroga de ${corto} al ${PRORROGA_WHATSAPP_NUMBER}. Está en el panel (Cobranza → Prórrogas).`);
+        return false;
+      }
+    }
+  });
+}
+
 // Reenvía un documento a TODOS los asesores.
 async function sendDocToAllAgents(docUrl, docName) {
   if (!docUrl) return;
@@ -3183,10 +3254,23 @@ async function handleAgentCommand(agentNumber, text) {
     const nombre = (wisphubClients.get(clientId) || {}).name || clientId;
     const [y, m, d] = p.hasta.split('-');
     const hastaTxt = `${d}/${m}/${y}`;
+    cerrarSolicitudProrroga(clientId, agentNumber);
     await sendWhatsAppMessage(agentNumber, `📅 Prórroga registrada para *${nombre}* hasta el *${hastaTxt}* (${p.dias} día${p.dias !== 1 ? 's' : ''}). No le va a llegar aviso de corte hasta entonces.`);
     try {
       await avisarProrroga(clientId, p);
     } catch (_) { /* si no se le pudo avisar, la prórroga vale igual */ }
+    return;
+  }
+
+  // NO PRORROGA [número] — se le niega el plazo y se le avisa al cliente cómo pagar
+  const noProrrogaMatch = text.trim().match(/^NO\s+PR[OÓ]RROGA\s+(\d[\d\s-]{6,})/i);
+  if (noProrrogaMatch) {
+    const clientId = normalizeClientNumber(noProrrogaMatch[1]);
+    const nombre = (wisphubClients.get(clientId) || {}).name || clientId;
+    cerrarSolicitudProrroga(clientId, agentNumber);
+    try { await avisarPorIniciativa(clientId, TEXTO_PRORROGA_NEGADA); }
+    catch (_) { /* el cliente se entera al pedir de nuevo */ }
+    await sendWhatsAppMessage(agentNumber, `❌ Prórroga negada a *${nombre}*. Ya le avisé cómo pagar.`);
     return;
   }
 
@@ -3286,6 +3370,7 @@ async function handleAgentCommand(agentNumber, text) {
     'RECIBIDO [número] → Acuse: agradece al cliente y cierra la espera',
     'LIBERAR [número] → Cerrar caso y devolver al bot',
     'PRORROGA [número] [días] [motivo] → Darle días para pagar (se le avisa y no le llega aviso de corte)',
+    'NO PRORROGA [número] → Negarle el plazo (se le avisa cómo pagar)',
     'PAUSADOS → Ver casos activos',
     '',
     'Solo puedes tener UN caso a la vez: ciérralo (LIBERAR) antes de tomar otro.',
@@ -3833,6 +3918,18 @@ function darProrroga(telefono, dias, por, motivo = '') {
 
 // Lo que se le dice al cliente cuando se le da (o se le ajusta) una prórroga,
 // se dé por WhatsApp o desde el panel: la misma frase en los dos lados.
+const TEXTO_PRORROGA_NEGADA = '📅 Revisamos tu solicitud y por esta vez no podemos dar más tiempo: el servicio se suspende en tu fecha de corte si no hay pago. Puedes pagar por aquí en cualquier momento, escribe *pagar* y te muestro cómo. 🙏';
+
+// La solicitud deja de estar pendiente en cuanto alguien la resuelve (por WhatsApp o desde el panel).
+function cerrarSolicitudProrroga(telefono, por = '') {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (!prorrogasPedidas[tel]) return false;
+  delete prorrogasPedidas[tel];
+  for (const c of caseLog) if (c.clientId === tel && c.type === 'prorroga' && c.status === 'pendiente') { c.status = 'atendido'; if (por) c.porAgente = String(por).replace(/\D/g, ''); }
+  schedulePersist();
+  return true;
+}
+
 async function avisarProrroga(telefono, p) {
   const [y, m, d] = String(p.hasta || '').split('-');
   const hastaTxt = `${d}/${m}/${y}`;
@@ -5705,13 +5802,17 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId, `⏳ Ya tienes una prórroga hasta el *${_prV.hasta.split('-').reverse().join('/')}*: no se te corta antes de esa fecha. Si necesitas más días, escribe *asesor* y lo revisa una persona.`);
         return;
       }
-      const _notif = await notifyAgentRequest(chatId, [
-        '📅 SOLICITUD DE PRÓRROGA / PLAZO DE PAGO',
-        _nom ? `Cliente: ${_nom}` : '',
-        `Mensaje: ${text}`,
-        `Para dársela, responde: PRORROGA ${normalizePhone(chatId).replace(/^52/, '')} 3   (los días que quieras)`
-      ].filter(Boolean).join('\n'), '').catch(() => false);
-      await sendMsg(chatId, agentNotifiedMsg(_notif, _nom, 'asesor'));
+      // Si ya la pidió hace poco y nadie ha contestado, no se manda dos veces.
+      const _ped = prorrogasPedidas[normalizePhone(chatId)];
+      if (_ped && Date.now() - _ped.cuando < 24 * 3600 * 1000) {
+        await sendMsg(chatId, '📅 Tu solicitud de prórroga ya está con la oficina; en cuanto la respondan te aviso por aquí. Si mientras puedes pagar, escribe *pagar*.');
+        return;
+      }
+      const _fue = await pedirProrrogaAQuienDecide(chatId, _nom, text).catch(() => false);
+      const _who = (_nom && looksLikeName(_nom)) ? `${_nom}, ` : '';
+      await sendMsg(chatId, _fue
+        ? `📅 ${_who}ya pasé tu solicitud a la oficina. ${isWithinBusinessHours() ? 'En cuanto la revisen' : `La revisan ${describeNextOpening()} y en cuanto respondan`} te aviso por aquí hasta qué día tienes. Si mientras puedes pagar, escribe *pagar*.`
+        : agentNotifiedMsg(false, _nom, 'asesor'));
       return;
     }
 
@@ -6784,7 +6885,12 @@ app.get('/admin/api/prorrogas', verifyAdminToken, (_req, res) => {
       yaPago: !!pagoRecienteDe(tel),
       avisado: !!corteReminders[`${tel}|prorroga|${p.hasta}`] }))
     .sort((a, b) => a.hasta.localeCompare(b.hasta));
-  res.json({ prorrogas: lista, total: lista.length });
+  // Las que el cliente pidió por WhatsApp y nadie ha resuelto todavía.
+  const pendientes = Object.entries(prorrogasPedidas)
+    .filter(([, x]) => x && x.cuando)
+    .map(([tel, x]) => ({ telefono: tel, nombre: x.nombre || (wisphubClients.get(tel) || {}).name || '', cuando: new Date(x.cuando).toISOString(), texto: x.texto || '', dias: x.dias || 0 }))
+    .sort((a, b) => b.cuando.localeCompare(a.cuando));
+  res.json({ prorrogas: lista, total: lista.length, pendientes, quienDecide: PRORROGA_WHATSAPP_NUMBER ? PRORROGA_WHATSAPP_NUMBER.replace(/^52/, '') : '' });
 });
 app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const tel = normalizePhone(String((req.body || {}).telefono || ''));
@@ -6792,12 +6898,22 @@ app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'),
   if (!tel || tel.length < 12) return res.status(400).json({ error: 'Falta el teléfono' });
   if (!(dias >= 1 && dias <= 31)) return res.status(400).json({ error: 'Los días van de 1 a 31' });
   const p = darProrroga(tel, dias, (req.admin && req.admin.username) || 'panel', (req.body || {}).motivo);
+  cerrarSolicitudProrroga(tel, (req.admin && req.admin.username) || 'panel');
   // Desde el panel también se le avisa al cliente (salvo que la oficina diga que no).
   let avisado = false;
   if (!(req.body || {}).sinAviso) {
     try { await avisarProrroga(tel, p); avisado = true; } catch (e) { console.warn('[prorroga] no se pudo avisar a', tel, '·', e.message); }
   }
   res.json({ ok: true, telefono: tel, avisado, ...p });
+});
+// Negar desde el panel una prórroga pedida por WhatsApp: se le avisa al cliente cómo pagar.
+app.post('/admin/api/prorrogas/negar', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  const tel = normalizePhone(String((req.body || {}).telefono || ''));
+  if (!tel || tel.length < 12) return res.status(400).json({ error: 'Falta el teléfono' });
+  const habia = cerrarSolicitudProrroga(tel, (req.admin && req.admin.username) || 'panel');
+  let avisado = false;
+  try { await avisarPorIniciativa(tel, TEXTO_PRORROGA_NEGADA); avisado = true; } catch (_) { /* queda en el panel */ }
+  res.json({ ok: true, habia, avisado });
 });
 app.delete('/admin/api/prorrogas/:telefono', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const tel = normalizePhone(String(req.params.telefono || ''));
@@ -8223,7 +8339,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     if (!text) return;
 
     // If message is FROM an agent → route to agent handler (commands or relay)
-    if (isAgentNumber(from)) {
+    if (isAgentNumber(from) || (esQuienApruebaProrrogas(from) && esRespuestaDeProrroga(text))) {
       await handleAgentCommand(from, text);
       return;
     }
@@ -8249,7 +8365,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       return;
     }
     if (payload) {
-      if (isAgentNumber(from)) await handleAgentCommand(from, payload);
+      if (isAgentNumber(from) || (esQuienApruebaProrrogas(from) && esRespuestaDeProrroga(payload))) await handleAgentCommand(from, payload);
       else await handleChatMessage(from, payload, sendWhatsAppMessage);
     }
     return;
@@ -8266,7 +8382,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     if (replyId) {
       console.log(`[WhatsApp] Interactive reply: ${itype} id="${replyId}" from=${from}`);
       // If an agent tapped a button (e.g. "Atender caso") → route to agent commands
-      if (isAgentNumber(from)) {
+      if (isAgentNumber(from) || (esQuienApruebaProrrogas(from) && esRespuestaDeProrroga(replyId))) {
         await handleAgentCommand(from, replyId);
       } else {
         await handleChatMessage(from, replyId, sendWhatsAppMessage);

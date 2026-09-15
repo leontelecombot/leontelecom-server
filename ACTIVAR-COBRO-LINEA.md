@@ -188,11 +188,26 @@ periodo (`autoCobros[tel][corte]`):
 
 ## Prórrogas
 
-`PRORROGA <tel> <días> [motivo]` por WhatsApp (asesor) o desde la tarjeta del
-panel. Al cliente se le avisa por plantilla en los dos casos. Mientras dura, el
-aviso de corte se calla; el día antes de que venza se le recuerda (salvo que
-tenga automático, que se cobra solo). El panel dice cuánto le queda a cada
-prórroga, si ya pagó y si ya se le avisó.
+**Las decide una sola persona, con un botón.** Cuando un cliente pide más tiempo
+("dame chance hasta el viernes", "me esperan unos 5 días"), la solicitud NO va a
+todos los asesores: le llega solo al número de `PRORROGA_WHATSAPP_NUMBER` (por
+defecto el del jefe, 951 652 9988) con el nombre, si está suspendido, su corte,
+lo que debe, lo que escribió y tres botones: dar los días que pidió (o 3), dar la
+otra opción (5 o 3), o no dar. El toque entra como el comando de siempre
+(`PRORROGA <tel> <días>` / `NO PRORROGA <tel>`), así que ese número no necesita
+ser asesor. Si el envío normal falla por la ventana de 24 h, va por plantilla con
+la instrucción escrita.
+
+Al cliente se le dice "ya pasé tu solicitud a la oficina, te aviso por aquí"; si
+insiste antes de que respondan, se le repite sin molestar dos veces al jefe. Al
+aprobar, le llega por plantilla hasta qué día tiene; al negar, que por esta vez no
+y cómo pagar. En el panel (Cobranza → Prórrogas) las pedidas sin responder salen
+arriba con los mismos botones, y también se pueden resolver desde ahí.
+
+`PRORROGA <tel> <días> [motivo]` sigue funcionando para cualquier asesor y desde la
+tarjeta del panel. Mientras dura, el aviso de corte se calla; el día antes de que
+venza se le recuerda (salvo que tenga automático, que se cobra solo). El panel dice
+cuánto le queda a cada prórroga, si ya pagó y si ya se le avisó.
 
 ## Varios contratos en un teléfono
 
@@ -401,13 +416,13 @@ node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  51 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  # 248 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
+node verificar-whatsapp-leon.mjs  # 272 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**618 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
+**642 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.

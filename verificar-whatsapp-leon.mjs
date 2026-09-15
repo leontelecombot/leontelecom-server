@@ -249,6 +249,8 @@ const ENV_SERVIDOR = {
     ADMIN_PASSWORD: 'prueba-local-larga',
     ALERT_ADMIN_NUMBER: '',
     AGENT_WHATSAPP_NUMBER: '529519999999',
+    // Las prórrogas las decide UNA persona, que no es asesor: solo a ella le llegan las solicitudes.
+    PRORROGA_WHATSAPP_NUMBER: '9516529988',
     CORTE_REMINDER_ENABLED: 'true',
     WHATSAPP_AVISO_TEMPLATE: 'aviso_prueba',
     SERVER_BASE_URL: BASE,
@@ -1531,6 +1533,65 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
     const h = ((d.results || [])[0] || {}).historial || [];
     es(h.some((x) => x.tipo === 'pago' && /Comprobante que mandó el \d+ por él/.test(x.texto) && /recibido/.test(x.texto)), 'Diego: en su historial sale el comprobante que otra persona mandó por él, ya recibido');
   }
+}
+
+console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PERSONA CON UN BOTÓN ===');
+{
+  const ASESOR = '529519999999';
+  const JEFE = '529516529988';
+  const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  const H_ = { Authorization: 'Bearer ' + login.token };
+  // Elena pide chance. La solicitud le llega SOLO a quien decide, con botones; a los asesores no.
+  let n = enviados.length;
+  await entra(E, 'me dan chance de pagar hasta el viernes? unos 5 días');
+  let r = await respuestas(n, 2);
+  const sol = r.find((m) => m.a === JEFE && /SOLICITUD DE PRÓRROGA/.test(m.texto));
+  es(!!sol && /Elena Cruz/.test(sol.texto) && /Pide 5 días/.test(sol.texto), 'la solicitud le llega a quien decide con el nombre y los días que pidió');
+  es(!!sol && sol.botones.length === 3 && sol.botones[0].id === 'PRORROGA 9515555555 5 la pidió por WhatsApp' && /Dar 5 días/.test(sol.botones[0].title) && /Dar 3 días/.test(sol.botones[1].title) && sol.botones[2].id === 'NO PRORROGA 9515555555', 'con tres botones: dar 5 (los que pidió), dar 3, no dar');
+  es(!r.some((m) => m.a === ASESOR), 'y a los asesores NO les llega');
+  es(r.some((m) => m.a === E && /ya pasé tu solicitud a la oficina/.test(m.texto) && /escribe \*pagar\*/.test(m.texto)), 'a Elena se le dice que ya está con la oficina y que le avisamos');
+  // Si insiste, no se manda dos veces.
+  n = enviados.length;
+  await entra(E, 'ya vieron lo de la prórroga?');
+  r = await respuestas(n);
+  es(dice(r, /ya está con la oficina/) && !r.some((m) => m.a === JEFE), 'si insiste, se le dice que ya está pedida y no se molesta dos veces a quien decide');
+  // En el panel aparece como pendiente.
+  let pr = await fetch(BASE + '/admin/api/prorrogas', { headers: H_ }).then((x) => x.json());
+  es((pr.pendientes || []).some((x) => x.telefono === E && /viernes/.test(x.texto) && x.dias === 5) && pr.quienDecide === '9516529988', 'el panel la lista como pedida sin responder y dice quién decide');
+  // Quien decide toca "Dar 5 días": queda registrada y a Elena le llega hasta cuándo tiene.
+  n = enviados.length;
+  await toca(JEFE, sol.botones[0].id);
+  r = await respuestas(n, 2);
+  es(r.some((m) => m.a === JEFE && /Prórroga registrada para \*Elena Cruz\*/.test(m.texto) && /5 días/.test(m.texto)), 'con un toque queda la prórroga de 5 días, aunque quien decide no sea asesor');
+  es(r.some((m) => m.a === E && m.tipo === 'template' && /te dimos hasta el \*\d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'y a Elena le llega por plantilla hasta qué día tiene');
+  pr = await fetch(BASE + '/admin/api/prorrogas', { headers: H_ }).then((x) => x.json());
+  es(!(pr.pendientes || []).some((x) => x.telefono === E) && (pr.prorrogas || []).some((x) => x.telefono === E && /WhatsApp/.test(x.motivo)), 'en el panel ya no está pendiente y la prórroga dice que la pidió por WhatsApp');
+  // Hugo también pide; esta vez se le niega con el botón y se le dice cómo pagar.
+  n = enviados.length;
+  await entra(H, 'me esperan tantito con el pago? la otra semana pago');
+  r = await respuestas(n, 2);
+  const solH = r.find((m) => m.a === JEFE && /SOLICITUD DE PRÓRROGA/.test(m.texto));
+  es(!!solH && /Hugo/.test(solH.texto), 'la de Hugo también llega a quien decide');
+  n = enviados.length;
+  await toca(JEFE, 'NO PRORROGA 9518888888');
+  r = await respuestas(n, 2);
+  es(r.some((m) => m.a === JEFE && /Prórroga negada a \*Hugo Sáenz\*/.test(m.texto)), 'quien decide toca "No dar" y se le confirma');
+  es(r.some((m) => m.a === H && m.tipo === 'template' && /no podemos dar más tiempo/.test(m.texto) && /escribe \*pagar\*/.test(m.texto)), 'a Hugo le llega, por plantilla, que no y cómo pagar');
+  pr = await fetch(BASE + '/admin/api/prorrogas', { headers: H_ }).then((x) => x.json());
+  es(!(pr.pendientes || []).some((x) => x.telefono === H), 'y deja de estar pendiente en el panel');
+  // Desde el panel también se puede negar una pedida.
+  n = enviados.length;
+  await entra(H, 'de verdad necesito unos días más para pagar');
+  await respuestas(n, 2);
+  n = enviados.length;
+  const neg = await fetch(BASE + '/admin/api/prorrogas/negar', { method: 'POST', headers: { ...H_, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H }) }).then((x) => x.json());
+  r = await respuestas(n, 1);
+  es(neg.ok && neg.habia === true && r.some((m) => m.a === H && /no podemos dar más tiempo/.test(m.texto)), 'desde el panel también se niega y se le avisa a Hugo');
+  // La ayuda del asesor menciona NO PRORROGA.
+  n = enviados.length;
+  await entra(ASESOR, 'ayuda');
+  r = await respuestas(n);
+  es(r.some((m) => m.a === ASESOR && /NO PRORROGA \[número\]/.test(m.texto)), 'la ayuda de comandos ya menciona NO PRORROGA');
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);
