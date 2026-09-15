@@ -940,6 +940,10 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
   await entra(B, 'ya pagué');
   r = await respuestas(n);
   es(dice(r, /tu pago ya está registrado/), 'si el pago ya entró por el bot, se lo confirma y no le pide nada');
+  n = enviados.length;
+  await entra(B, 'Solo para saber si fue registrado ya el pago del Internet');
+  r = await respuestas(n);
+  es(dice(r, /tu pago ya está registrado/), '"¿ya quedó registrado mi pago?" también se contesta');
 }
 
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');

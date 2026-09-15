@@ -4945,7 +4945,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
      * Si el bot ya vio ese pago, se lo confirma; si no, le pide la foto del
      * comprobante en vez de dejarlo esperando una respuesta que no llega.
      */
-    if (/^(ya (pagu[eé]|deposit[eé]|transfer[ií]|hice el pago|realic[eé] el pago|se pag[oó])|(se|le) (deposit|transfir|hizo el pago|realiz[oó] el pago)|(el )?pago (ya )?(se hizo|est[aá] hecho|fue realizado)|deposit[eé] (los|el|\$)|transfer[ií] (los|el|\$))/.test(_pt)
+    if ((/^(ya (pagu[eé]|deposit[eé]|transfer[ií]|hice el pago|realic[eé] el pago|se pag[oó])|(se|le) (deposit|transfir|hizo el pago|realiz[oó] el pago)|(el )?pago (ya )?(se hizo|est[aá] hecho|fue realizado)|deposit[eé] (los|el|\$)|transfer[ií] (los|el|\$))/.test(_pt)
+         // "¿Ya quedó registrado mi pago?", "si fue registrado ya el pago", "ya se reflejó"
+         || /(registr|aplic|reflej|recib)\w*\s.{0,25}pago|pago\s.{0,30}(registr|aplic|reflej|recib)|ya (lleg|entr)[oó] (mi|el) pago/.test(_pt))
         && !_enOtraCosa && !_conComprobante && !_isBtn) {
       const telP = normalizePhone(chatId);
       const visto = pagoRecienteDe(telP);
