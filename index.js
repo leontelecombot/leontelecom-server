@@ -4949,7 +4949,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
      * Se pide con una palabra, se explica en dos líneas y se confirma con un
      * botón. Cancelar es igual de fácil: nadie debe sentirse atrapado.
      */
-    if (/^(cancelar|quitar|desactivar|ya no)\s+(el\s+)?(cobro\s+)?autom[aá]tico|^auto_no$/.test(_pt) && !_enOtraCosa) {
+    // Como lo dice la gente: "ya no quiero el cobro automático", "quítame lo automático", "cancela mi suscripción".
+    const _cancelaAuto = /^(?:hola[,.!\s]*)?(?:por favor\s+)?(cancelar|cancela|cancelen|cancelame|cancélame|quitar|quita|quiten|quitame|quítame|desactivar|desactiva|desactiven|ya no quiero|ya no|no quiero|dar de baja|den de baja|baja|suspender|suspende)\s+(?:el\s+|la\s+|lo\s+|mi\s+|del\s+|de\s+)?(?:cobro\s+|pago\s+|cargo\s+)?(?:autom[aá]tic[oa]|suscripci[oó]n|domiciliaci[oó]n)/.test(_pt.replace(/[¿¡?!.]+$/g, ''));
+    if ((_cancelaAuto || _pt === 'auto_no') && !_enOtraCosa) {
       const tel = normalizePhone(chatId);
       const reg = stripeClientes.get(tel);
       if (reg && reg.cobroAutomatico) {

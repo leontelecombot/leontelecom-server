@@ -836,11 +836,15 @@ console.log('\n=== 11c. COBRO AUTOMÁTICO CADA MES ===');
   r = await respuestas(n);
   es(dice(r, /Tienes \*cobro automático\*.*No tienes que hacer nada/s), 'con el automático activo, "pagar" le dice que se cobra solo y no tiene que hacer nada');
 
-  // Cancelar es una frase.
+  // Cancelar es una frase, dicha como sea.
+  n = enviados.length;
+  await entra(H, 'Ya no quiero el cobro automático, por favor');
+  r = await respuestas(n);
+  es(dice(r, /quité el cobro automático/), '"ya no quiero el cobro automático" lo quita al instante');
   n = enviados.length;
   await entra(H, 'cancelar automático');
   r = await respuestas(n);
-  es(dice(r, /quité el cobro automático/), '"cancelar automático" lo quita al instante');
+  es(dice(r, /No tienes cobro automático activo/), 'y si lo pide otra vez, le dice que ya no lo tiene');
 }
 
 console.log('\n=== 11d. PAGAR POR OTRO QUE TIENE DOS CONTRATOS ===');
