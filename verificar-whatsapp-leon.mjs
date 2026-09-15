@@ -1128,6 +1128,16 @@ console.log('\n=== 19. CUANDO LA OFICINA DA POR BUENO UN COMPROBANTE, EL CLIENTE
   n = enviados.length;
   await entra(G, 'Gloria Núñez');
   await respuestas(n, 1, 4000);
+  // Con el comprobante sin revisar, el barrido de corte NO le manda "mañana te cortamos": le avisa a la oficina que lo revise hoy.
+  {
+    const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+    const n0 = enviados.length;
+    const corrida = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
+    const r0 = await respuestas(n0, 1, 5000);
+    const c0 = corrida.result || corrida;
+    es(c0.enRevision === 1 && !r0.some((m) => m.a === G), 'Gloria mandó comprobante y nadie lo ha revisado: no se le manda aviso de corte');
+    es(r0.some((m) => /SIN REVISAR/.test(m.texto) && /Gloria Núñez/.test(m.texto)), 'y a la oficina le llega que lo revise hoy para que no se corte con el pago hecho');
+  }
   // La oficina lo da por bueno.
   n = enviados.length;
   await entra('529519999999', 'RECIBIDO 951 777 7777');

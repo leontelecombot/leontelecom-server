@@ -3703,6 +3703,17 @@ function anotarMesesAdelantados(telefono, mesesPagados, montoTexto) {
   return hasta;
 }
 
+// Un comprobante que ya mandaron (él o alguien por él) y la oficina todavía
+// no revisa. No es un pago confirmado, pero tampoco se le puede decir
+// "mañana te cortamos" como si no hubiera mandado nada.
+function comprobanteEnRevisionDe(telefono, dias = 3) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (!tel) return null;
+  const desde = Date.now() - dias * 24 * 3600 * 1000;
+  return caseLog.find((c) => c.type === 'pago' && c.status === 'pendiente' && new Date(c.ts).getTime() >= desde
+    && (c.clientId === tel || String(c.resumen || '').includes('· ' + tel))) || null;
+}
+
 // El último pago reciente que este teléfono hizo por la cuenta de OTRO (la hija
 // que paga lo de su mamá y luego pregunta "¿ya quedó?").
 function pagoHechoPor(telefono) {
@@ -3988,12 +3999,15 @@ async function sweepCorteReminders(force = false) {
     // Map vivo se cortaría en silencio y media lista se quedaría sin aviso.
     // Aquí mismo se saca de la lista a quien YA PAGÓ: ese no debe recibir nada.
     const candidatos = [];
+    const enRevision = [];
     let alCorriente = 0, yaPagaron = 0, conProrroga = 0, conAutomatico = 0;
     for (const [phone, c] of wisphubClients.entries()) {
       const fc = parseFechaCorte(c.fechaCorte);
       if (!fc || fc !== manana) continue;
       if (!clienteDebe(c)) { alCorriente++; continue; }
       if (pagoRecienteDe(phone)) { yaPagaron++; continue; }
+      // Mandó comprobante y nadie lo ha revisado: el aviso lo ofende, y lo que urge es revisarlo hoy.
+      if (comprobanteEnRevisionDe(phone)) { enRevision.push(c.name || phone); continue; }
       if (prorrogaVigente(phone)) { conProrroga++; continue; }
       // Con cobro automático, el cobro sale hoy mismo: "mañana te cortamos" sería un susto sin sentido.
       // Salvo que el cobro de este mes ya se haya intentado y NO haya pasado (tarjeta
@@ -4089,7 +4103,10 @@ async function sweepCorteReminders(force = false) {
     if (!candidatos.length && alCorriente) {
       alertAdmin('corte-filtro', `Hoy NINGÚN cliente pasó el filtro de deuda: los ${alCorriente} con corte el ${manana} salieron todos "al corriente". Revisa saldo y estado de facturas en el panel antes de dar ese cero por bueno.`);
     }
-    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, prorrogaVence, conAutomatico, candidatos: candidatos.length, forzada: !!force });
+    if (enRevision.length) {
+      alertAdmin('corte-en-revision', `📄 ${enRevision.length} cliente(s) con corte mañana mandaron comprobante y siguen SIN REVISAR: ${enRevision.slice(0, 8).join(', ')}${enRevision.length > 8 ? '…' : ''}. No se les mandó aviso de corte; revísalos hoy en el panel (Comprobantes por revisar) para que no se corten con el pago hecho.`);
+    }
+    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico, candidatos: candidatos.length, forzada: !!force });
     // Si AYER no quedó constancia, hubo gente que cortó sin recibir su aviso. Se avisa
     // SOLO el día siguiente al hueco (no los 7 días que el hueco sigue apareciendo en la
     // lista), para que la alerta signifique algo y no se vuelva ruido que nadie lee.
@@ -4097,7 +4114,7 @@ async function sweepCorteReminders(force = false) {
     if (huecos[0] === mexicoDateStr(new Date(Date.now() - 86400000))) {
       alertAdmin('corte-hueco', `Sin avisos de corte el/los día(s): ${huecos.join(', ')}. Revisa el despertador de GitHub Actions (parece que Render se durmió).`);
     }
-    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, prorrogaVence, conAutomatico };
+    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico };
   } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 
@@ -5079,8 +5096,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const telP = normalizePhone(chatId);
       const visto = pagoRecienteDe(telP);
       // Un comprobante que ya mandó y la oficina todavía no revisa: no se le vuelve a pedir.
-      const hace3d = Date.now() - 3 * 24 * 3600 * 1000;
-      const enRevision = caseLog.find((c) => c.clientId === telP && c.type === 'pago' && c.status === 'pendiente' && new Date(c.ts).getTime() >= hace3d);
+      const enRevision = comprobanteEnRevisionDe(telP);
       const porOtro = visto ? null : pagoHechoPor(telP);
       if (visto) {
         await sendMsg(chatId, `✅ Sí, tu pago ya está registrado (${canalTexto(visto.canal)}). No hace falta que mandes nada más. 🙌`);
