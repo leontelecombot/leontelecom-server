@@ -3728,8 +3728,18 @@ async function barrerCobroAutomatico(force = false) {
 
   for (const [clave, reg] of stripeClientes) {
     if (!reg || !reg.cobroAutomatico || !reg.clienteId) continue;
-    const { tel } = stripeLeon.partirClave(clave);
-    const c = wisphubClients.get(tel) || {};
+    const { tel, servicioId: servicioDeClave } = stripeLeon.partirClave(clave);
+    if (servicioDeClave) continue;   // el automático vive en la clave del teléfono, no en la de cada CLABE
+    const c = { ...(wisphubClients.get(tel) || {}) };
+    /*
+     * Con varios contratos, la deuda y la reactivación son las del contrato
+     * que el cliente eligió al activar el automático, no las del primero.
+     */
+    if (reg.autoServicioId) {
+      const varios = await serviciosDeLaCuenta(tel);
+      const el = varios.find((x) => x.id === String(reg.autoServicioId));
+      if (el) { c.usuario = el.usuario || c.usuario; c.etiqueta = el.etiqueta; }
+    }
     const corte = parseFechaCorte(c.fechaCorte);
     if (!corte) continue;
     const log = autoCobros[tel] || (autoCobros[tel] = {});
@@ -3774,7 +3784,7 @@ async function barrerCobroAutomatico(force = false) {
           sumarAlMes(r.mensualidad, 'tarjeta');
           await sendWhatsAppMessage(tel, `✅ Se cobró tu mensualidad de *$${r.mensualidad.toFixed(2)}* (más $${r.cargo.toFixed(2)} por pagar en línea) a tu tarjeta terminación ${tarjeta.ultimos4}. Tu servicio sigue activo, sin cortes. 🙌`).catch(() => {});
           try {
-            const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: r.mensualidad, referencia: r.id });
+            const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: r.mensualidad, referencia: r.id, idServicio: reg.autoServicioId || undefined });
             avisarRegistroPendiente(w, tel);
           } catch (e) { console.error('[auto] aplicar pago:', e.message); }
         } else {
@@ -6761,6 +6771,8 @@ app.post('/webhook/stripe', async (req, res) => {
               // este cliente aceptó. Guardar el id de la tarjeta ahora sería
               // guardar uno que puede caducar antes del próximo mes.
               cobroAutomatico: true,
+              // Si el teléfono tiene varios contratos, cuál es el que se cobra solo.
+              ...(o.metadata.servicioId ? { autoServicioId: String(o.metadata.servicioId) } : {}),
             });
             schedulePersist();
             console.log('[stripe-leon] cobro automático activado para', telefono);
