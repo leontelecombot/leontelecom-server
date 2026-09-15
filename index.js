@@ -3144,7 +3144,9 @@ async function handleAgentCommand(agentNumber, text) {
     const hastaTxt = `${d}/${m}/${y}`;
     await sendWhatsAppMessage(agentNumber, `📅 Prórroga registrada para *${nombre}* hasta el *${hastaTxt}* (${p.dias} día${p.dias !== 1 ? 's' : ''}). No le va a llegar aviso de corte hasta entonces.`);
     try {
-      await avisarPorIniciativa(clientId, `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
+      await avisarPorIniciativa(clientId, p.conAutomatico
+        ? `📅 Listo, te dimos hasta el *${hastaTxt}*. Como tienes *cobro automático*, ese mes se cobra a tu tarjeta un día antes de que venza la prórroga (te aviso dos días antes), no en tu fecha de corte. Si prefieres pagar antes de otra forma, escribe *pagar*. 🙌`
+        : `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
     } catch (_) { /* si no se le pudo avisar, la prórroga vale igual */ }
     return;
   }
@@ -3751,7 +3753,7 @@ function darProrroga(telefono, dias, por, motivo = '') {
   const motivoFinal = String(motivo || '').trim() || ((prorrogas[tel] || {}).motivo || '');
   prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/[^\w@. -]/g, '').slice(0, 40), cuando: new Date().toISOString(), motivo: motivoFinal.slice(0, 200) };
   schedulePersist();
-  return prorrogas[tel];
+  return { ...prorrogas[tel], conAutomatico: !!(stripeClientes.get(tel) || {}).cobroAutomatico };
 }
 
 function clienteDebe(c) {
@@ -3837,10 +3839,18 @@ async function barrerCobroAutomatico(force = false) {
     if (!corte) continue;
     const log = autoCobros[tel] || (autoCobros[tel] = {});
     const per = log[corte] || (log[corte] = {});
+    /*
+     * Con prórroga, el día de cobro se recorre: se avisa dos días antes de que
+     * venza y se cobra un día antes, no en la fecha de corte original. Pedir
+     * más días y que la tarjeta se cobre igual no sería una prórroga.
+     */
+    const prAuto = prorrogaVigente(tel);
+    const diaDeCobro = prAuto && prAuto.hasta > corte ? prAuto.hasta : corte;
+    if (diaDeCobro !== corte && !per.estado) hechos.conProrroga = (hechos.conProrroga || 0) + 1;
 
     // Dos días antes: el aviso, con el monto que Wisphub diga hoy. Si este mes ya
     // pagó por su cuenta (o va adelantado), no se le anuncia un cobro que no va a pasar.
-    if (corte === pasadoManana && !per.avisado) {
+    if (diaDeCobro === pasadoManana && !per.avisado) {
       if (pagoRecienteDe(tel)) { per.avisado = new Date().toISOString(); per.estado = 'ya-pago'; schedulePersist(); continue; }
       let monto = 0;
       try { monto = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; } catch (_) { /* se avisa sin monto */ }
@@ -3854,7 +3864,7 @@ async function barrerCobroAutomatico(force = false) {
     }
 
     // Un día antes: el cobro. Una sola vez por periodo, pase lo que pase.
-    if (corte === manana && !per.estado) {
+    if (diaDeCobro === manana && !per.estado) {
       /*
        * Si mandó un comprobante que la oficina no ha revisado, cobrarle ahora
        * sería cobrarle dos veces. Se pospone (la pasada de la siguiente hora lo
@@ -4089,6 +4099,7 @@ async function sweepCorteReminders(force = false) {
         if (!p || p.hasta !== manana) continue;
         const c = wisphubClients.get(telP);
         if (!c || !clienteDebe(c) || pagoRecienteDe(telP)) continue;
+        if ((stripeClientes.get(telP) || {}).cobroAutomatico) continue;   // a ese se le cobra solo un día antes de que venza
         const key = `${telP}|prorroga|${p.hasta}`;
         if (corteReminders[key]) continue;
         const first = String(c.name || '').trim().split(/\s+/)[0] || '';

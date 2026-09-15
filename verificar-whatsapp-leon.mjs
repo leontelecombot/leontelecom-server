@@ -1212,6 +1212,31 @@ console.log('\n=== 19b. CON COMPROBANTE SIN REVISAR, EL AUTOMÁTICO NO COBRA (PA
   es(h3.sinDeuda >= 1 && stripe.cobros.length === cobrosAntes && r3.some((m) => m.a === I && /Este mes ya pagaste por tu cuenta/.test(m.texto)), 'cuando lo dan por bueno, el automático ve el pago y no cobra: "este mes ya pagaste por tu cuenta"');
 }
 
+console.log('\n=== 19c. CON PRÓRROGA, EL AUTOMÁTICO SE COBRA UN DÍA ANTES DE QUE VENZA, NO EN EL CORTE ===');
+{
+  // Inés: automático, corte mañana, y este mes todavía sin cobrar (se le olvida el pago para que cuente).
+  await fetch(BASE + '/api/pruebas/auto-estado', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I, estado: '' }) });
+  await fetch(BASE + '/api/pruebas/olvidar-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I }) });
+  const ASESOR = '529519999999';
+  let n = enviados.length;
+  await entra(ASESOR, 'PRORROGA 951 010 1010 5 se le atrasó la quincena');
+  let r = await respuestas(n, 2);
+  es(r.some((m) => m.a === I && /Como tienes \*cobro automático\*, ese mes se cobra a tu tarjeta un día antes de que venza la prórroga/.test(m.texto)), 'al darle prórroga a alguien con automático, se le dice que se cobra un día antes de que venza, no en el corte');
+  n = enviados.length;
+  const cobrosAntes = stripe.cobros.length;
+  const h = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
+  await respuestas(n, 1, 1500);
+  es(h.cobrados === 0 && stripe.cobros.length === cobrosAntes && h.conProrroga === 1, `con prórroga de 5 días, hoy no se le cobra aunque su corte sea mañana · ${JSON.stringify(h)}`);
+  // Se le deja la prórroga en 1 día: vence mañana, así que HOY se cobra.
+  const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  await fetch(BASE + '/admin/api/prorrogas', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I, dias: 1 }) });
+  n = enviados.length;
+  const h2 = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
+  r = await respuestas(n, 1, 4000);
+  es(h2.cobrados === 1 && stripe.cobros.length === cobrosAntes + 1 && r.some((m) => m.a === I && /Se cobró tu mensualidad/.test(m.texto)), 'cuando la prórroga vence mañana, hoy sí se cobra a la tarjeta (un día antes de que venza)');
+  await fetch(BASE + '/admin/api/prorrogas/' + I, { method: 'DELETE', headers: { Authorization: 'Bearer ' + login.token } });
+}
+
 console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO" ===');
 {
   // Hugo manda un comprobante; la oficina lo ve en el panel y lo da por bueno desde ahí.
