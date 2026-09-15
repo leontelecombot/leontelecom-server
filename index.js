@@ -4872,7 +4872,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
      * "3 meses", "pagar 6 meses", "adelantar dos meses": se guarda cuántos y
      * se cotiza de una vez con el total. Solo en el piloto.
      */
-    const _mesesTxt = _pt.match(/^(?:pagar|quiero pagar|adelantar|pago)?\s*(\d{1,2}|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s*mes(es)?(\s+(adelantad|por adelantado|de jal[oó]n|juntos).*)?[\s.!]*$/);
+    // También como lo escriben de verdad: "¿puedo pagar dos meses de internet?", "quisiera adelantar 3 meses".
+    const _mesesTxt = _pt.replace(/^[¿¡\s]+|[?!.\s]+$/g, '').match(/^(?:hola[,.!\s]*)?(?:(?:quiero|quisiera|puedo|podr[ií]a|me gustar[ií]a|voy a|deseo|se puede|si puedo|cu[aá]nto(?: es| sale| ser[ií]a| cuesta)?(?: por| si pago| de)?)\s+)?(?:pagar(?:le|te)?|adelantar|abonar|pago|adelanto|cubrir)?\s*(?:de\s+|los\s+|por\s+)?(\d{1,2}|un|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s*mes(es)?(\s+(adelantad|por adelantado|de jal[oó]n|juntos|seguidos|de una vez|de internet|de servicio|de mi (internet|servicio|plan)).*)?$/);
     if (_mesesTxt && !_enOtraCosa && !_conComprobante
         && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
       const palabras = { dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12 };

@@ -716,6 +716,17 @@ console.log('\n=== 11b. SEIS MESES DE JALÓN ===');
 {
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
   let n = enviados.length;
+  // Como lo escriben de verdad, con signos y todo: no hay que saberse una fórmula.
+  await entra(A, '¿Puedo pagar dos meses de internet?');
+  let r0 = await respuestas(n);
+  es(dice(r0, /\(2 meses\)/), '"¿Puedo pagar dos meses de internet?" cotiza 2 meses');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  n = enviados.length;
+  await entra(A, 'cuánto por 3 meses');
+  r0 = await respuestas(n);
+  es(dice(r0, /\(3 meses\)/), '"cuánto por 3 meses" también cotiza');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  n = enviados.length;
   await entra(A, 'quiero pagar 6 meses');
   let r = await respuestas(n);
   es(dice(r, /Tu mensualidad es de \*\$1800\.00\* \(6 meses\)/), '"quiero pagar 6 meses" cotiza $1,800 (lo que debe + 5 meses de su plan de $300)');
