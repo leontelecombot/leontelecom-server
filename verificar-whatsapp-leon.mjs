@@ -1162,6 +1162,44 @@ console.log('\n=== 19. CUANDO LA OFICINA DA POR BUENO UN COMPROBANTE, EL CLIENTE
   es(r2.some((m) => m.a === '529519999999' && /y al titular/.test(m.texto)), 'y al asesor se le dice que también se le avisó al titular');
 }
 
+console.log('\n=== 19b. CON COMPROBANTE SIN REVISAR, EL AUTOMÁTICO NO COBRA (PARA NO COBRAR DOBLE) ===');
+{
+  // A Inés se le vuelve a dejar el periodo sin cobrar (como si fuera el día antes del corte) y manda un comprobante.
+  await fetch(BASE + '/api/pruebas/auto-estado', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I, estado: '' }) });
+  let n = enviados.length;
+  await fetch(BASE + '/webhook/whatsapp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + I.slice(2), type: 'document', document: { id: 'doc-ines', filename: 'pago-ines.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Inés' } }] } }] }] }) });
+  await respuestas(n, 1, 4000);
+  n = enviados.length;
+  await entra(I, 'Inés Vega');
+  await respuestas(n, 1, 4000);
+  // Hasta que el comprobante aparezca en "por revisar" (se registra después de contestarle).
+  const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  for (let i = 0; i < 20; i++) {
+    const lista = await fetch(BASE + '/admin/api/comprobantes', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+    if ((lista.comprobantes || lista || []).some((c) => String(c.clientId || c.telefono || '') === I)) break;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  n = enviados.length;
+  const cobrosAntes = stripe.cobros.length;
+  const h = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
+  const r = await respuestas(n, 1, 4000);
+  es(h.enRevision === 1 && stripe.cobros.length === cobrosAntes, `con el comprobante sin revisar, a Inés NO se le cobra a la tarjeta · ${JSON.stringify(h)}`);
+  es(r.some((m) => /SIN REVISAR/.test(m.texto) && /Inés Vega/.test(m.texto) && /cobro automático/.test(m.texto)), 'y a la oficina se le pide revisarlo hoy');
+  n = enviados.length;
+  const h2 = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
+  await respuestas(n, 1, 1500);
+  es(h2.enRevision === 1 && !enviados.slice(n).some((m) => /SIN REVISAR/.test(m.texto) && /Inés Vega/.test(m.texto)), 'en la siguiente pasada sigue sin cobrar y no vuelve a molestar a la oficina');
+  // La oficina lo da por bueno: cae en "ya pagó" y tampoco se cobra.
+  n = enviados.length;
+  await entra('529519999999', 'RECIBIDO 951 010 1010');
+  await respuestas(n, 1, 4000);
+  n = enviados.length;
+  const h3 = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
+  const r3 = await respuestas(n, 1, 4000);
+  es(h3.sinDeuda >= 1 && stripe.cobros.length === cobrosAntes && r3.some((m) => m.a === I && /Este mes ya pagaste por tu cuenta/.test(m.texto)), 'cuando lo dan por bueno, el automático ve el pago y no cobra: "este mes ya pagaste por tu cuenta"');
+}
+
 console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO" ===');
 {
   // Hugo manda un comprobante; la oficina lo ve en el panel y lo da por bueno desde ahí.

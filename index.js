@@ -3855,6 +3855,20 @@ async function barrerCobroAutomatico(force = false) {
 
     // Un día antes: el cobro. Una sola vez por periodo, pase lo que pase.
     if (corte === manana && !per.estado) {
+      /*
+       * Si mandó un comprobante que la oficina no ha revisado, cobrarle ahora
+       * sería cobrarle dos veces. Se pospone (la pasada de la siguiente hora lo
+       * vuelve a intentar): si lo dan por bueno, cae en "ya pagó"; si lo
+       * rechazan, se cobra. La oficina se entera una sola vez.
+       */
+      if (comprobanteEnRevisionDe(tel)) {
+        if (!per.avisadoRevision) {
+          per.avisadoRevision = new Date().toISOString(); schedulePersist();
+          alertAdmin('auto-en-revision', `📄 ${c.name || tel} tiene cobro automático para mañana, pero mandó un comprobante que sigue SIN REVISAR. No se le cobró a la tarjeta para no cobrarle doble: revísalo hoy en el panel (Comprobantes por revisar).`);
+        }
+        hechos.enRevision = (hechos.enRevision || 0) + 1;
+        continue;
+      }
       per.estado = 'en-proceso'; per.cuando = new Date().toISOString(); schedulePersist();
       try {
         /*
@@ -6362,7 +6376,7 @@ if (process.env.PRUEBAS === '1') {
     const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte);
     if (!tel || !corte) return res.status(400).json({ error: 'sin cliente o sin corte' });
     const log = autoCobros[tel] || (autoCobros[tel] = {});
-    log[corte] = { ...(log[corte] || {}), estado: String((req.body || {}).estado || 'rechazado') };
+    log[corte] = { ...(log[corte] || {}), estado: String((req.body || {}).estado == null ? 'rechazado' : req.body.estado) };
     res.json({ ok: true, corte });
   });
   app.post('/api/pruebas/ya-quedo', async (req, res) => {
