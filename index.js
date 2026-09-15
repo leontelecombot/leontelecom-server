@@ -3885,7 +3885,7 @@ function fechaMasDias(dias) {
  * Se manda una vez por día (queda en el estado como resumenCobranzaFecha).
  */
 let resumenCobranzaFecha = '';
-async function resumenCobranzaDiario(force = false) {
+async function resumenCobranzaDiario(force = false, enviar = true) {
   const hoy = fechaLocalISO();
   if (!force) {
     if (resumenCobranzaFecha === hoy) return { repetido: true };
@@ -3918,11 +3918,13 @@ async function resumenCobranzaDiario(force = false) {
     `• Pagos por el bot en 24 h: ${pagosBot} por $${montoBot.toFixed(2)}`,
   ].join('\n');
   let enviados = 0;
-  for (const tel of AGENT_WHATSAPP_NUMBERS) {
-    try { await avisarPorIniciativa(tel, texto); enviados++; } catch (e) { console.warn('[resumen] no salió a', tel, '·', e.message); }
+  if (enviar) {
+    for (const tel of AGENT_WHATSAPP_NUMBERS) {
+      try { await avisarPorIniciativa(tel, texto); enviados++; } catch (e) { console.warn('[resumen] no salió a', tel, '·', e.message); }
+    }
+    resumenCobranzaFecha = hoy; schedulePersist();
   }
-  resumenCobranzaFecha = hoy; schedulePersist();
-  return { enviados, debenManana, yaPagaron, conProrroga, conAuto, vencen, rechazados, sinRevisar, pagosBot, montoBot };
+  return { enviados, debenManana, nombres, yaPagaron, conProrroga, conAuto, vencen, rechazados, sinRevisar, pagosBot, montoBot, manana, texto };
 }
 
 let _ultimoBarridoAuto = null;
@@ -9180,6 +9182,10 @@ app.get('/admin/api/corte-reminders/stats', verifyAdminToken, requirePermission(
 // quien hoy sí lo usa.
 app.post('/admin/api/cobranza/resumen', verifyAdminToken, requirePermission('clients'), async (_req, res) => {
   res.json(await resumenCobranzaDiario(true));
+});
+// Solo verlo (para la tarjeta "Hoy" del panel): mismas cifras, sin mandar nada.
+app.get('/admin/api/cobranza/resumen', verifyAdminToken, requirePermission('clients'), async (_req, res) => {
+  res.json(await resumenCobranzaDiario(true, false));
 });
 app.post('/admin/api/corte-reminders/run', verifyAdminToken, requireAnyPermission(['broadcast', 'clients']), async (req, res) => {
   const r = await sweepCorteReminders(true);

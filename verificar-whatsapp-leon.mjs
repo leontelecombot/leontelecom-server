@@ -1293,6 +1293,12 @@ console.log('\n=== 17d. EL RESUMEN DE COBRANZA DE LAS 9 ===');
   es(!!msg && msg.tipo === 'template', 'al asesor le llega por plantilla el resumen de cobranza del día');
   es(!!msg && /Cortan mañana y deben: \d+/.test(msg.texto) && /Ya cubiertos para mañana: \d+ pagaron, \d+ con prórroga, \d+ con automático/.test(msg.texto) && /Comprobantes sin revisar: \d+/.test(msg.texto) && /Pagos por el bot en 24 h: \d+ por \$/.test(msg.texto), 'con quién debe mañana, quién ya está cubierto, prórrogas, automáticos rechazados, comprobantes y pagos por el bot');
   es(r0.enviados === 1 && r0.pagosBot >= 2 && r0.montoBot > 1000, `y las cifras salen del estado real (${r0.pagosBot} pagos por $${r0.montoBot})`);
+  // La tarjeta "Hoy" del panel lee lo mismo sin mandar nada.
+  const loginR = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  const n1 = enviados.length;
+  const ver = await fetch(BASE + '/admin/api/cobranza/resumen', { headers: { Authorization: 'Bearer ' + loginR.token } }).then((x) => x.json());
+  await respuestas(n1, 1, 1200);
+  es(ver.enviados === 0 && ver.pagosBot === r0.pagosBot && ver.sinRevisar === r0.sinRevisar && enviados.length === n1, 'el panel puede ver el mismo resumen (GET) sin que salga ningún WhatsApp');
 }
 
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');

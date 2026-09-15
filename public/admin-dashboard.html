@@ -459,6 +459,14 @@
 <!-- ===== PÁGINA: Cobranza ===== -->
 <section class="page" id="page-cobranza">
 
+  <!-- Hoy: las mismas cifras del resumen de las 9, para verlas sin esperar el WhatsApp. -->
+  <div class="wrap" style="margin-bottom:20px">
+    <div class="card" id="hoyCard">
+      <div class="card-header"><span class="hico">📋</span> Hoy en cobranza <button class="btn btn-edit btn-sm" style="width:auto;padding:5px 10px;margin-left:auto" onclick="loadHoy()">Actualizar</button></div>
+      <div class="card-body"><div id="hoyLista" class="empty">Cargando…</div></div>
+    </div>
+  </div>
+
   <!-- A dónde le cae el dinero. Va primero: sin esto, nada de lo de abajo cobra. -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
@@ -979,7 +987,7 @@
      * justo debajo de un "Ya puede cobrar". Un panel que se contradice a sí
      * mismo hace dudar de todo lo demás que dice.
      */
-    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro().then(loadCobroLinea); loadProrrogas(); loadComprobantes(); }
+    else if(page==='cobranza' && can('clients')){ loadHoy(); loadCobranza(); loadCorteTemplates(); loadCuentaCobro().then(loadCobroLinea); loadProrrogas(); loadComprobantes(); }
     else if(page==='cortes' && can('clients')){ loadCorteStats(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
@@ -1719,6 +1727,24 @@
     showAlert('prAlert', 'Prórroga para ' + (nombre || tel) + ': elige los días y confirma.', 'success');
     const card = t && t.closest('.card'); if(card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const d = document.getElementById('prDias'); if(d) setTimeout(() => d.focus(), 300);
+  }
+  // La tarjeta "Hoy": las mismas cifras del resumen de las 9, sin mandar WhatsApp.
+  async function loadHoy(){
+    const caja = document.getElementById('hoyLista'); if(!caja) return;
+    try{
+      const d = await (await fetchAuth('/admin/api/cobranza/resumen')).json();
+      const chip = (n, txt, color) => `<div style="background:${color};border-radius:10px;padding:10px 12px;min-width:120px;flex:1"><div style="font-size:1.5em;font-weight:800;line-height:1">${n}</div><div style="font-size:.82em;color:var(--muted);margin-top:4px">${txt}</div></div>`;
+      const [y,m,dd] = String(d.manana||'').split('-');
+      caja.className = '';
+      caja.innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap">
+          ${chip(d.debenManana, 'cortan mañana ' + (dd?`(${dd}/${m})`:'') + ' y deben', d.debenManana ? '#fde8e8' : '#e7f6ee')}
+          ${chip(d.sinRevisar, 'comprobantes sin revisar', d.sinRevisar ? '#fef3c7' : '#e7f6ee')}
+          ${chip(d.rechazados, 'automáticos rechazados sin pagar', d.rechazados ? '#fde8e8' : '#e7f6ee')}
+          ${chip(d.vencen, 'prórrogas que vencen mañana', d.vencen ? '#fef3c7' : '#e7f6ee')}
+          ${chip(d.pagosBot, 'pagos por el bot en 24 h · $' + Number(d.montoBot||0).toFixed(2), '#e8eefc')}
+        </div>
+        <div style="font-size:.85em;color:var(--muted);margin-top:8px">Ya cubiertos para mañana: ${d.yaPagaron} pagaron por el bot, ${d.conProrroga} con prórroga, ${d.conAuto} con automático.${(d.nombres||[]).length ? ' Deben: ' + d.nombres.map(esc).join(', ') + (d.debenManana > d.nombres.length ? '…' : '') + '.' : ''}</div>`;
+    }catch(e){ caja.className = 'empty'; caja.textContent = 'No se pudo cargar el resumen de hoy.'; }
   }
   async function mandarResumenCobranza(btn){
     if(btn){ btn.disabled = true; btn.textContent = 'Mandando…'; }
