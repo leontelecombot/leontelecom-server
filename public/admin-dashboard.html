@@ -1385,6 +1385,13 @@
             + c.contratos.map(function(x){ var susp=/suspend|cort/i.test(String(x.estado||'')); return '<li>'+esc(x.etiqueta||('Servicio '+x.id))+': '+(susp?'🔴 suspendido':'🟢 activo')+(x.fechaCorte?' · corte '+esc(fechaCorta(x.fechaCorte)):'')+(x.precio?' · $'+Number(x.precio).toFixed(2):'')+'</li>'; }).join('')
             + '</ul></div>'
           : '')
+      // Lo último que pasó con él, para contestar la llamada con contexto.
+      + ((c.historial||[]).length
+          ? '<details style="font-size:.84em;margin-top:6px"><summary style="cursor:pointer;color:var(--muted)">🕘 Últimos movimientos ('+c.historial.length+')</summary>'
+            + '<ul style="margin:4px 0 0 18px;padding:0">'
+            + c.historial.map(function(h){ var ic={pago:'💵','estado-cuenta':'💬',prorroga:'📅',automatico:'🔁',asesor:'🧑‍💼',emergencia:'🚨',imagen:'🖼️'}[h.tipo]||'•'; return '<li>'+esc(fechaCorta(h.cuando))+' '+ic+' '+esc(h.texto)+'</li>'; }).join('')
+            + '</ul></details>'
+          : '')
       /*
        * ¿Le sale la opción de pagar en línea, y por qué no?
        *

@@ -8777,6 +8777,44 @@ function lineaCoincidencias(nombre, remitente) {
   return c.map((x) => `🔎 Coincide: ${x.name} · ${x.tel}${x.plan ? ' · ' + x.plan : ''}${x.status ? ' · ' + x.status : ''}${x.tel === String(remitente || '').replace(/\D/g, '') ? ' (es quien escribe)' : ' (paga otra persona)'}`).join('\n');
 }
 
+/*
+ * LO ÚLTIMO QUE PASÓ CON ESTE CLIENTE, EN CINCO RENGLONES.
+ *
+ * Cuando llama, la oficina necesita el contexto sin abrir tres pestañas: qué
+ * pagó y por dónde, si mandó comprobante y qué se decidió, si se le dio
+ * prórroga o se le mandó el estado de cuenta, si su automático pasó. Todo eso
+ * ya está guardado en lugares distintos; aquí solo se junta y se ordena.
+ */
+function historialDe(telefono, maximo = 5) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (!tel) return [];
+  const filas = [];
+  for (const p of stripePagosRecientes.get(tel) || []) {
+    if (!p || !p.cuando) continue;
+    filas.push({ cuando: new Date(p.cuando).toISOString(), tipo: 'pago',
+      texto: `Pagó $${(Number(p.monto) || 0).toFixed(2)} por ${p.canal || 'el bot'}` + (p.pagadoPor ? ` (lo hizo el ${p.pagadoPor})` : '') + (p.cubreHasta ? ` · cubre hasta el ${p.cubreHasta}` : '') });
+  }
+  const nombresCaso = { pago: 'Comprobante', 'estado-cuenta': 'Estado de cuenta', asesor: 'Pidió asesor', emergencia: 'Emergencia', imagen: 'Mandó imagen' };
+  for (const c of caseLog) {
+    if (!c) continue;
+    const suyo = String(c.clientId) === tel;
+    // El comprobante que mandó otra persona por él queda bajo el número de esa persona.
+    const porOtro = !suyo && c.type === 'pago' && String(c.resumen || '').includes('· ' + tel);
+    if (!suyo && !porOtro) continue;
+    const estado = c.status && c.status !== 'pendiente' ? ` · ${c.status}` : '';
+    const encabezado = porOtro ? `Comprobante que mandó el ${c.clientId} por él` : (nombresCaso[c.type] || c.type || 'Caso');
+    filas.push({ cuando: c.ts, tipo: c.type || 'otro', texto: encabezado + ': ' + String(c.resumen || '').slice(0, 120) + estado });
+  }
+  const pr = prorrogas[tel];
+  if (pr && pr.cuando) filas.push({ cuando: pr.cuando, tipo: 'prorroga', texto: `Prórroga de ${pr.dias} día(s) hasta el ${pr.hasta}` + (pr.por ? ` (la dio ${pr.por})` : '') + (pr.motivo ? ` · ${pr.motivo}` : '') });
+  for (const [corte, per] of Object.entries(autoCobros[tel] || {})) {
+    if (!per || !per.cuando || !per.estado) continue;
+    const textos = { cobrado: 'se cobró', rechazado: 'tarjeta rechazada', 'sin-tarjeta': 'sin tarjeta guardada', 'ya-pago': 'ya había pagado', 'sin-deuda': 'sin deuda', 'en-proceso': 'en proceso' };
+    filas.push({ cuando: per.cuando, tipo: 'automatico', texto: `Cobro automático del corte ${corte}: ${textos[per.estado] || per.estado}` + (per.motivo ? ` · ${per.motivo}` : '') });
+  }
+  return filas.filter((f) => f.cuando).sort((a, b) => String(b.cuando).localeCompare(String(a.cuando))).slice(0, maximo);
+}
+
 function conCobroEnLinea(cliente) {
   const tel = String((cliente && cliente.phone) || '').replace(/\D/g, '');
   const puede = tel ? stripeLeon.permitido(tel, TELEFONO_PILOTO_STRIPE) : false;
@@ -8830,6 +8868,7 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
         const d = await r.json();
         const items = d.results || (Array.isArray(d) ? d : []);
         const results = items.map(mapWisphubAccount).map(conCobroEnLinea);
+        for (const c of results) c.historial = historialDe(c.phone);
         return res.json({ results, source: 'wisphub-live', total: results.length });
       }
     } catch (e) { /* si falla, cae al respaldo en memoria */ }
@@ -8857,6 +8896,7 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
     for (const c of out) {
       const varios = await serviciosDeLaCuenta(c.phone);
       if (varios.length > 1) c.contratos = varios;
+      c.historial = historialDe(c.phone);
     }
   }
   res.json({ results: out, source: 'sync', lastSync: lastWisphubSync, total: out.length });

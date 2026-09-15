@@ -1127,6 +1127,11 @@ console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ==
   es(Array.isArray(ff.contratos) && ff.contratos.length === 2 && ff.contratos.some((x) => /Local/.test(x.etiqueta) && /Suspendido/.test(x.estado)) && ff.contratos.some((x) => /Casa/.test(x.etiqueta) && x.fechaCorte), 'Fermín buscado por nombre: la ficha trae sus 2 contratos con estado y corte');
   const glo = await buscar('Gloria'); const fgl = (glo.results || [])[0] || {};
   es(fgl.name && !fgl.contratos, 'Gloria buscada por nombre: sin lista de contratos, porque tiene uno');
+  // La ficha trae los últimos movimientos: Diego pagó por comprobante ajeno y tiene prórroga; Andrés tiene pago y automático.
+  const hd = Array.isArray(fd.historial) ? fd.historial : [];
+  es(hd.length >= 1 && hd.some((h) => h.tipo === 'prorroga' && /carro/.test(h.texto) && /hasta el \d{4}-\d\d-\d\d/.test(h.texto)), `Diego: la ficha trae su historial corto con la prórroga y el motivo (${hd.length} renglones)`);
+  es(hd.length <= 5 && hd.every((h, i) => i === 0 || h.cuando <= hd[i - 1].cuando), 'y viene ordenado de lo más reciente a lo más viejo, máximo 5');
+  es(Array.isArray(fa.historial) && fa.historial.some((h) => h.tipo === 'pago' && /Pagó \$/.test(h.texto)) && fa.historial.some((h) => h.tipo === 'automatico'), 'Andrés: la ficha trae en el historial su pago y lo que pasó con su automático');
 }
 
 console.log('\n=== 14. SI EL SERVIDOR SE REINICIA A MEDIA CONVERSACIÓN, NO SE PIERDE A QUIÉN LE PAGA ===');
@@ -1519,6 +1524,13 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
   const enUnMesH = (() => { const d = new Date(PASADO + 'T12:00:00'); d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 10); })();
   const cubreH = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H, corte: enUnMesH }) }).then((x) => x.json());
   es(cubreH.esteCorte === true && cubreH.siguienteCorte === false, 'el comprobante aceptado cubre este corte y no el del mes que viene');
+  // En la ficha de Diego, el comprobante que mandó otra persona por él aparece en sus últimos movimientos.
+  {
+    const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+    const d = await fetch(BASE + '/admin/api/client-lookup?q=' + D, { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+    const h = ((d.results || [])[0] || {}).historial || [];
+    es(h.some((x) => x.tipo === 'pago' && /Comprobante que mandó el \d+ por él/.test(x.texto) && /recibido/.test(x.texto)), 'Diego: en su historial sale el comprobante que otra persona mandó por él, ya recibido');
+  }
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);
