@@ -4899,7 +4899,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // Lo que escribió es a nombre de quién está el servicio que paga.
       const titular = String(text || '').trim().slice(0, 120);
       await notifyAgentWithImage(chatId, _pdoc.userName, '💳 COMPROBANTE (PDF) del cliente',
-        ['Archivo: ' + _pdoc.fname, '👤 Servicio a nombre de: ' + (titular || 'no especificado')],
+        ['Archivo: ' + _pdoc.fname, '👤 Servicio a nombre de: ' + (titular || 'no especificado'), ...(titular ? [lineaCoincidencias(titular, normalizePhone(chatId))] : [])],
         '', { docUrl: _pdoc.docUrl, docName: _pdoc.fname, caseType: 'pago' });
       pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pdoc.userName, type: 'pago', stage: 0 });
       if (typeof schedulePersist === 'function') schedulePersist();
@@ -4983,7 +4983,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         const titular = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 120);
         if (titular.length < 3) { await sendMsg(chatId, '👤 ¿Me escribes el *nombre completo del titular* del servicio, por favor?'); return; }
         pendingImage.delete(_pendKey);
-        const lines = [...(_pend.lineasListas || []), '🧾 Servicio a nombre de: ' + titular];
+        const lines = [...(_pend.lineasListas || []), '🧾 Servicio a nombre de: ' + titular, lineaCoincidencias(titular, normalizePhone(chatId))];
         await enviarComprobante(lines, _pend.headlinePend || '💳 COMPROBANTE DE PAGO');
         await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
         return;
@@ -7698,6 +7698,32 @@ function mapWisphubAccount(c) {
  *
  * Y se dice el MOTIVO, no solo sí o no: cada motivo se arregla en otro lado.
  */
+/*
+ * Con quién coincide un nombre escrito a mano ("Ana Lilia Hernández"). Para
+ * que el asesor no tenga que buscarlo en Wisphub: el comprobante llega ya con
+ * el teléfono, el plan y el estado del servicio al que hay que abonarle. Si
+ * hay varias coincidencias se listan todas; si no hay, se dice.
+ */
+function coincidenciasDeTitular(nombre) {
+  const q = String(nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (q.length < 4) return [];
+  const palabras = q.split(' ').filter((w) => w.length > 2);
+  const out = [];
+  for (const [tel, c] of wisphubClients.entries()) {
+    const n = String(c.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (!n) continue;
+    const todas = palabras.length && palabras.every((w) => n.includes(w));
+    if (todas || n.includes(q)) out.push({ tel, name: c.name, plan: c.plan || '', status: c.status || '', precioPlan: c.precioPlan || '' });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+function lineaCoincidencias(nombre, remitente) {
+  const c = coincidenciasDeTitular(nombre);
+  if (!c.length) return '🔎 No encontré ese nombre en el padrón: revisar a mano.';
+  return c.map((x) => `🔎 Coincide: ${x.name} · ${x.tel}${x.plan ? ' · ' + x.plan : ''}${x.status ? ' · ' + x.status : ''}${x.tel === String(remitente || '').replace(/\D/g, '') ? ' (es quien escribe)' : ' (paga otra persona)'}`).join('\n');
+}
+
 function conCobroEnLinea(cliente) {
   const tel = String((cliente && cliente.phone) || '').replace(/\D/g, '');
   const puede = tel ? stripeLeon.permitido(tel, TELEFONO_PILOTO_STRIPE) : false;
