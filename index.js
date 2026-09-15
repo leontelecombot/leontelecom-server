@@ -4951,8 +4951,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
         && !_enOtraCosa && !_conComprobante && !_isBtn) {
       const telP = normalizePhone(chatId);
       const visto = pagoRecienteDe(telP);
+      // Un comprobante que ya mandó y la oficina todavía no revisa: no se le vuelve a pedir.
+      const hace3d = Date.now() - 3 * 24 * 3600 * 1000;
+      const enRevision = caseLog.find((c) => c.clientId === telP && c.type === 'pago' && c.status === 'pendiente' && new Date(c.ts).getTime() >= hace3d);
       if (visto) {
         await sendMsg(chatId, `✅ Sí, tu pago ya está registrado (${canalTexto(visto.canal)}). No hace falta que mandes nada más. 🙌`);
+      } else if (enRevision) {
+        await sendMsg(chatId, '📄 Ya tenemos tu comprobante y la oficina lo está revisando. En cuanto lo registren te aviso por aquí; no hace falta que lo vuelvas a mandar. 🙌');
       } else {
         await sendMsg(chatId, '👍 Gracias. Para registrarlo, *mándame la foto o el PDF de tu comprobante* aquí mismo y te confirmo en cuanto la oficina lo revise. Si pagaste por el bot (tarjeta, OXXO o tu CLABE), no hace falta: se registra solo.');
       }
