@@ -1600,6 +1600,16 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   const neg = await fetch(BASE + '/admin/api/prorrogas/negar', { method: 'POST', headers: { ...H_, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H }) }).then((x) => x.json());
   r = await respuestas(n, 1);
   es(neg.ok && neg.habia === true && r.some((m) => m.a === H && /no podemos dar más tiempo/.test(m.texto)), 'desde el panel también se niega y se le avisa a Hugo');
+  // Las formas reales de pedir tiempo se entienden, y lo que no es pedir tiempo, no.
+  {
+    const si = ['me dan chance de pagar hasta el viernes?', 'puedo pagar la otra semana?', 'hasta el lunes les pago', 'me pueden esperar unos días con el pago', 'no me corten, pago el sábado', 'no tengo para pagar hoy, pago el 20', 'me esperan tantito con el pago?', 'puedo pagar después?', 'pago el viernes sin falta', '¿me dan prórroga?', 'necesito más tiempo para pagar', 'hoy no puedo pagar', 'les pago en cuanto me paguen', 'aún no me pagan, pago la próxima semana', 'me pueden dar unos días', 'que no me suspendan, pago mañana', 'me van a cortar? pago el lunes', 'no me corten porfa', 'puedo pagar el 25?', 'me dan hasta el 20?', 'me esperan hasta la quincena', 'pago mañana', 'todavía no puedo pagar', 'les pago el 15 de octubre'];
+    const no = ['llevo unos días sin internet', 'cuando es mi corte', 'ya pagué el viernes', 'me cortaron el servicio', 'ya pagué, cuándo me reconectan', 'sí pagué el 14 de agosto', 'envío pago de internet', 'cuánto debo', 'el pago del servicio se hizo el día 14 de agosto', 'mi internet está lento desde el lunes', 'quiero pagar con tarjeta', 'no me llega la señal', 'hasta por el momento no, pero en la semana me falló seguido', 'ya está el pago de servicio', 'me cobraron dos veces'];
+    const rs = await fetch(BASE + '/api/pruebas/entiende-prorroga', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ frases: [...si, ...no] }) }).then((x) => x.json());
+    const malSi = rs.resultados.slice(0, si.length).filter((x) => !x.es).map((x) => x.frase);
+    const malNo = rs.resultados.slice(si.length).filter((x) => x.es).map((x) => x.frase);
+    es(malSi.length === 0, `${si.length} formas de pedir tiempo se entienden` + (malSi.length ? ' · fallan: ' + malSi.join(' | ') : ''));
+    es(malNo.length === 0, `${no.length} frases que NO piden tiempo no se confunden` + (malNo.length ? ' · fallan: ' + malNo.join(' | ') : ''));
+  }
   // La ayuda del asesor menciona NO PRORROGA.
   n = enviados.length;
   await entra(ASESOR, 'ayuda');

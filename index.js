@@ -397,8 +397,20 @@ function isUbicacionRequest(text) {
 function isProrrogaRequest(text) {
   const v = normalizeText(text);
   if (/\bprorrog\w*/.test(v)) return true;                       // "prórroga", "prorrogar"
+  // Lo que ya se pagó no es una solicitud de tiempo ("ya pagué el viernes").
+  if (/\b(ya|si) (pague|pago|deposite|transferi|abone)\b/.test(v) && !/\b(no|todavia|aun)\b/.test(v)) return false;
+  const DIA = '(lunes|martes|miercoles|jueves|viernes|sabado|domingo|manana|pasado manana|quincena|fin de semana|proxim\\w+|\\d{1,2}(?: de \\w+)?)';
+  // Sin la palabra "pago" también se entiende: "no me corten, el lunes pago", "me esperan hasta la quincena", "me dan unos días".
+  if (/\b(no me (corten|suspendan|quiten|desconecten)|no me vayan a (cortar|suspender)|que no me (corten|suspendan)|me van a cortar)\b/.test(v)) return true;
+  if (/\b(me esperan|esperenme|esperame|me aguantan|aguantenme|aguantame|me dan chance|me pueden esperar)\b/.test(v)) return true;
+  if (/\b(me (dan|den|pueden dar|podrian dar)|denme|dame) (unos|mas|un par de|dos|tres|cuatro|cinco) dias\b/.test(v)) return true;
+  if (new RegExp('\\b(me dan|me den|me pueden dar|me esperan|esperenme) hasta (el|la) ' + DIA + '\\b').test(v)) return true;
   const pago = /\b(pag\w*|abon\w*|recibo|mensualidad|adeudo|deuda)\b/;
   if (!pago.test(v)) return false;
+  // "pago el viernes", "puedo pagar el 25?", "les pago mañana", "pago después", "pago en cuanto me paguen"
+  if (new RegExp('\\b(pago|pagare|pagaria|pagamos|pagaremos|puedo pagar|podria pagar|podre pagar|les pago|le pago|lo pago|te pago) (el |este |hasta el |para el |la |esta |hasta la )?' + DIA + '\\b').test(v)) return true;
+  if (/\b(pago|pagar|pagare|pagamos) (despues|luego|mas tarde|al rato|en cuanto (me paguen|cobre|pueda|tenga))\b/.test(v)) return true;
+  if (/\b(todavia|aun) no (puedo|he podido|tengo para|voy a poder) (pagar|abonar)\b/.test(v)) return true;
   // pedir chance / más tiempo / que lo esperen / quincena / otra semana
   if (/\b(chance|plazo|mas tiempo|mas dias?|unos dias?|un dia mas|otro dia|otros dias?|otra semana|proxima semana|me espera\w*|esper\w*me|aguant\w*|tiempito|quincena|(el mes|la semana) que (entra|viene))\b/.test(v)) return true;
   // "para/hasta" + un día futuro / semana
@@ -7029,7 +7041,12 @@ if (process.env.PRUEBAS === '1') {
     for (const t of tickets.values()) if (t.estado !== 'resuelto') t.createdAt = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
     res.json(await preguntarSiYaQuedo(true));
   });
-  app.post('/api/pruebas/prorroga-pedida-vieja', (req, res) => {
+  app.post('/api/pruebas/entiende-prorroga', (req, res) => {
+  if (process.env.PRUEBAS !== '1') return res.status(404).end();
+  const frases = Array.isArray((req.body || {}).frases) ? req.body.frases : [];
+  res.json({ resultados: frases.map((f) => ({ frase: String(f), es: isProrrogaRequest(String(f)) })) });
+});
+app.post('/api/pruebas/prorroga-pedida-vieja', (req, res) => {
   if (process.env.PRUEBAS !== '1') return res.status(404).end();
   const tel = normalizePhone(String((req.body || {}).telefono || ''));
   const horas = Number((req.body || {}).horas || 4);
