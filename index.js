@@ -3762,6 +3762,17 @@ async function barrerCobroAutomatico(force = false) {
     if (corte === manana && !per.estado) {
       per.estado = 'en-proceso'; per.cuando = new Date().toISOString(); schedulePersist();
       try {
+        /*
+         * Si este mes ya pagó por su cuenta (tarjeta, OXXO, CLABE o comprobante
+         * aceptado), no se le cobra en automático aunque Wisphub siga con la
+         * factura pendiente: la oficina la marca a mano y eso tarda días.
+         */
+        const yaPago = pagoRecienteDe(tel);
+        if (yaPago) {
+          per.estado = 'ya-pago'; per.motivo = yaPago.canal; schedulePersist(); hechos.sinDeuda++;
+          await sendWhatsAppMessage(tel, '✅ Este mes ya pagaste por tu cuenta, así que no se cobró nada a tu tarjeta. El cobro automático sigue activo para el mes que viene. 🙌').catch(() => {});
+          continue;
+        }
         let deuda = 0;
         try { deuda = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; }
         catch (e) { throw new Error('No se pudo leer la deuda: ' + e.message); }
@@ -5937,6 +5948,13 @@ app.get('/api/cuenta-cobro/estado', async (_req, res) => {
  * En producción esta ruta no existe.
  */
 if (process.env.PRUEBAS === '1') {
+  // Simula que pasó un mes: se olvidan los pagos recientes de un teléfono.
+  app.post('/api/pruebas/olvidar-pagos', (req, res) => {
+    const tel = normalizePhone(String((req.body || {}).telefono || ''));
+    stripePagosRecientes.delete(tel);
+    for (const c of caseLog) if (c.clientId === tel && c.type === 'pago') c.status = 'viejo';
+    res.json({ ok: true });
+  });
   app.post('/api/pruebas/cobro-automatico', async (_req, res) => {
     res.json(await barrerCobroAutomatico(true));
   });

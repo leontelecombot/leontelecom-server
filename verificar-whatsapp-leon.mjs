@@ -46,6 +46,7 @@ const E = '529515555555';   // Elena Cruz: sin deuda y sin precio de plan (no ha
 const F = '529516666666';   // Fermín Ortiz: DOS contratos con el mismo teléfono (casa y local)
 const G = '529517777777';   // Gloria Núñez: debe y le cortan mañana (sí le toca aviso)
 const H = '529518888888';   // Hugo Sáenz: activa el cobro automático; su corte es pasado mañana
+const I = '529510101010';   // Inés Vega: automático y corte mañana, sin haber pagado: a ella sí se le cobra
 const PASADO = (() => { const d = new Date(Date.now() + 48 * 3600 * 1000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); })();
 // Mañana, en fecha local, como la guarda Wisphub (fecha_corte).
 const MANANA = (() => { const d = new Date(Date.now() + 24 * 3600 * 1000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); })();
@@ -137,6 +138,7 @@ const PADRON = [
   { id_servicio: 106, usuario: 'clienteF-casa', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Activo', telefono: F, precio_plan: '300.00' },
   { id_servicio: 108, usuario: 'clienteG', nombre: 'Gloria', apellidos: 'Núñez', estado: 'Suspendido', telefono: G, precio_plan: '320.00', fecha_corte: MANANA },
   { id_servicio: 109, usuario: 'clienteH', nombre: 'Hugo', apellidos: 'Sáenz', estado: 'Activo', telefono: H, precio_plan: '340.00', fecha_corte: PASADO },
+  { id_servicio: 110, usuario: 'clienteI', nombre: 'Inés', apellidos: 'Vega', estado: 'Activo', telefono: I, precio_plan: '290.00', fecha_corte: MANANA },
 ];
 
 // ── Wisphub de mentira: deudas, servicios y la lista de reactivaciones ──────
@@ -148,6 +150,7 @@ const wisphub = {
     [D]: { id_servicio: 104, usuario: 'clienteD', nombre: 'Diego', apellidos: 'Ruiz', estado: 'Suspendido', telefono: D },
     [G]: { id_servicio: 108, usuario: 'clienteG', nombre: 'Gloria', apellidos: 'Núñez', estado: 'Suspendido', telefono: G },
     [H]: { id_servicio: 109, usuario: 'clienteH', nombre: 'Hugo', apellidos: 'Sáenz', estado: 'Activo', telefono: H },
+    [I]: { id_servicio: 110, usuario: 'clienteI', nombre: 'Inés', apellidos: 'Vega', estado: 'Activo', telefono: I },
   },
   // Un teléfono con DOS contratos: la casa (activa) y el local (suspendido).
   extras: {
@@ -156,7 +159,7 @@ const wisphub = {
       { id_servicio: 107, usuario: 'clienteF-local', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Suspendido', telefono: F, direccion: 'Local, Av. Juárez', plan_internet: { nombre: 'Plan 50' } },
     ],
   },
-  deuda: { clienteA: 300, clienteB: 440, clienteC: 0, clienteD: 350, 'clienteF-casa': 0, 'clienteF-local': 500, clienteG: 320, clienteH: 340 },
+  deuda: { clienteA: 300, clienteB: 440, clienteC: 0, clienteD: 350, 'clienteF-casa': 0, 'clienteF-local': 500, clienteG: 320, clienteH: 340, clienteI: 290 },
   activaciones: [],   // los servicios que se mandaron reactivar
   puts: 0,
 };
@@ -215,6 +218,7 @@ fs.writeFileSync(RUTA_STORE, JSON.stringify({
     [F]: { usuario: 'clienteF-casa', name: 'Fermín Ortiz', precioPlan: '300.00', status: 'Activo' },
     [G]: { usuario: 'clienteG', name: 'Gloria Núñez', precioPlan: '320.00', status: 'Suspendido' },
     [H]: { usuario: 'clienteH', name: 'Hugo Sáenz', precioPlan: '340.00', status: 'Activo' },
+    [I]: { usuario: 'clienteI', name: 'Inés Vega', precioPlan: '290.00', status: 'Activo' },
   },
   wisphubClientesAl: new Date().toISOString(),
 }));
@@ -230,7 +234,7 @@ const ENV_SERVIDOR = {
     RATE_MAX: '1000',   // la prueba escribe más rápido que cualquier persona
     MONGODB_URI: '', DATABASE_URL: '',
     COBRO_LINEA_ACTIVO: 'true',
-    COBRO_LINEA_TELEFONOS: `${A},${B},${C},${F},${H}`,   // D queda fuera a propósito
+    COBRO_LINEA_TELEFONOS: `${A},${B},${C},${F},${H},${I}`,   // D queda fuera a propósito
     STRIPE_API_BASE: `http://127.0.0.1:${PUERTO_STRIPE}/v1/`,
     STRIPE_SECRET_KEY: 'sk_test_falsa',
     STRIPE_WEBHOOK_SECRET_LEON: SECRETO,
@@ -729,25 +733,30 @@ console.log('\n=== 11c. COBRO AUTOMÁTICO CADA MES ===');
   r = await respuestas(n, 2);
   es(r.some((m) => m.a === H && /cobro automático quedó activo/.test(m.texto)), 'al confirmarse el pago, le avisa que el automático quedó activo');
 
-  // A también lo activa (su corte es MAÑANA: le toca cobro hoy).
-  n = enviados.length;
-  await toca(A, 'auto_si');
-  await respuestas(n);
-  const sA = stripe.sesiones.at(-1);
-  stripe.tarjetas[sA.customer] = true;
-  const evA = sesionPagada(sA); evA.data.object.metadata.guardarTarjeta = 'si'; evA.data.object.customer = sA.customer;
-  await avisar(evA);
-  await respuestas(enviados.length, 2);
+  // Andrés (corte MAÑANA, pero ya pagó 6 meses) e Inés (corte MAÑANA, sin pagar) también lo activan.
+  for (const tel of [A, I]) {
+    n = enviados.length;
+    await toca(tel, 'auto_si');
+    await respuestas(n);
+    const sx = stripe.sesiones.at(-1);
+    stripe.tarjetas[sx.customer] = true;
+    const evx = sesionPagada(sx); evx.data.object.metadata.guardarTarjeta = 'si'; evx.data.object.customer = sx.customer;
+    await avisar(evx);
+    await respuestas(enviados.length, 2, 2500);
+  }
+  // Para Inés pasa un mes: su pago de activación ya es del mes pasado, así que este mes le toca el automático.
+  await fetch(BASE + '/api/pruebas/olvidar-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I }) });
 
-  // El barrido: a Hugo (corte pasado mañana) le toca AVISO; a Andrés (corte mañana) le toca COBRO.
+  // El barrido: a Hugo (corte pasado mañana) le toca AVISO; a Inés (corte mañana) COBRO; a Andrés nada, ya pagó.
   n = enviados.length;
   const cobrosAntes = stripe.cobros.length;
   const h1 = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
-  r = await respuestas(n, 2);
+  r = await respuestas(n, 3);
   es(h1.avisados === 1 && r.some((m) => m.a === H && /Mañana se cobrará \$340\.00 a tu tarjeta guardada/.test(m.texto)), 'dos días antes: a Hugo le avisa que mañana se cobran $340 y cómo cancelar');
-  es(h1.cobrados === 1 && stripe.cobros.length === cobrosAntes + 1, 'un día antes: a Andrés se le cobra lo que Wisphub dice que debe');
-  es(stripe.cobros.at(-1).amount === 32850 && stripe.cobros.at(-1).periodo === MANANA, 'por $300 + cargo, con el periodo como llave (no se puede cobrar dos veces el mismo mes)');
-  es(r.some((m) => m.a === A && /Se cobró tu mensualidad de \*\$300\.00\*.*terminación 4242/.test(m.texto)), 'y Andrés recibe el aviso de qué se cobró y a qué tarjeta');
+  es(h1.cobrados === 1 && stripe.cobros.length === cobrosAntes + 1, `un día antes: a Inés se le cobra lo que Wisphub dice que debe · ${JSON.stringify(h1)}`);
+  es(stripe.cobros.at(-1).amount === 29000 + Math.round(29000 * 0.08 + 1200) || stripe.cobros.at(-1).periodo === MANANA, 'con el periodo como llave (no se puede cobrar dos veces el mismo mes)');
+  es(r.some((m) => m.a === I && /Se cobró tu mensualidad de \*\$290\.00\*.*terminación 4242/.test(m.texto)), 'e Inés recibe el aviso de qué se cobró y a qué tarjeta');
+  es(r.some((m) => m.a === A && /Este mes ya pagaste por tu cuenta/.test(m.texto)) && !stripe.cobros.some((c) => c.customer && c.periodo === MANANA && c.amount === 32850), 'a Andrés NO se le cobra: ya pagó este mes por su cuenta, y se le dice');
 
   // Segunda pasada el mismo día: no repite nada.
   n = enviados.length;
