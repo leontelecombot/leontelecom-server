@@ -1110,7 +1110,11 @@ console.log('\n=== 14. SI EL SERVIDOR SE REINICIA A MEDIA CONVERSACIÓN, NO SE P
 {
   // A dice que va a pagar la de Ana Pérez y se queda a punto de elegir cómo.
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  // Antes, un link de su propia cuenta: tras el reinicio, "no me abre" debe repetir ese mismo.
   let n = enviados.length;
+  await entra(A, 'con tarjeta'); await respuestas(n);
+  const linkAntesDeReiniciar = stripe.sesiones.at(-1).url;
+  n = enviados.length;
   await entra(A, 'a nombre de Ana Pérez');
   await respuestas(n);
   n = enviados.length;
@@ -1130,6 +1134,10 @@ console.log('\n=== 14. SI EL SERVIDOR SE REINICIA A MEDIA CONVERSACIÓN, NO SE P
   await toca(A, 'pago_tarjeta');
   const r = await respuestas(n);
   es(dice(r, /La mensualidad de \*Ana Pérez\* es de/), 'después del reinicio, sigue cotizando la cuenta de Ana Pérez, no la suya');
+  n = enviados.length;
+  await entra(A, 'no me abre el link');
+  const r3 = await respuestas(n);
+  es(dice(r3, /Aquí está otra vez tu link/) && r3.some((m) => m.texto.includes(linkAntesDeReiniciar)), 'y "no me abre el link" repite el MISMO link de antes del reinicio (el último link también se guarda)');
   SEGUNDO = srv2;   // sigue vivo para las secciones que faltan
 }
 

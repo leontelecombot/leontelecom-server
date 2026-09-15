@@ -1280,6 +1280,11 @@ function buildStateSnapshot() {
      * media hora, así que guardar las demás no aporta nada.
      */
     sesionesDePago: Object.fromEntries([...sessions].filter(([, v]) => v && /^pago_(otro_|servicio_)/.test(String(v.state || '')))),
+    // Lo chico que también sobrevive a un reinicio: fichas de OXXO vivas, el último
+    // link mandado (para "no me abre") y a quién se le ofreció el automático.
+    fichasOxxo: Object.fromEntries([...fichasOxxo].filter(([, v]) => v && Date.now() - v.cuando < 4 * 86400000)),
+    ultimoLinkPago: Object.fromEntries([...ultimoLinkPago].filter(([, v]) => v && Date.now() - v.cuando < 3 * 3600000)),
+    autoOfrecido: Object.fromEntries([...autoOfrecido].filter(([, v]) => Date.now() - v < 30 * 60000)),
     stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX),
     /*
      * Los avisos de Stripe ya procesados.
@@ -1474,6 +1479,9 @@ function hydrateState(s) {
       if (v && v.data && Number(v.data.desde) > limite) sessions.set(String(k), v);
     }
   }
+  for (const [k, v] of Object.entries(s.fichasOxxo || {})) if (v && v.cuando) fichasOxxo.set(String(k), v);
+  for (const [k, v] of Object.entries(s.ultimoLinkPago || {})) if (v && v.url) ultimoLinkPago.set(String(k), v);
+  for (const [k, v] of Object.entries(s.autoOfrecido || {})) if (Number(v)) autoOfrecido.set(String(k), Number(v));
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
