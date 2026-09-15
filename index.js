@@ -3774,7 +3774,7 @@ async function barrerCobroAutomatico(force = false) {
       per.avisado = new Date().toISOString(); schedulePersist();
       await avisarPorIniciativa(tel,
         `📅 Hola. Tu fecha de pago es el ${corte.split('-').reverse().join('/')}. *Mañana se cobrará${monto > 0 ? ` $${monto.toFixed(2)}` : ' tu mensualidad'} a tu tarjeta guardada*, como lo pediste, y tu servicio sigue sin cortes.\n\n`
-        + 'Si prefieres pagar de otra forma este mes, escribe *CANCELAR AUTOMÁTICO* antes de mañana.').catch(() => {});
+        + 'Si este mes prefieres pagar de otra forma, escribe *pagar* y elige cómo: al ver tu pago, mañana no se cobra nada a la tarjeta. Para quitar el automático por completo, escribe *CANCELAR AUTOMÁTICO*.').catch(() => {});
       hechos.avisados++;
       continue;
     }
