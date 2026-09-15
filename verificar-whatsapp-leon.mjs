@@ -921,6 +921,16 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   const corrida3 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
   await respuestas(n, 1, 1500);
   es((corrida3.result || corrida3).prorrogaVence === 0 && !enviados.slice(n).some((m) => m.a === D), 'si la corrida se repite, el aviso de la prórroga no se duplica');
+  // A Inés se le rechaza la tarjeta del automático: entonces el aviso de corte SÍ le toca, con la razón.
+  await fetch(BASE + '/api/pruebas/olvidar-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I }) });
+  await fetch(BASE + '/api/pruebas/auto-estado', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I, estado: 'rechazado' }) });
+  PADRON.find((x) => x.id_servicio === 110).saldo = '290.00';   // Wisphub la tiene como deudora: el cobro no entró
+  n = enviados.length;
+  const corrida4 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
+  r = await respuestas(n, 1, 6000);
+  const c4 = corrida4.result || corrida4;
+  es(c4.sent === 1 && r.some((m) => m.a === I && m.tipo === 'template' && /cobro automático de este mes no pasó: la tarjeta fue rechazada/.test(m.texto)), 'si el automático fue rechazado, a Inés sí le llega el aviso de corte y dice por qué');
+  es(c4.conAutomatico === 0, 'y ya no cuenta como "cubierta por el automático"');
   const lista2 = await fetch(BASE + '/admin/api/prorrogas', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
   const pD = (lista2.prorrogas || []).find((p) => p.telefono === D) || {};
   es(pD.restan === 1 && pD.avisado === true && pD.yaPago === false, `el panel lo dice de un vistazo: vence mañana, ya avisado, no ha pagado (${pD.restan}/${pD.avisado}/${pD.yaPago})`);

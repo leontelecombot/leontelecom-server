@@ -3978,12 +3978,19 @@ async function sweepCorteReminders(force = false) {
       if (pagoRecienteDe(phone)) { yaPagaron++; continue; }
       if (prorrogaVigente(phone)) { conProrroga++; continue; }
       // Con cobro automático, el cobro sale hoy mismo: "mañana te cortamos" sería un susto sin sentido.
-      if ((stripeClientes.get(phone) || {}).cobroAutomatico) { conAutomatico++; continue; }
-      candidatos.push([phone, c, fc]);
+      // Salvo que el cobro de este mes ya se haya intentado y NO haya pasado (tarjeta
+      // rechazada, sin tarjeta): entonces el aviso sí le toca, o se corta sin saber.
+      let autoFallo = '';
+      if ((stripeClientes.get(phone) || {}).cobroAutomatico) {
+        const per = ((autoCobros[phone] || {})[fc]) || {};
+        if (per.estado !== 'rechazado' && per.estado !== 'sin-tarjeta') { conAutomatico++; continue; }
+        autoFallo = per.estado;
+      }
+      candidatos.push([phone, c, fc, autoFallo]);
     }
 
     let sent = 0, failed = 0, yaEnviados = 0;
-    for (const [phone, c, fc] of candidatos) {
+    for (const [phone, c, fc, autoFallo] of candidatos) {
       try {
         const key = `${phone}|${fc}`;
         if (corteReminders[key]) { yaEnviados++; continue; }
@@ -4006,6 +4013,11 @@ async function sweepCorteReminders(force = false) {
          * dinero en la cabeza. Solo a quien de verdad le va a salir la opción;
          * a los demás no se les promete nada.
          */
+        if (autoFallo) {
+          msgCorte = (msgCorte.trim() + (autoFallo === 'sin-tarjeta'
+            ? ' ⚠️ Tu cobro automático de este mes no se hizo porque ya no hay una tarjeta guardada.'
+            : ' ⚠️ Tu cobro automático de este mes no pasó: la tarjeta fue rechazada.')).slice(0, 900);
+        }
         if (stripeLeon.permitido(phone, TELEFONO_PILOTO_STRIPE)) {
           msgCorte = (msgCorte.trim() + ' 💳 Ahora también puedes pagar desde tu teléfono, con tarjeta o en OXXO, sin ir a la oficina: responde PAGAR y te digo cómo.').slice(0, 1000);
         }
@@ -6301,6 +6313,15 @@ if (process.env.PRUEBAS === '1') {
     stripePagosRecientes.delete(tel);
     for (const c of caseLog) if (c.clientId === tel && c.type === 'pago') c.status = 'viejo';
     res.json({ ok: true });
+  });
+  app.post('/api/pruebas/auto-estado', (req, res) => {
+    // Deja el cobro automático de un cliente en el estado que se pida (p. ej. rechazado).
+    const tel = normalizePhone(String((req.body || {}).telefono || ''));
+    const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte);
+    if (!tel || !corte) return res.status(400).json({ error: 'sin cliente o sin corte' });
+    const log = autoCobros[tel] || (autoCobros[tel] = {});
+    log[corte] = { ...(log[corte] || {}), estado: String((req.body || {}).estado || 'rechazado') };
+    res.json({ ok: true, corte });
   });
   app.post('/api/pruebas/ya-quedo', async (req, res) => {
     // Envejece los reportes abiertos y pregunta.
