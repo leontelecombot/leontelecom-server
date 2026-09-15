@@ -3663,6 +3663,11 @@ function pagoRecienteDe(telefono) {
   }
   return null;
 }
+function canalTexto(canal) {
+  const m = { tarjeta: 'con tarjeta', oxxo: 'en OXXO', transferencia: 'por transferencia a tu CLABE', 'tarjeta-automatico': 'con tu cobro automático', comprobante: 'con el comprobante que mandaste', 'comprobante de otra persona': 'con el comprobante que mandaron por ti' };
+  const k = String(canal || '');
+  return m[k] || (k.startsWith('adelantado') ? 'pagado por adelantado' : 'en línea');
+}
 function fechaLocalISO(d = new Date()) {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
@@ -4932,6 +4937,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
         (suspendido ? '🔴 Tu servicio está *suspendido*.' : (corte ? `📅 Tu fecha de corte es el *${bonita}*.` : '📅 No tengo tu fecha de corte a la mano.'))
         + monto
         + (suspendido || monto ? '\n\nEscribe *pagar* y te digo cómo, o *cuánto debo* para ver el detalle.' : '\n\nEstás al corriente. 🙌'));
+      return;
+    }
+    /*
+     * "Ya pagué" / "ya deposité" sin comprobante. Es de lo más común en las
+     * conversaciones reales ("Sea depositado 440", "el pago se hizo el 14").
+     * Si el bot ya vio ese pago, se lo confirma; si no, le pide la foto del
+     * comprobante en vez de dejarlo esperando una respuesta que no llega.
+     */
+    if (/^(ya (pagu[eé]|deposit[eé]|transfer[ií]|hice el pago|realic[eé] el pago|se pag[oó])|(se|le) (deposit|transfir|hizo el pago|realiz[oó] el pago)|(el )?pago (ya )?(se hizo|est[aá] hecho|fue realizado)|deposit[eé] (los|el|\$)|transfer[ií] (los|el|\$))/.test(_pt)
+        && !_enOtraCosa && !_conComprobante && !_isBtn) {
+      const telP = normalizePhone(chatId);
+      const visto = pagoRecienteDe(telP);
+      if (visto) {
+        await sendMsg(chatId, `✅ Sí, tu pago ya está registrado (${canalTexto(visto.canal)}). No hace falta que mandes nada más. 🙌`);
+      } else {
+        await sendMsg(chatId, '👍 Gracias. Para registrarlo, *mándame la foto o el PDF de tu comprobante* aquí mismo y te confirmo en cuanto la oficina lo revise. Si pagaste por el bot (tarjeta, OXXO o tu CLABE), no hace falta: se registra solo.');
+      }
       return;
     }
     if (/^(oficina|en la oficina|pagar en oficina|otras formas)[\s.!]*$/.test(_pt) && !_enOtraCosa) {

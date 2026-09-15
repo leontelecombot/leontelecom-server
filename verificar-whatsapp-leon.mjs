@@ -930,6 +930,18 @@ console.log('\n=== 16. "¿CUÁNDO ES MI CORTE?" ===');
   es(dice(r, /Tienes \*2 servicios\*/) && dice(r, /🔴 suspendido/) && dice(r, /🟢 activo/), 'con dos contratos, dice cómo va cada uno');
 }
 
+console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
+{
+  let n = enviados.length;
+  await entra(G, 'ya deposité los 320');
+  let r = await respuestas(n);
+  es(dice(r, /mándame la foto o el PDF de tu comprobante/), 'si el bot no ha visto el pago, pide el comprobante en vez de dejarlo esperando');
+  n = enviados.length;
+  await entra(B, 'ya pagué');
+  r = await respuestas(n);
+  es(dice(r, /tu pago ya está registrado/), 'si el pago ya entró por el bot, se lo confirma y no le pide nada');
+}
+
 console.log(`\n${ok} bien, ${mal} mal`);
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);
