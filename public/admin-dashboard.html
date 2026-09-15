@@ -1120,6 +1120,10 @@
 
   // ===== Productos (web y bot) =====
   let PRODUCTS_DATA = [], PROD_CATS = [];
+  function canalBonito(c){
+    const m = { 'tarjeta':'tarjeta', 'oxxo':'OXXO', 'transferencia':'transferencia a su CLABE', 'tarjeta-automatico':'cobro automático', 'comprobante':'comprobante aceptado', 'comprobante de otra persona':'comprobante que mandó otra persona' };
+    const k = String(c||''); return m[k] || k;
+  }
   function fechaCorta(v){
     const m = String(v||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
     if(m) return m[3]+'/'+m[2]+'/'+m[1];
@@ -1365,7 +1369,7 @@
       // Lo que cambia la respuesta cuando este cliente llama.
       + ((c.ultimoPagoEnLinea || c.prorroga || c.adelantadoHasta || c.cobroAutomatico)
           ? '<div style="font-size:.85em;margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">'
-            + (c.ultimoPagoEnLinea ? '<span style="background:#e7f6ee;color:#1a7f4b;border-radius:999px;padding:3px 10px;font-weight:600">✅ Pagó por el bot el ' + esc(fechaCorta(c.ultimoPagoEnLinea.cuando)) + ' (' + esc(c.ultimoPagoEnLinea.canal) + ')</span>' : '')
+            + (c.ultimoPagoEnLinea ? '<span style="background:#e7f6ee;color:#1a7f4b;border-radius:999px;padding:3px 10px;font-weight:600">✅ Pagó por el bot el ' + esc(fechaCorta(c.ultimoPagoEnLinea.cuando)) + ' (' + esc(canalBonito(c.ultimoPagoEnLinea.canal)) + ')</span>' : '')
             + (c.prorroga ? '<span style="background:#fff4d6;color:#8a5a00;border-radius:999px;padding:3px 10px;font-weight:600">📅 Prórroga hasta el ' + esc(fechaCorta(c.prorroga.hasta)) + (c.prorroga.motivo ? ' · ' + esc(c.prorroga.motivo) : '') + '</span>' : '')
             + (c.adelantadoHasta ? '<span style="background:#e8eefc;color:#2a4fb5;border-radius:999px;padding:3px 10px;font-weight:600">📆 Pagado por adelantado hasta el ' + esc(fechaCorta(c.adelantadoHasta)) + '</span>' : '')
             + (c.cobroAutomatico ? '<span style="background:#f1e9ff;color:#5b2ca8;border-radius:999px;padding:3px 10px;font-weight:600">🔁 Cobro automático activo</span>' : '')
