@@ -3039,6 +3039,31 @@ function buildMigrationNotification(d, name) {
   ].filter(Boolean).join('\n');
 }
 
+/*
+ * Dar por bueno el comprobante de un cliente: marca sus casos, le avisa (por
+ * plantilla, puede ser de hace días) y, si el comprobante era de otra cuenta,
+ * también al titular. Lo usan el asesor por WhatsApp (RECIBIDO) y el panel.
+ */
+async function confirmarPagoRecibido(clientId, porQuien) {
+  const casoPago = caseLog.find((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
+  const titularAjeno = (String((casoPago || {}).resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1];
+  const marcados = markCases(clientId, 'recibido', porQuien);
+  if (!marcados) return { marcados: 0, eraPago: !!casoPago, titularAjeno: '' };
+  pendingAgentRequests.delete(clientId);
+  schedulePersist();
+  const suspendidoAun = /suspend|cort/i.test(String((wisphubClients.get(clientId) || {}).status || ''));
+  try {
+    await avisarPorIniciativa(clientId, casoPago
+      ? '✅ Tu pago quedó registrado. ¡Gracias! 🙌' + (suspendidoAun ? ' Tu servicio se reactiva en unos minutos; si en una hora sigue sin navegar, reinicia tu módem o escríbenos.' : '')
+      : '✅ ¡Recibido, gracias! 🙌');
+  } catch (e) { console.error('[recibido] aviso al cliente:', e.message); }
+  if (titularAjeno && titularAjeno !== clientId) {
+    try { await avisarPorIniciativa(titularAjeno, '✅ Recibimos el pago de tu servicio de internet (lo mandó otra persona por ti) y ya quedó registrado. ¡Gracias! 🙌'); }
+    catch (e) { console.error('[recibido] aviso al titular:', e.message); }
+  }
+  return { marcados, eraPago: !!casoPago, titularAjeno: titularAjeno && titularAjeno !== clientId ? titularAjeno : '' };
+}
+
 async function handleAgentCommand(agentNumber, text) {
   const v = text.trim().toUpperCase();
 
@@ -3154,38 +3179,18 @@ async function handleAgentCommand(agentNumber, text) {
       return;
     }
     // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
-    const casoPago = caseLog.find((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
-    const eraPago = !!casoPago;
-    // Si el comprobante era de OTRA cuenta ("Coincide: Ana · 52951…"), el titular también se entera.
-    const titularAjeno = (String((casoPago || {}).resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1];
-    const marcados = markCases(clientId, 'recibido', agentNumber);
-    if (!marcados && !pendingAgentRequests.has(clientId)) {
-      // Si quedó anotado quién lo gestionó, se dice; si es un caso viejo de
-      // antes de que se guardara, se queda en el genérico de siempre.
+    // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
+    const yaHabia = caseLog.some((c) => c.clientId === clientId && c.status === 'pendiente');
+    if (!yaHabia && !pendingAgentRequests.has(clientId)) {
       const quien = quienGestiono(clientId);
       await sendWhatsAppMessage(agentNumber, quien
         ? `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por ${describeAgent(quien)}.`
         : `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por otro asesor.`);
       return;
     }
-    pendingAgentRequests.delete(clientId);
-    schedulePersist();
-    try {
-      /*
-       * Si lo que se recibió fue un PAGO, que se diga con todas sus letras: es
-       * la respuesta que el cliente está esperando. Y por plantilla: el
-       * comprobante pudo llegar hace dos días y el texto libre ya no entra.
-       */
-      const suspendidoAun = /suspend|cort/i.test(String((wisphubClients.get(clientId) || {}).status || ''));
-      await avisarPorIniciativa(clientId, eraPago
-        ? '✅ Tu pago quedó registrado. ¡Gracias! 🙌' + (suspendidoAun ? ' Tu servicio se reactiva en unos minutos; si en una hora sigue sin navegar, reinicia tu módem o escríbenos.' : '')
-        : '✅ ¡Recibido, gracias! 🙌');
-    } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
-    if (titularAjeno && titularAjeno !== clientId) {
-      try {
-        await avisarPorIniciativa(titularAjeno, '✅ Recibimos el pago de tu servicio de internet (lo mandó otra persona por ti) y ya quedó registrado. ¡Gracias! 🙌');
-      } catch (e) { console.error('[Agent] RECIBIDO aviso al titular:', e.message); }
-    }
+    const rc = await confirmarPagoRecibido(clientId, agentNumber);
+    if (!rc.marcados) { pendingAgentRequests.delete(clientId); schedulePersist(); try { await sendWhatsAppMessage(clientId, '✅ ¡Recibido, gracias! 🙌'); } catch (_) {} }
+    const titularAjeno = rc.titularAjeno;
     await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId})${titularAjeno && titularAjeno !== clientId ? ` y al titular (${titularAjeno})` : ''}. El bot sigue atendiéndolo.`);
     // Avisa a los demás asesores que este caso ya fue gestionado.
     await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por ${describeAgent(agentNumber)}.`);
@@ -6101,6 +6106,20 @@ async function revisarCuentaLeon() {
  * Prórrogas desde el panel: verlas, darlas y quitarlas. Lo mismo que el
  * asesor hace por WhatsApp con PRORROGA, pero con la lista a la vista.
  */
+/* Comprobantes que esperan revisión, y darlos por buenos desde el panel. */
+app.get('/admin/api/comprobantes', verifyAdminToken, (_req, res) => {
+  const lista = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').slice(0, 100)
+    .map((c) => ({ id: c.id, ts: c.ts, telefono: c.clientId, nombre: c.name || (wisphubClients.get(c.clientId) || {}).name || '', resumen: String(c.resumen || '').slice(0, 400), imageUrl: c.imageUrl || '', docUrl: c.docUrl || '', fueraDeHorario: !!c.offHours }));
+  res.json({ comprobantes: lista, total: lista.length });
+});
+app.post('/admin/api/comprobantes/:id/recibido', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  const c = caseLog.find((x) => x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: 'Ese comprobante ya no está' });
+  if (c.status !== 'pendiente') return res.json({ ok: true, yaEstaba: true });
+  const rc = await confirmarPagoRecibido(c.clientId, (req.admin && req.admin.username) || 'panel');
+  res.json({ ok: true, ...rc });
+});
+
 app.get('/admin/api/prorrogas', verifyAdminToken, (_req, res) => {
   const hoy = fechaLocalISO();
   const lista = Object.entries(prorrogas)

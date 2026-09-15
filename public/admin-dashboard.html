@@ -482,6 +482,22 @@
     </div>
   </div>
 
+  <!-- Comprobantes por revisar: lo que el bot ya leyó y espera que la oficina dé por bueno. -->
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">🧾</span> Comprobantes por revisar</div>
+      <div class="card-body">
+        <div id="cpAlert" class="alert"></div>
+        <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
+          Cada comprobante llega ya leído (monto, banco, titular y con quién coincide en el padrón). Al darlo por bueno,
+          el cliente recibe "tu pago quedó registrado" y, si fue por otra persona, el titular también.
+          Registrarlo en Wisphub sigue siendo a mano.
+        </p>
+        <div id="cpLista"><div class="empty">Cargando…</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Prórrogas: a quién se le dio plazo y hasta cuándo. El aviso de corte se calla solo. -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
@@ -962,7 +978,7 @@
      * justo debajo de un "Ya puede cobrar". Un panel que se contradice a sí
      * mismo hace dudar de todo lo demás que dice.
      */
-    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro().then(loadCobroLinea); loadProrrogas(); }
+    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro().then(loadCobroLinea); loadProrrogas(); loadComprobantes(); }
     else if(page==='cortes' && can('clients')){ loadCorteStats(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
@@ -1628,6 +1644,34 @@
       showAlert('ccAlert', 'No se pudo abrir el alta. Intenta en un momento.', 'error');
     }
     btn.disabled = false; btn.textContent = antes;
+  }
+
+  /* ── Comprobantes por revisar ──────────────────────────────────────────── */
+  async function loadComprobantes(){
+    const caja = document.getElementById('cpLista');
+    try{
+      const d = await (await fetchAuth('/admin/api/comprobantes')).json();
+      const lista = d.comprobantes || [];
+      if(!lista.length){ caja.innerHTML = '<div class="empty">No hay comprobantes esperando revisión.</div>'; return; }
+      caja.innerHTML = lista.map(c => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+          <div style="flex:1;min-width:240px">
+            <div><b>${esc(c.nombre || c.telefono)}</b> <span style="color:var(--muted);font-size:.85em">· ${esc(c.telefono)} · ${esc(fechaCorta(c.ts))}${c.fueraDeHorario?' · fuera de horario':''}</span></div>
+            <div style="font-size:.85em;color:var(--muted);margin-top:4px;white-space:pre-line">${esc(String(c.resumen||'').replace(/ · /g,'\n'))}</div>
+            ${c.imageUrl?`<a href="${esc(c.imageUrl)}" target="_blank" style="font-size:.85em">Ver imagen</a>`:''}${c.docUrl?` <a href="${esc(c.docUrl)}" target="_blank" style="font-size:.85em">Ver PDF</a>`:''}
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="pagoRecibido('${esc(c.id)}',this)">✅ Pago recibido</button>
+        </div>`).join('');
+    }catch(e){ caja.innerHTML = '<div class="empty">No se pudieron cargar los comprobantes.</div>'; }
+  }
+  async function pagoRecibido(id, btn){
+    if(btn){ btn.disabled = true; btn.textContent = 'Avisando…'; }
+    try{
+      const r = await fetchAuth('/admin/api/comprobantes/'+encodeURIComponent(id)+'/recibido', { method:'POST' });
+      const d = await r.json();
+      if(!r.ok){ showAlert('cpAlert', d.error || 'No se pudo marcar.', 'error'); if(btn){ btn.disabled=false; btn.textContent='✅ Pago recibido'; } return; }
+      showAlert('cpAlert', 'Listo: el cliente ya sabe que su pago quedó registrado' + (d.titularAjeno ? ' y el titular también' : '') + '. Falta registrarlo en Wisphub.', 'success');
+      loadComprobantes();
+    }catch(e){ showAlert('cpAlert','No se pudo marcar.','error'); if(btn){ btn.disabled=false; btn.textContent='✅ Pago recibido'; } }
   }
 
   /* ── Prórrogas ─────────────────────────────────────────────────────────── */

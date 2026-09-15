@@ -992,6 +992,28 @@ console.log('\n=== 19. CUANDO LA OFICINA DA POR BUENO UN COMPROBANTE, EL CLIENTE
   es(r2.some((m) => m.a === '529519999999' && /y al titular/.test(m.texto)), 'y al asesor se le dice que también se le avisó al titular');
 }
 
+console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO" ===');
+{
+  // Hugo manda un comprobante; la oficina lo ve en el panel y lo da por bueno desde ahí.
+  let n = enviados.length;
+  await fetch(BASE + '/webhook/whatsapp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + H.slice(2), type: 'document', document: { id: 'doc3', filename: 'pago-hugo.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Hugo' } }] } }] }] }) });
+  await respuestas(n, 1, 4000);
+  n = enviados.length; await entra(H, 'Hugo Sáenz'); await respuestas(n, 1, 4000);
+  const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  const H_ = { Authorization: 'Bearer ' + login.token };
+  const lista = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
+  const mio = (lista.comprobantes || []).find((c) => c.telefono === H);
+  es(!!mio && /Coincide: Hugo Sáenz/.test(mio.resumen), 'el panel lista el comprobante de Hugo con la coincidencia del padrón');
+  n = enviados.length;
+  const r = await fetch(BASE + '/admin/api/comprobantes/' + encodeURIComponent(mio.id) + '/recibido', { method: 'POST', headers: H_ }).then((x) => x.json());
+  const msgs = await respuestas(n, 1);
+  es(r.ok && r.marcados >= 1, 'se da por bueno desde el panel');
+  es(msgs.some((m) => m.a === H && /Tu pago quedó registrado/.test(m.texto)), 'y Hugo recibe "tu pago quedó registrado"');
+  const despues = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
+  es(!(despues.comprobantes || []).some((c) => c.telefono === H), 'y desaparece de la lista por revisar');
+}
+
 console.log(`\n${ok} bien, ${mal} mal`);
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);
