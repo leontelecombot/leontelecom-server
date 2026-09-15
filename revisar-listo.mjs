@@ -131,6 +131,7 @@ if (!STRIPE) {
         ['checkout.session.completed', 'tarjeta y la ficha de OXXO'],
         ['checkout.session.async_payment_succeeded', 'cuando pagan la ficha en OXXO'],
         ['checkout.session.async_payment_failed', 'cuando la ficha vence'],
+        ['checkout.session.expired', 'cuando el link venció sin abrirse'],
         ['customer_cash_balance_transaction.created', 'las transferencias a la CLABE'],
         ['charge.dispute.created', 'enterarse de un contracargo antes que el banco'],
         ['charge.dispute.closed', 'saber si el contracargo se ganó o se perdió'],

@@ -64,6 +64,7 @@ Apagar no requiere tocar código ni volver a desplegar. Es una variable en Rende
    - `checkout.session.completed`
    - `checkout.session.async_payment_succeeded` ← cuando pagan la ficha de OXXO
    - `checkout.session.async_payment_failed`
+   - `checkout.session.expired` (el link venció sin abrirse: se le avisa al cliente)
    - `customer_cash_balance_transaction.created` ← **el de la CLABE, no se te olvide**
    - `charge.dispute.created` y `charge.dispute.closed` ← los contracargos
    - `charge.refunded`
