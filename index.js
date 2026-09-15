@@ -7134,11 +7134,11 @@ app.post('/webhook/stripe', async (req, res) => {
            */
           if (w.ambiguo) {
             // Tiene varios contratos: no podemos saber cuál pagó sin preguntarle.
-            await sendWhatsAppMessage(telefono,
+            await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
               '✅ Recibimos tu pago, gracias. Como tienes *más de un servicio* con nosotros, '
               + 'un asesor va a aplicarlo al que corresponde en un momento. Si es urgente, dinos cuál es. 🙏').catch(() => {});
           } else if (!w.reactivado && w.deudaRestante > 0.01 && w.cliente && w.cliente.estado !== 'Activo') {
-            await sendWhatsAppMessage(telefono,
+            await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
               `✅ Recibimos tu pago. Todavía queda un saldo de *$${w.deudaRestante.toFixed(2)}*, `
               + 'y por eso el servicio sigue suspendido. En cuanto se cubra se reactiva solo. 🙏').catch(() => {});
           }
