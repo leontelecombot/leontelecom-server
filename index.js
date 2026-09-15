@@ -4947,8 +4947,32 @@ async function handleChatMessage(chatId, text, sendMsg) {
         [], { buttons: botones });
       return;
     }
-    if (_ses.state === 'pago_otro_confirmar' && /^pago_otro_es_\d$/.test(_pt)) {
-      const elegido = (_ses.data.candidatos || [])[Number(_pt.slice(-1))];
+    /*
+     * "¿Es la cuenta de Ana Pérez?" se contesta con el botón, pero mucha gente
+     * escribe "sí" (o "no"). Con una sola candidata, "sí" es esa; "no" vuelve a
+     * preguntar de quién es. Con varias, "sí" no dice cuál: se le pide tocar.
+     */
+    let _ptConfirmar = _pt;
+    if (_ses.state === 'pago_otro_confirmar' && !_isBtn) {
+      const cand = _ses.data.candidatos || [];
+      const siLimpio = _pt.replace(/[¡!¿?.,\s]+/g, ' ').trim();
+      if (/^(s[ií]|s[ií] es|s[ií] es esa|s[ií] esa|esa|esa es|esa misma|correcto|as[ií] es|exacto|claro|ella|[eé]l|es ella|es [eé]l|s[ií] ella|s[ií] [eé]l)$/.test(siLimpio)) {
+        if (cand.length === 1) _ptConfirmar = 'pago_otro_es_0';
+        else { await sendMsg(chatId, 'Son varias con ese nombre: toca el botón de la que es. 👆'); return; }
+      } else if (/^(no|nel|nop|otra|otro|esa no)\b/.test(siLimpio) && siLimpio.length <= 60) {
+        // "no", "no es esa", "no, esa no"... y "no, es Ana Pérez Gómez": lo que sobre se busca de una vez.
+        const relleno = new Set(['no', 'nel', 'nop', 'es', 'esa', 'ese', 'ella', 'el', 'él', 'de', 'del', 'la', 'otra', 'otro', 'sino', 'mejor']);
+        const palabras = siLimpio.split(' ');
+        while (palabras.length && relleno.has(palabras[0])) palabras.shift();
+        const resto = palabras.join(' ').trim();
+        setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now(), meses: _ses.data.meses || 1 } });
+        if (resto.length >= 4) return handleChatMessage(chatId, resto, sendMsg);
+        await sendMsg(chatId, 'Va. ¿De quién es la cuenta? Escríbeme el *nombre completo* o el *teléfono* como está en el contrato.');
+        return;
+      }
+    }
+    if (_ses.state === 'pago_otro_confirmar' && /^pago_otro_es_\d$/.test(_ptConfirmar)) {
+      const elegido = (_ses.data.candidatos || [])[Number(_ptConfirmar.slice(-1))];
       if (!elegido) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *OTRO* para buscar de nuevo.'); return; }
       // Se deja la cuenta elegida en la sesión: el cobro de tarjeta/OXXO la lee.
       setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, meses: _ses.data.meses || 1, desde: Date.now() } });
