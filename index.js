@@ -4857,7 +4857,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (_aNombreDe && !_enOtraCosa && !_conComprobante && !_isBtn
         && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
       setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
-      return handleChatMessage(chatId, _aNombreDe.trim(), sendMsg);
+      // "a nombre de mi mamá Ana Pérez": el parentesco sobra para buscar.
+      const nombreLimpio = _aNombreDe.trim().replace(/^(mi|la|el|de mi|de la|del)\s+(mam[aá]|pap[aá]|esposa?|hij[oa]|herman[oa]|suegr[ao]|abuel[oa]|t[ií][ao]|vecin[oa]|se[ñn]ora?|patr[oó]n[a]?|jef[ea])\s+/i, '').trim();
+      return handleChatMessage(chatId, nombreLimpio || _aNombreDe.trim(), sendMsg);
     }
     /*
      * "3 meses", "pagar 6 meses", "adelantar dos meses": se guarda cuántos y

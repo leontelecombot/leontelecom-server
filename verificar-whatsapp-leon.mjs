@@ -629,6 +629,11 @@ console.log('\n=== 9b. LO QUE LA GENTE ESCRIBE DE VERDAD ===');
   r = await respuestas(n);
   es(dice(r, /¿Es la cuenta de \*Gloria Núñez\*\?/), 'sin acentos ni mayúsculas ("gloria nunez") también encuentra a Gloria Núñez');
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  n = enviados.length;
+  await entra(A, 'pago a nombre de mi mamá Gloria Núñez');
+  r = await respuestas(n);
+  es(dice(r, /¿Es la cuenta de \*Gloria Núñez\*\?/), '"a nombre de mi mamá Gloria Núñez" ignora el parentesco y la encuentra');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
 
   n = enviados.length;
   await entra(A, 'cuánto debo');
