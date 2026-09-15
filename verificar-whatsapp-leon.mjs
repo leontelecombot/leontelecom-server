@@ -944,6 +944,10 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
   await entra(B, 'Solo para saber si fue registrado ya el pago del Internet');
   r = await respuestas(n);
   es(dice(r, /tu pago ya está registrado/), '"¿ya quedó registrado mi pago?" también se contesta');
+  n = enviados.length;
+  await entra(D, 'Sea depositado 350');
+  r = await respuestas(n);
+  es(dice(r, /comprobante|ya está registrado|revisando/), '"Sea depositado 350" (frase real) también se entiende como aviso de pago');
 }
 
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
