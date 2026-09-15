@@ -5121,8 +5121,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
           await sendMsg(chatId, `Perfecto, vas a pagar la cuenta de *${elegido.name}*.`);
           if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'pagar')) return;
         } else {
+          // Si esa cuenta ya pagó este mes, que quien va a pagar lo sepa antes de pagar dos veces.
+          const vistoAjena = mesesEnSesion(chatId) <= 1 ? pagoRecienteDe(elegido.tel) : null;
           const cobro = await montoACobrar(chatId, elegido.tel);
-          if (cobro.ok) cuanto = ` Su mensualidad es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`;
+          if (vistoAjena) cuanto = ` ✅ Ojo: *${elegido.name}* ya tiene registrado el pago de este mes (${canalTexto(vistoAjena.canal)}). Si quieres adelantarle el siguiente${cobro.ok ? ` (*$${cobro.monto.toFixed(2)}*)` : ''}, elige cómo; si no, no hace falta pagar nada.`;
+          else if (cobro.ok) cuanto = ` Su mensualidad es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`;
         }
       } catch (_) { /* sin monto se sigue igual */ }
       await sendMsg(chatId,

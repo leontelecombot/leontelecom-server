@@ -712,6 +712,20 @@ console.log('\n=== 9c. QUIEN PAGÓ POR OTRO PREGUNTA SI YA QUEDÓ ===');
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
 }
 
+console.log('\n=== 9d. PAGAR POR ALGUIEN QUE YA PAGÓ ESTE MES ===');
+{
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(A, 'a nombre de Ana Pérez');
+  let r = await respuestas(n);
+  const b9 = conBotones(r);
+  n = enviados.length;
+  await toca(A, 'pago_otro_es_' + b9.botones.findIndex((x) => x.title === 'Ana Pérez'));
+  r = await respuestas(n);
+  es(dice(r, /Ojo: \*Ana Pérez\* ya tiene registrado el pago de este mes/) && !dice(r, /Su mensualidad es de/), 'si la cuenta de Ana ya pagó este mes, a quien va a pagar por ella se le avisa antes de que pague dos veces');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+}
+
 console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE PAGA ESE ===');
 {
   let n = enviados.length;
