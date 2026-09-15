@@ -3620,7 +3620,7 @@ function facturaDebe(fact) {
  * ya pagó por el propio bot. Aquí se mira lo que el bot SÍ sabe: los pagos
  * en línea que entraron y los comprobantes que la oficina ya dio por buenos.
  */
-const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_RECIENTE) || 20);
+const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_RECIENTE) || 31);   // un ciclo completo: quien pagó justo después de su corte no debe recibir el aviso del siguiente
 function pagoRecienteDe(telefono) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
