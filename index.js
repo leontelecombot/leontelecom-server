@@ -8017,7 +8017,9 @@ function mapWisphubAccount(c) {
  * hay varias coincidencias se listan todas; si no hay, se dice.
  */
 function coincidenciasDeTitular(nombre) {
-  const q = String(nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  // "mi mamá Gloria Núñez", "la señora Ana": el parentesco y el tratamiento sobran.
+  const limpio = String(nombre || '').replace(/^(mi|la|el|de mi|de la|del)\s+(mam[aá]|pap[aá]|esposa?|hij[oa]|herman[oa]|suegr[ao]|abuel[oa]|t[ií][ao]|vecin[oa]|se[ñn]ora?|patr[oó]n[a]?|jef[ea])\s+/i, '').replace(/^(se[ñn]ora?|don|do[ñn]a|sr\.?|sra\.?)\s+/i, '');
+  const q = limpio.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
   if (q.length < 4) return [];
   const palabras = q.split(' ').filter((w) => w.length > 2);
   const out = [];
