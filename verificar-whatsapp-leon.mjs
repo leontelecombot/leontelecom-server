@@ -1370,6 +1370,12 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
   const deF = (listaF.comprobantes || []).find((c) => c.telefono === F) || {};
   es(deF.titular && deF.titular.contratos && deF.titular.contratos.length === 2 && deF.titular.contratos.some((x) => /Local/.test(x)), 'el de Fermín trae sus 2 contratos (casa y local) para que la oficina se fije a cuál va');
   es(/🏠 Servicio: Plan 50 · Local/.test(deF.resumen || ''), 'y el comprobante en el panel ya dice que es para el local');
+  // Al darlo por bueno, la factura que cubre es la del LOCAL (vence mañana), no la de la casa.
+  n = enviados.length;
+  await entra('529519999999', 'RECIBIDO 951 666 6666');
+  await respuestas(n, 1, 4000);
+  const cubreF = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: F, corte: MANANA }) }).then((x) => x.json());
+  es(cubreF.siguienteCorte === true, 'al darlo por recibido, el pago cubre el corte del local (mañana)');
   n = enviados.length;
   const r = await fetch(BASE + '/admin/api/comprobantes/' + encodeURIComponent(mio.id) + '/recibido', { method: 'POST', headers: H_ }).then((x) => x.json());
   const msgs = await respuestas(n, 1);

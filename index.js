@@ -3048,8 +3048,17 @@ async function confirmarPagoRecibido(clientId, porQuien) {
   // Qué factura cubre ese comprobante: la que debía al aceptarlo. Se anota en el
   // caso para que "ya pagó este mes" se decida por periodo también aquí.
   try {
-    const dc = await deudaConocidaDe(String(clientId).replace(/\D/g, ''));
-    if (dc.conocida && dc.cubreHasta) for (const c of caseLog) if (c.clientId === String(clientId).replace(/\D/g, '') && c.type === 'pago' && c.status === 'pendiente') c.cubreHasta = dc.cubreHasta;
+    const telC = String(clientId).replace(/\D/g, '');
+    const pendientesC = caseLog.filter((c) => c.clientId === telC && c.type === 'pago' && c.status === 'pendiente');
+    // Si el cliente dijo para cuál contrato era, la factura que cubre es la de ESE contrato.
+    const conServicio = pendientesC.find((c) => c.servicioId);
+    let cubre = '';
+    if (conServicio) {
+      const svc = (await serviciosDeLaCuenta(telC)).find((x) => x.id === String(conServicio.servicioId));
+      if (svc) { const d = await wisphubReactivar.deudaDelCliente(svc.usuario); cubre = (d.facturas || []).map((f) => String(f.fecha_vencimiento || '').slice(0, 10)).filter(Boolean).sort().pop() || ''; }
+    }
+    if (!cubre) { const dc = await deudaConocidaDe(telC); if (dc.conocida) cubre = dc.cubreHasta || ''; }
+    if (cubre) for (const c of pendientesC) c.cubreHasta = cubre;
   } catch (_) { /* sin factura a la mano, vale la ventana de días */ }
   const casoPago = caseLog.find((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
   const titularAjeno = (String((casoPago || {}).resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1];
