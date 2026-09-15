@@ -5158,6 +5158,15 @@ async function handleChatMessage(chatId, text, sendMsg) {
      * "me pasan la clabe". Todo eso es "quiero pagar".
      */
     const _pideDatosPago = /n[uú]meros? de cuenta|cuenta para (depositar|transferir|pagar)|d[oó]nde (deposito|transfiero|le deposito|hago el pago)|(en|por) transferencia\??$|datos (bancarios|de la cuenta|para (pagar|depositar|transferir))|\bclabe\b|a qu[eé] cuenta/.test(_pt);
+    /*
+     * Quien pide "los números de cuenta", "mi CLABE" o "a qué cuenta deposito"
+     * ya eligió cómo pagar: se le da la CLABE de una vez, sin pasar por el
+     * menú. Si no está en el piloto, el menú de siempre trae los datos.
+     */
+    if (_pideDatosPago && !_enOtraCosa && !_conComprobante && !_isBtn
+        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+      return handleChatMessage(chatId, 'pago_clabe', sendMsg);
+    }
     if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago|cu[aá]nto (debo|tengo que pagar|es|pago|es mi)|mi saldo|mi adeudo|qu[eé] debo)/.test(_pt)
         || (_pideDatosPago && !_enOtraCosa && !_conComprobante && !_isBtn)) {
       /*

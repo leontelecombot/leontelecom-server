@@ -1109,9 +1109,15 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
 {
   let n = enviados.length;
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  n = enviados.length;
   await entra(A, 'Proporcionarme los números de cuenta para depositar');
   let r = await respuestas(n);
-  es(conBotones(r).botones.some((b) => b.id === 'pago_clabe'), '"los números de cuenta para depositar" abre el menú de pago (con la transferencia primero)');
+  es(dice(r, /\*CLABE:\* \d{18}/) && conBotones(r).botones.length === 0, '"los números de cuenta para depositar" da la CLABE de una vez, sin pasar por el menú');
+  n = enviados.length;
+  await entra(A, 'mi clabe?');
+  r = await respuestas(n);
+  es(dice(r, /\*CLABE:\* \d{18}/), 'y "mi clabe?" también');
   n = enviados.length;
   await entra(D, 'Para pagar en transferencia?');
   r = await respuestas(n);
