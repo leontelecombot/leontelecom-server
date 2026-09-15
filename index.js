@@ -4857,7 +4857,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           const varios = ajenaMenu || servicioMenu ? [] : await serviciosDeLaCuenta(normalizePhone(chatId));
           if (varios.length <= 1) {
             const cobro = await montoACobrar(chatId, ajenaMenu, servicioMenu);
-            if (cobro.ok) encabezado = `${ajenaMenu ? `La mensualidad de *${(wisphubClients.get(ajenaMenu) || {}).name || 'esa cuenta'}*` : 'Tu mensualidad'} es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.\n\n`;
+            if (cobro.ok) encabezado += `${ajenaMenu ? `La mensualidad de *${(wisphubClients.get(ajenaMenu) || {}).name || 'esa cuenta'}*` : 'Tu mensualidad'} es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.\n\n`;
           }
         } catch (_) { /* sin monto, el menú sale igual */ }
       }
