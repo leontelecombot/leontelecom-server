@@ -932,6 +932,22 @@ console.log('\n=== 11e. EL LINK QUE VENCIÓ SIN ABRIRSE ===');
   const r = await respuestas(n, 1);
   es(r0.d && r0.d.vencido === true, 'Stripe avisa que el link venció');
   es(r.some((m) => m.a === A && /El link de pago venció/.test(m.texto) && /escribe \*pagar\*/.test(m.texto)), 'y al cliente se le dice que no se cobró nada y cómo pedir otro');
+
+  // "No me abre el link": si es reciente se le repite con cómo abrirlo; si ya venció, se le genera otro igual.
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  n = enviados.length;
+  await entra(A, 'con tarjeta');
+  await respuestas(n);
+  const linkAntes = stripe.sesiones.length;
+  n = enviados.length;
+  await entra(A, 'No me abre el link 😕');
+  let r2 = await respuestas(n);
+  es(dice(r2, /Aquí está otra vez tu link/) && dice(r2, /checkout\.stripe\.com/) && dice(r2, /cópialo y pégalo/) && stripe.sesiones.length === linkAntes, '"no me abre el link" repite el mismo link (sin generar otro) y dice cómo abrirlo');
+  await fetch(BASE + '/api/pruebas/envejecer-sesion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: A, minutos: 40, link: true }) });
+  n = enviados.length;
+  await entra(A, 'dice que expiró');
+  r2 = await respuestas(n, 2);
+  es(dice(r2, /Ese link ya venció/) && stripe.sesiones.length === linkAntes + 1 && dice(r2, /pagar con tu tarjeta/), 'si ya venció, dice que venció y manda uno nuevo de la misma forma');
 }
 
 console.log('\n=== 11f. LA CLABE DE LA CUENTA DE OTRO DICE DE QUIÉN ES ===');

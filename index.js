@@ -4601,6 +4601,9 @@ async function startReportFlow(chatId, text, sendMsg) {
   }
 }
 
+// El último link o ficha que se le mandó a cada quien, por si "no me abre".
+const ultimoLinkPago = new Map();   // chatId -> { url, forma, cuando, reintento }
+
 // A quién se le acaba de ofrecer el cobro automático ("¿Lo activamos?"): un
 // "sí" o "no" escritos en la media hora siguiente son la respuesta a eso.
 const autoOfrecido = new Map();   // chatId -> ts
@@ -4746,6 +4749,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           cubreHasta: cobro.cubreHasta || undefined,
         });
         if (paraOtro) clearSession(chatId);
+        ultimoLinkPago.set(String(chatId), { url: pago.url, forma: _pt, cuando: Date.now() });
 
         // Cuando paga por otro, el servicio que se reactiva no es el suyo.
         const suServicio = paraOtro ? `el servicio de *${c.name || telCuenta}*` : 'tu servicio';
@@ -5182,6 +5186,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           + `• *Total: $${pago.total.toFixed(2)}*\n\n`
           + `${pago.url}\n\n`
           + 'En cuanto se confirme, el cobro automático queda activo. ⏱️ Tienes 30 minutos para abrir el link.');
+        ultimoLinkPago.set(String(chatId), { url: pago.url, forma: 'auto_si', cuando: Date.now() });
       } catch (e) {
         console.error('[auto] activar:', e.message);
         await sendMsg(chatId, /cuenta|aprobada/i.test(e.message || '') ? 'El pago en línea no está disponible en este momento. Paga como siempre y mándanos tu comprobante. 🙏' : 'No pude preparar el cobro automático ahorita. Intenta de nuevo en un rato. 🙏');
@@ -5295,6 +5300,25 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (_pideDatosPago && !_enOtraCosa && !_conComprobante && !_isBtn
         && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
       return handleChatMessage(chatId, 'pago_clabe', sendMsg);
+    }
+    /*
+     * "No me abre el link", "no carga", "dice que expiró": se le vuelve a mandar
+     * el mismo si es reciente (con cómo abrirlo); si ya venció, se genera otro
+     * de la misma forma. Nadie se queda con un link muerto en la mano.
+     */
+    if (/(no (me |se )?(abre|carga|deja|funciona|sirve|entra)|no (puedo|pude) (abrir|pagar|entrar)|(link|liga|enlace|ficha|p[aá]gina)\s.*(no|error|expir|venc|ca[ií]d|roto|mal)|expir[oó]|venci[oó]|error al pagar|me marca error)/.test(_pt)
+        && !_enOtraCosa && !_conComprobante && !_isBtn && !_emergencyNow) {
+      const u = ultimoLinkPago.get(String(chatId));
+      if (u && Date.now() - u.cuando < 25 * 60000) {
+        await sendMsg(chatId, `Aquí está otra vez tu link:\n\n${u.url}\n\nSi no abre al tocarlo, *mantenlo presionado, cópialo y pégalo* en Chrome o Safari. Si te dice que ya venció, escribe *pagar* y te doy uno nuevo. 🙌`);
+        return;
+      }
+      if (u) {
+        await sendMsg(chatId, 'Ese link ya venció (duran 30 minutos). Te mando uno nuevo: 👇');
+        return handleChatMessage(chatId, u.forma, sendMsg);
+      }
+      // Sin link reciente: no se sabe de qué habla; que elija cómo pagar.
+      if (stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) return handleChatMessage(chatId, 'pagar', sendMsg);
     }
     /*
      * "¿Cómo quieres pagar?" también se contesta escribiendo: "tarjeta", "con
@@ -6574,6 +6598,12 @@ if (process.env.PRUEBAS === '1') {
   app.post('/api/pruebas/envejecer-sesion', (req, res) => {
     const tel = normalizePhone(String((req.body || {}).telefono || ''));
     const ms = Number((req.body || {}).ms || 0);
+    // También el último link mandado, para probar "dice que expiró".
+    if ((req.body || {}).link) {
+      const u = ultimoLinkPago.get(tel);
+      if (u) u.cuando = Date.now() - (ms || Number((req.body || {}).minutos || 0) * 60000);
+      return res.json({ ok: !!u });
+    }
     const ses = getSession(tel);
     if (!ses.state) return res.json({ ok: false, motivo: 'sin sesión' });
     setSession(tel, { ...ses, data: { ...(ses.data || {}), desde: Date.now() - ms } });
