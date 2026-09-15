@@ -1370,7 +1370,8 @@ console.log('\n=== 19. CUANDO LA OFICINA DA POR BUENO UN COMPROBANTE, EL CLIENTE
   const r = await respuestas(n, 2);
   const aG = r.find((m) => m.a === G);
   es(!!aG && /Tu pago quedó registrado/.test(aG.texto), 'a Gloria le llega "tu pago quedó registrado" (no un "recibido" genérico)');
-  es(!!aG && /se reactiva en unos minutos/.test(aG.texto), 'y como estaba suspendida, le dice que se reactiva');
+  es(!!aG && /Ya mandé reactivar tu servicio/.test(aG.texto), 'y como estaba suspendida, le dice que ya mandó reactivar');
+  es(wisphub.activaciones.at(-1) === 108, 'y de verdad se mandó reactivar su servicio (108) en Wisphub: la oficina no tiene que reconectar a mano');
   es(!!aG && aG.tipo === 'template', 'por plantilla, porque el comprobante pudo ser de hace días');
 
   // Ahora Andrés manda el comprobante de la cuenta de Diego: al dar por bueno, Diego también se entera.

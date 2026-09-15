@@ -3076,10 +3076,26 @@ async function confirmarPagoRecibido(clientId, porQuien) {
   if (!marcados) return { marcados: 0, eraPago: !!casoPago, titularAjeno: '' };
   pendingAgentRequests.delete(clientId);
   schedulePersist();
-  const suspendidoAun = /suspend|cort/i.test(String((wisphubClients.get(clientId) || {}).status || ''));
+  /*
+   * Dar por bueno el comprobante ES el pago: si el servicio está suspendido, se
+   * manda reactivar aquí mismo (el del titular si pagó otro por él, y el
+   * contrato que dijo el cliente si tiene varios). La oficina no tiene que ir a
+   * Wisphub a reconectar; lo único que le queda a mano es marcar la factura.
+   */
+  const telServicio = titularAjeno && titularAjeno !== clientId ? titularAjeno : clientId;
+  const cSvc = wisphubClients.get(telServicio) || {};
+  const suspendidoAun = /suspend|cort/i.test(String(cSvc.status || ''));
+  let reactivado = false;
+  if (suspendidoAun && casoPago) {
+    const idSvc = (casoPago.servicioId) || cSvc.wisphubId;
+    if (idSvc) {
+      try { await wisphubReactivar.reactivarServicio(idSvc); reactivado = true; console.log('[recibido] reactivado', telServicio, 'servicio', idSvc); }
+      catch (e) { console.warn('[recibido] no se pudo reactivar a', telServicio, '·', e.message); alertAdmin('recibido-reactivar', `El comprobante de ${cSvc.name || telServicio} se dio por bueno pero Wisphub no dejó reactivar el servicio ${idSvc}: ${e.message}. Reconéctalo a mano.`); }
+    }
+  }
   try {
     await avisarPorIniciativa(clientId, casoPago
-      ? '✅ Tu pago quedó registrado. ¡Gracias! 🙌' + (suspendidoAun ? ' Tu servicio se reactiva en unos minutos; si en una hora sigue sin navegar, reinicia tu módem o escríbenos.' : '')
+      ? '✅ Tu pago quedó registrado. ¡Gracias! 🙌' + (suspendidoAun ? (reactivado ? ' Ya mandé reactivar tu servicio: en unos minutos reinicia tu módem y listo.' : ' Tu servicio se reactiva en unos minutos; si en una hora sigue sin navegar, reinicia tu módem o escríbenos.') : '')
       : '✅ ¡Recibido, gracias! 🙌');
   } catch (e) { console.error('[recibido] aviso al cliente:', e.message); }
   if (titularAjeno && titularAjeno !== clientId) {
