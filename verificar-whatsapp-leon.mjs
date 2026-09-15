@@ -876,6 +876,21 @@ console.log('\n=== 11c. COBRO AUTOMÁTICO CADA MES ===');
   await entra(H, 'cancelar automático');
   r = await respuestas(n);
   es(dice(r, /No tienes cobro automático activo/), 'y si lo pide otra vez, le dice que ya no lo tiene');
+  // Se lo vuelven a ofrecer y contesta con palabras, no con el botón.
+  n = enviados.length;
+  await entra(H, 'automático');
+  r = await respuestas(n);
+  es(dice(r, /¿Lo activamos\?/), 'vuelve a pedir el automático y se le pregunta si lo activamos');
+  n = enviados.length;
+  await entra(H, 'Ahora no, gracias');
+  r = await respuestas(n);
+  es(dice(r, /sin problema/i) && dice(r, /AUTOMÁTICO/), '"ahora no" escrito se entiende como el botón de "ahora no"');
+  n = enviados.length;
+  await entra(H, 'automático'); await respuestas(n);
+  n = enviados.length;
+  await entra(H, 'Sí, actívalo');
+  r = await respuestas(n);
+  es(dice(r, /queda guardada para los meses que vienen/), 'y "sí, actívalo" escrito saca el link para pagar con la tarjeta que se guarda');
 }
 
 console.log('\n=== 11d. PAGAR POR OTRO QUE TIENE DOS CONTRATOS ===');

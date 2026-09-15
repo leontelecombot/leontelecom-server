@@ -4572,6 +4572,10 @@ async function startReportFlow(chatId, text, sendMsg) {
   }
 }
 
+// A quién se le acaba de ofrecer el cobro automático ("¿Lo activamos?"): un
+// "sí" o "no" escritos en la media hora siguiente son la respuesta a eso.
+const autoOfrecido = new Map();   // chatId -> ts
+
 // Frases que NO son la respuesta a "¿cuál vas a pagar?" aunque lleguen en ese paso.
 function _pideDatosPagoTemprano(pt) {
   return /^(pagar|menu|men[uú]|hola|buen|salir|cancelar|otro|a nombre de)/.test(String(pt || ''));
@@ -5073,6 +5077,20 @@ async function handleChatMessage(chatId, text, sendMsg) {
      * Se pide con una palabra, se explica en dos líneas y se confirma con un
      * botón. Cancelar es igual de fácil: nadie debe sentirse atrapado.
      */
+    // "¿Lo activamos?" contestado con palabras: "sí", "dale", "va" activan; "no", "ahora no" no.
+    const _ofrecidoHace = autoOfrecido.get(String(chatId)) || 0;
+    if (_ofrecidoHace && Date.now() - _ofrecidoHace < 30 * 60000 && !_isBtn && !_enOtraCosa && !_conComprobante) {
+      const t = _pt.replace(/[¡!¿?.,\s]+/g, ' ').trim();
+      if (/^(s[ií]|s[ií] (claro|dale|va|por favor|porfa|act[ií]valo|quiero|cada mes|est[aá] bien)|dale|va|claro|ok|okey|de acuerdo|act[ií]valo|act[ií]var|activar|que s[ií]|s[ií] s[ií]|est[aá] bien|adelante)$/.test(t)) {
+        autoOfrecido.delete(String(chatId));
+        return handleChatMessage(chatId, 'auto_si', sendMsg);
+      }
+      if (/^(no|ahora no|no gracias|nel|luego|despu[eé]s|no por ahora|mejor no|todav[ií]a no|a[uú]n no|no quiero|no por el momento)( gracias| por ahora| por el momento| mejor)?$/.test(t)) {
+        autoOfrecido.delete(String(chatId));
+        await sendMsg(chatId, 'Va, sin problema. Cuando quieras activarlo, escribe *AUTOMÁTICO*. 🙌');
+        return;
+      }
+    }
     // Como lo dice la gente: "ya no quiero el cobro automático", "quítame lo automático", "cancela mi suscripción".
     const _cancelaAuto = /^(?:hola[,.!\s]*)?(?:por favor\s+)?(cancelar|cancela|cancelen|cancelame|cancélame|quitar|quita|quiten|quitame|quítame|desactivar|desactiva|desactiven|ya no quiero|ya no|no quiero|dar de baja|den de baja|baja|suspender|suspende)\s+(?:el\s+|la\s+|lo\s+|mi\s+|del\s+|de\s+)?(?:cobro\s+|pago\s+|cargo\s+)?(?:autom[aá]tic[oa]|suscripci[oó]n|domiciliaci[oó]n)/.test(_pt.replace(/[¿¡?!.]+$/g, ''));
     if ((_cancelaAuto || _pt === 'auto_no') && !_enOtraCosa) {
@@ -5106,8 +5124,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
           + '• Lo quitas cuando quieras escribiendo *CANCELAR AUTOMÁTICO*.\n\n'
           + '¿Lo activamos?',
           [], { buttons: [{ id: 'auto_si', title: '✅ Sí, cada mes' }, { id: 'auto_no', title: '❌ Ahora no' }] });
+        autoOfrecido.set(String(chatId), Date.now());
         return;
       }
+      autoOfrecido.delete(String(chatId));
       try {
         if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'auto_si')) return;
         const servicio = servicioEnSesion(chatId);
