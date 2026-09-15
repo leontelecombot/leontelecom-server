@@ -1353,6 +1353,16 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
   const lista = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
   const mio = (lista.comprobantes || []).find((c) => c.telefono === H);
   es(!!mio && /Coincide: Hugo Sáenz/.test(mio.resumen), 'el panel lista el comprobante de Hugo con la coincidencia del padrón');
+  es(!!mio && Array.isArray(mio.titular.contratos) && mio.titular.contratos.length === 1, 'y dice que Hugo tiene un solo contrato (sin aviso de "fíjate a cuál")');
+  // Fermín (dos contratos) manda el suyo: el panel avisa que hay que fijarse a cuál contrato va.
+  n = enviados.length;
+  await fetch(BASE + '/webhook/whatsapp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + F.slice(2), type: 'document', document: { id: 'doc4', filename: 'pago-fermin.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Fermín' } }] } }] }] }) });
+  await respuestas(n, 1, 4000);
+  n = enviados.length; await entra(F, 'Fermín Ortiz'); await respuestas(n, 1, 4000);
+  const listaF = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
+  const deF = (listaF.comprobantes || []).find((c) => c.telefono === F) || {};
+  es(deF.titular && deF.titular.contratos && deF.titular.contratos.length === 2 && deF.titular.contratos.some((x) => /Local/.test(x)), 'el de Fermín trae sus 2 contratos (casa y local) para que la oficina se fije a cuál va');
   n = enviados.length;
   const r = await fetch(BASE + '/admin/api/comprobantes/' + encodeURIComponent(mio.id) + '/recibido', { method: 'POST', headers: H_ }).then((x) => x.json());
   const msgs = await respuestas(n, 1);

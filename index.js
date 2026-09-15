@@ -6469,8 +6469,16 @@ async function revisarCuentaLeon() {
  * asesor hace por WhatsApp con PRORROGA, pero con la lista a la vista.
  */
 /* Comprobantes que esperan revisión, y darlos por buenos desde el panel. */
-app.get('/admin/api/comprobantes', verifyAdminToken, (_req, res) => {
-  const lista = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').slice(0, 100)
+app.get('/admin/api/comprobantes', verifyAdminToken, async (_req, res) => {
+  const pendientes = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').slice(0, 100);
+  // Cuántos contratos tiene cada titular: con dos, la oficina debe fijarse a cuál factura va el pago.
+  const contratosDe = new Map();
+  for (const c of pendientes) {
+    const telTitular = (String(c.resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1] || c.clientId;
+    if (contratosDe.has(telTitular) || !wisphubClients.has(telTitular)) continue;
+    try { contratosDe.set(telTitular, (await serviciosDeLaCuenta(telTitular)).map((x) => x.etiqueta)); } catch (_) { contratosDe.set(telTitular, []); }
+  }
+  const lista = pendientes
     .map((c) => {
       // El titular al que hay que abonarle: el que coincide en el padrón, o quien escribió.
       const telTitular = (String(c.resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1] || c.clientId;
@@ -6482,7 +6490,7 @@ app.get('/admin/api/comprobantes', verifyAdminToken, (_req, res) => {
         : corteT && corteT === fechaMasDias(1) ? 'corte mañana' : '';
       const autoEspera = !!((stripeClientes.get(telTitular) || {}).cobroAutomatico && corteT && (((autoCobros[telTitular] || {})[corteT]) || {}).avisadoRevision && !(((autoCobros[telTitular] || {})[corteT]) || {}).estado);
       return { id: c.id, ts: c.ts, telefono: c.clientId, nombre: c.name || (wisphubClients.get(c.clientId) || {}).name || '', resumen: String(c.resumen || '').slice(0, 400), imageUrl: c.imageUrl || '', docUrl: c.docUrl || '', fueraDeHorario: !!c.offHours,
-        titular: { telefono: telTitular, nombre: w.name || '', wisphubId: w.wisphubId || null, corte: corteT || '' }, urgencia, autoEspera };
+        titular: { telefono: telTitular, nombre: w.name || '', wisphubId: w.wisphubId || null, corte: corteT || '', contratos: contratosDe.get(telTitular) || [] }, urgencia, autoEspera };
     })
     // Los urgentes primero; entre iguales, el más viejo arriba.
     .sort((a, b) => ((b.urgencia || b.autoEspera) ? 1 : 0) - ((a.urgencia || a.autoEspera) ? 1 : 0) || String(a.ts).localeCompare(String(b.ts)));
