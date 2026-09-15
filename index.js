@@ -4914,6 +4914,15 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId, 'No encuentro un servicio a nombre de este número. Si eres cliente, escríbele a un asesor con tu nombre completo para revisarlo. 🙏');
         return;
       }
+      // Con varios contratos, se dice cómo va cada uno.
+      const variosC = await serviciosDeLaCuenta(telC);
+      if (variosC.length > 1) {
+        await sendMsg(chatId,
+          `Tienes *${variosC.length} servicios* con nosotros:\n`
+          + variosC.map((x) => `• ${x.etiqueta}: ${/suspend|cort/i.test(x.estado) ? '🔴 suspendido' : '🟢 activo'}`).join('\n')
+          + '\n\nEscribe *pagar* y te pregunto cuál quieres pagar.');
+        return;
+      }
       const corte = parseFechaCorte(c.fechaCorte);
       const bonita = corte ? corte.split('-').reverse().join('/') : '';
       const suspendido = /suspend|cort/i.test(String(c.status || ''));

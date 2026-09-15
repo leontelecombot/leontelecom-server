@@ -924,6 +924,10 @@ console.log('\n=== 16. "¿CUÁNDO ES MI CORTE?" ===');
   await entra(C, 'que dia me toca pagar');
   r = await respuestas(n);
   es(dice(r, /al corriente|fecha de corte/), 'a quien está al corriente se lo dice');
+  n = enviados.length;
+  await entra(F, 'cuando me cortan');
+  r = await respuestas(n);
+  es(dice(r, /Tienes \*2 servicios\*/) && dice(r, /🔴 suspendido/) && dice(r, /🟢 activo/), 'con dos contratos, dice cómo va cada uno');
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);
