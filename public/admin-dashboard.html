@@ -1395,7 +1395,10 @@
                 : (c.autoEstado && c.autoEstado.estado === 'cobrado' ? '<span style="background:#e7f6ee;color:#1a7f4b;border-radius:999px;padding:3px 10px;font-weight:600">🔁 Automático de este mes: cobrado</span>' : ''))
             + '</div>'
           : '')
-      + (c.id ? '<button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="loadInvoices(\''+esc(String(c.id))+'\',this)">📄 Ver facturas</button><div class="inv-box"></div>' : '')
+      + (c.id ? '<button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="loadInvoices(\''+esc(String(c.id))+'\',this)">📄 Ver facturas</button>' : '')
+      // Desde la ficha, un toque lleva a darle prórroga con su teléfono ya puesto.
+      + (c.phone && can('clients') ? ' <button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="prorrogaDesdeFicha(\''+esc(String(c.phone))+'\',\''+esc(String(c.name||''))+'\')">📅 Dar prórroga</button>' : '')
+      + (c.id ? '<div class="inv-box"></div>' : '')
       + '</div>';
   }
   async function loadInvoices(id, btn){
@@ -1705,6 +1708,15 @@
             <td style="text-align:right"><button class="btn btn-danger btn-sm" onclick="quitarProrroga('${esc(p.telefono)}')" title="Quitar la prórroga">✕</button></td></tr>`;
         }).join('') + '</tbody></table>';
     }catch(e){ caja.innerHTML = '<div class="empty">No se pudieron cargar las prórrogas.</div>'; }
+  }
+  // Llega desde la ficha del cliente: cambia a Cobranza, llena el teléfono y deja el cursor en los días.
+  function prorrogaDesdeFicha(tel, nombre){
+    goTo('cobranza');
+    const t = document.getElementById('prTel'); if(t) t.value = String(tel||'').replace(/^52/,'');
+    const m = document.getElementById('prMotivo'); if(m && !m.value) m.placeholder = 'motivo (opcional)';
+    showAlert('prAlert', 'Prórroga para ' + (nombre || tel) + ': elige los días y confirma.', 'success');
+    const card = t && t.closest('.card'); if(card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const d = document.getElementById('prDias'); if(d) setTimeout(() => d.focus(), 300);
   }
   async function darProrroga(){
     const telefono = document.getElementById('prTel').value.trim();
