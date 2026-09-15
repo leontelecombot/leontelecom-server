@@ -6154,6 +6154,9 @@ app.get('/api/cuenta-cobro/estado', async (_req, res) => {
       ok: true, existe: true,
       puedeCobrar: !!est.puedeCobrar,
       faltante: (est.faltante || []).slice(0, 6),
+      // Sin plantilla, los avisos que el bot manda por su cuenta (cobro
+      // automático, ¿ya quedó?, pago por otro) no llegan fuera de las 24 h.
+      plantillaAvisos: !!WHATSAPP_AVISO_TEMPLATE,
     });
   } catch (e) {
     console.warn('[cobro] estado público:', e.message);

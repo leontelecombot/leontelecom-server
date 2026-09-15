@@ -194,6 +194,15 @@ try {
 } catch (e) { OJO(`No se pudo preguntar por la cuenta: ${e.message}`); }
 
 // ── 4. Las variables del servidor ───────────────────────────────────────────
+console.log('\n── LA PLANTILLA DE AVISOS (WhatsApp) ───────────────────────────');
+try {
+  const r = await fetch(URL_SERVIDOR + '/api/cuenta-cobro/estado', { signal: AbortSignal.timeout(25000) });
+  const d = await r.json();
+  if (d.plantillaAvisos === undefined) console.log('  ⚠️  El servidor desplegado todavía no reporta la plantilla: falta desplegar');
+  else if (d.plantillaAvisos) console.log('  ✅ Hay plantilla de avisos: el cobro automático, "¿ya quedó?" y el aviso al titular sí llegan fuera de las 24 h');
+  else console.log('  ❌ Falta WHATSAPP_AVISO_TEMPLATE en Render: esos avisos NO llegan fuera de las 24 h (Meta los rechaza en silencio)');
+} catch (e) { console.log('  ⚠️  No se pudo consultar:', e.message); }
+
 console.log('\n── VARIABLES EN RENDER ─────────────────────────────────────────');
 const VARS = [
   ['STRIPE_SECRET_KEY', true, 'cobrar'],
