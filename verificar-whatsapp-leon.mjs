@@ -1321,6 +1321,10 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
   es(msgs.some((m) => m.a === H && /Tu pago quedó registrado/.test(m.texto)), 'y Hugo recibe "tu pago quedó registrado"');
   const despues = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
   es(!(despues.comprobantes || []).some((c) => c.telefono === H), 'y desaparece de la lista por revisar');
+  // El comprobante aceptado también sabe qué factura cubrió: cuenta para este corte y no para el del mes que viene.
+  const enUnMesH = (() => { const d = new Date(PASADO + 'T12:00:00'); d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 10); })();
+  const cubreH = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H, corte: enUnMesH }) }).then((x) => x.json());
+  es(cubreH.esteCorte === true && cubreH.siguienteCorte === false, 'el comprobante aceptado cubre este corte y no el del mes que viene');
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);

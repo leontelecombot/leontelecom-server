@@ -3045,6 +3045,12 @@ function buildMigrationNotification(d, name) {
  * también al titular. Lo usan el asesor por WhatsApp (RECIBIDO) y el panel.
  */
 async function confirmarPagoRecibido(clientId, porQuien) {
+  // Qué factura cubre ese comprobante: la que debía al aceptarlo. Se anota en el
+  // caso para que "ya pagó este mes" se decida por periodo también aquí.
+  try {
+    const dc = await deudaConocidaDe(String(clientId).replace(/\D/g, ''));
+    if (dc.conocida && dc.cubreHasta) for (const c of caseLog) if (c.clientId === String(clientId).replace(/\D/g, '') && c.type === 'pago' && c.status === 'pendiente') c.cubreHasta = dc.cubreHasta;
+  } catch (_) { /* sin factura a la mano, vale la ventana de días */ }
   const casoPago = caseLog.find((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
   const titularAjeno = (String((casoPago || {}).resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1];
   const marcados = markCases(clientId, 'recibido', porQuien);
@@ -3702,7 +3708,8 @@ function pagoRecienteDe(telefono, corte = '') {
     const esSuyo = c.clientId === tel || String(c.resumen || '').includes('· ' + tel);
     if (!esSuyo) continue;
     const t = new Date(c.ts).getTime();
-    if (t >= desde) return { cuando: t, canal: c.clientId === tel ? 'comprobante' : 'comprobante de otra persona' };
+    const vale = c.cubreHasta ? ((new Date(c.cubreHasta + 'T12:00:00').getTime() - refMs) / 86400000 >= -15 && t >= Date.now() - 400 * 86400000) : t >= desde;
+    if (vale) return { cuando: t, canal: c.clientId === tel ? 'comprobante' : 'comprobante de otra persona' };
   }
   return null;
 }
@@ -7010,7 +7017,8 @@ async function deudaConocidaDe(telefono) {
   if (!c.usuario) return { conocida: false, total: 0, porque: 'el cliente no está en la lista de Wisphub' };
   try {
     const d = await wisphubReactivar.deudaDelCliente(c.usuario);
-    return { conocida: true, total: Number(d.total) || 0 };
+    const cubreHasta = (d.facturas || []).map((f) => String(f.fecha_vencimiento || '').slice(0, 10)).filter(Boolean).sort().pop() || '';
+    return { conocida: true, total: Number(d.total) || 0, cubreHasta };
   } catch (e) {
     return { conocida: false, total: 0, porque: e.message };
   }
@@ -7636,7 +7644,7 @@ app.post('/webhook/stripe', async (req, res) => {
             anotarSaldoRezagado(telefono, o.customer || reg.clienteId, pesos, e.message);
           }
         }
-        const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id });
+        const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id, cubreHasta: deuda.cubreHasta || undefined });
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
         }
