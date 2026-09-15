@@ -1761,6 +1761,9 @@
                (e.automatico.ultimoBarrido.apagado ? 'apagado' : e.automatico.ultimoBarrido.fueraDeHorario ? 'fuera de horario' :
                `${e.automatico.ultimoBarrido.avisados||0} avisados, ${e.automatico.ultimoBarrido.cobrados||0} cobrados, ${e.automatico.ultimoBarrido.rechazados||0} rechazados`)}</span>` : ''
            }</td></tr>
+           ${((e.automatico||{}).pendientes||[]).length ? `<tr><td class="muted">Automáticos que no pasaron y siguen sin pagar</td><td>
+             ${e.automatico.pendientes.map(p => `<div style="margin:2px 0"><b style="color:#b3261e">${esc(p.nombre || p.telefono)}</b> <span class="muted" style="font-size:.85em">· corte ${esc(String(p.corte).split('-').reverse().join('/'))} · ${p.estado === 'sin-tarjeta' ? 'sin tarjeta guardada' : 'tarjeta rechazada'}${p.motivo ? ' (' + esc(p.motivo) + ')' : ''}</span></div>`).join('')}
+           </td></tr>` : ''}
            <tr><td class="muted">Pagos por registrar en Wisphub</td><td><b>${e.porRegistrar}</b></td></tr>
            <tr><td class="muted">Pagos revertidos (contracargos y devoluciones)</td>
                <td><b style="color:${e.revertidos?'#b3261e':'inherit'}">${e.revertidos}</b></td></tr>

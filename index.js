@@ -9063,6 +9063,20 @@ app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
     automatico: {
       activos: [...stripeClientes.entries()].filter(([k, v]) => v && v.cobroAutomatico && !stripeLeon.partirClave(k).servicioId).length,
       ultimoBarrido: _ultimoBarridoAuto,
+      // Los que este periodo NO se pudieron cobrar y siguen sin pagar: la oficina tiene que ir tras ellos.
+      pendientes: (() => {
+        const lista = [];
+        const hace45 = fechaLocalISO(new Date(Date.now() - 45 * 86400000));
+        for (const [tel, log] of Object.entries(autoCobros)) {
+          if (!(stripeClientes.get(tel) || {}).cobroAutomatico) continue;
+          for (const [corte, per] of Object.entries(log || {})) {
+            if (!per || (per.estado !== 'rechazado' && per.estado !== 'sin-tarjeta') || corte < hace45) continue;
+            if (pagoRecienteDe(tel)) continue;
+            lista.push({ telefono: tel, nombre: (wisphubClients.get(tel) || {}).name || '', corte, estado: per.estado, motivo: per.motivo || '', cuando: per.cuando || null });
+          }
+        }
+        return lista.sort((a, b) => b.corte.localeCompare(a.corte)).slice(0, 50);
+      })(),
     },
     cuentaConectada: !!stripeLeon.cuentaConectada(),
     cuentaLista: stripeLeon.cuentaLista(),

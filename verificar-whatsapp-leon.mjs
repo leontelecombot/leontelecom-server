@@ -968,6 +968,9 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   await entra(I, 'pagar');
   r = await respuestas(n);
   es(dice(r, /cobro automático\* no pasó: la tarjeta fue rechazada/) && !dice(r, /No tienes que hacer nada/), 'y si Inés escribe "pagar", no se le dice "no tienes que hacer nada": se le dice que el automático no pasó y que pague de otra forma');
+  const est = await fetch(BASE + '/admin/api/stripe/estado', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+  const pend = ((est.automatico || {}).pendientes || []);
+  es(pend.length === 1 && pend[0].telefono === I && pend[0].estado === 'rechazado' && pend[0].nombre === 'Inés Vega', 'y el panel lista a Inés entre los automáticos que no pasaron y siguen sin pagar');
   const lista2 = await fetch(BASE + '/admin/api/prorrogas', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
   const pD = (lista2.prorrogas || []).find((p) => p.telefono === D) || {};
   es(pD.restan === 1 && pD.avisado === true && pD.yaPago === false, `el panel lo dice de un vistazo: vence mañana, ya avisado, no ha pagado (${pD.restan}/${pD.avisado}/${pD.yaPago})`);
