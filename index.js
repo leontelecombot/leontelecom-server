@@ -4601,6 +4601,23 @@ async function startReportFlow(chatId, text, sendMsg) {
   }
 }
 
+// Comprobantes de titulares con varios contratos: se pregunta para cuál es y
+// la respuesta se anota en el caso, para que la oficina no lo aplique al otro.
+const pendingServicioComprobante = new Map();   // chatId -> { servicios, telTitular, cuando }
+async function preguntarServicioDelComprobante(chatId, titular, sendMsg) {
+  try {
+    const coinc = titular ? coincidenciasDeTitular(titular) : [];
+    const telTitular = coinc.length === 1 ? coinc[0].tel : normalizePhone(chatId);
+    const varios = await serviciosDeLaCuenta(telTitular);
+    if (varios.length <= 1) return false;
+    pendingServicioComprobante.set(String(chatId), { servicios: varios.slice(0, 3), telTitular, cuando: Date.now() });
+    await sendMsg(chatId,
+      `Vi que esa cuenta tiene *${varios.length} servicios*. ¿Para cuál es este pago? 👇`,
+      [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'comp_serv_' + i, title: (/suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
+    return true;
+  } catch (e) { console.warn('[comprobante] no se pudo preguntar el servicio:', e.message); return false; }
+}
+
 // El último link o ficha que se le mandó a cada quien, por si "no me abre".
 const ultimoLinkPago = new Map();   // chatId -> { url, forma, cuando, reintento }
 
@@ -4933,6 +4950,27 @@ async function handleChatMessage(chatId, text, sendMsg) {
      */
     const _ses = sesionDePagoAjeno(chatId);
     // Eligió cuál de sus servicios paga: se guarda y se sigue por donde iba.
+    // "¿Para cuál es este pago?" (comprobante de un titular con varios contratos): botón o texto.
+    const _psc = pendingServicioComprobante.get(String(chatId));
+    if (_psc && Date.now() - _psc.cuando < 30 * 60000 && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && !_emergencyNow) {
+      let idx = -1;
+      const mBtn = _pt.match(/^comp_serv_(\d)$/);
+      if (mBtn) idx = Number(mBtn[1]);
+      else {
+        const qa = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const q = qa(_pt).replace(/[¡!¿?.,]/g, ' ').replace(/\b(el|la|los|las|de|del|que|es|mi|para|ese|esa|este|esta|uno|una|servicio|pago)\b/g, ' ').trim();
+        if (q.length >= 3) { const hits = _psc.servicios.map((x, i) => (qa(x.etiqueta).includes(q) ? i : -1)).filter((i) => i >= 0); if (hits.length === 1) idx = hits[0]; }
+      }
+      if (idx >= 0 && _psc.servicios[idx]) {
+        const el = _psc.servicios[idx];
+        pendingServicioComprobante.delete(String(chatId));
+        const caso = [...caseLog].reverse().find((c) => c.clientId === normalizePhone(chatId) && c.type === 'pago' && c.status === 'pendiente');
+        if (caso) { caso.resumen = String(caso.resumen || '') + ' · 🏠 Servicio: ' + el.etiqueta; caso.servicioId = el.id; schedulePersist(); }
+        await sendMsg(chatId, `Listo, anoté que es para *${el.etiqueta}*. 🙌`);
+        return;
+      }
+      if (mBtn) { pendingServicioComprobante.delete(String(chatId)); await sendMsg(chatId, 'Esa opción ya no está; el asesor lo revisará con tu comprobante. 🙌'); return; }
+    }
     /*
      * "¿Cuál vas a pagar?" también se contesta escribiendo: "el local", "la
      * casa", "el de Juárez", "el suspendido", "el primero", "los dos" no (uno
@@ -5489,6 +5527,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pdoc.userName, type: 'pago', stage: 0 });
       if (typeof schedulePersist === 'function') schedulePersist();
       await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+      await preguntarServicioDelComprobante(chatId, titular, sendMsg);
       return;
     }
 
@@ -5510,6 +5549,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         }
         pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pend.userName, type: 'pago', stage: 0 });
         if (typeof schedulePersist === 'function') schedulePersist();
+        setTimeout(() => { preguntarServicioDelComprobante(chatId, _pend.titular || '', sendMsg).catch(() => {}); }, 800);
       };
       // Pide (OBLIGATORIO) el nombre del titular del servicio antes de mandar el
       // comprobante al asesor — salvo que el cliente ya lo haya dicho por texto.

@@ -1359,10 +1359,17 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
   await fetch(BASE + '/webhook/whatsapp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + F.slice(2), type: 'document', document: { id: 'doc4', filename: 'pago-fermin.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Fermín' } }] } }] }] }) });
   await respuestas(n, 1, 4000);
-  n = enviados.length; await entra(F, 'Fermín Ortiz'); await respuestas(n, 1, 4000);
+  n = enviados.length; await entra(F, 'Fermín Ortiz');
+  let rF = await respuestas(n, 2, 5000);
+  es(dice(rF, /¿Para cuál es este pago\?/) && conBotones(rF).botones.length === 2, 'como Fermín tiene dos contratos, el bot le pregunta para cuál es el pago');
+  n = enviados.length;
+  await entra(F, 'para el local');
+  rF = await respuestas(n);
+  es(dice(rF, /anoté que es para \*Plan 50 · Local, Av\. Juárez\*/), 'contesta "para el local" y queda anotado');
   const listaF = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
   const deF = (listaF.comprobantes || []).find((c) => c.telefono === F) || {};
   es(deF.titular && deF.titular.contratos && deF.titular.contratos.length === 2 && deF.titular.contratos.some((x) => /Local/.test(x)), 'el de Fermín trae sus 2 contratos (casa y local) para que la oficina se fije a cuál va');
+  es(/🏠 Servicio: Plan 50 · Local/.test(deF.resumen || ''), 'y el comprobante en el panel ya dice que es para el local');
   n = enviados.length;
   const r = await fetch(BASE + '/admin/api/comprobantes/' + encodeURIComponent(mio.id) + '/recibido', { method: 'POST', headers: H_ }).then((x) => x.json());
   const msgs = await respuestas(n, 1);
