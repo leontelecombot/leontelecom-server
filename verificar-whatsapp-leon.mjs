@@ -921,6 +921,9 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   const corrida3 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
   await respuestas(n, 1, 1500);
   es((corrida3.result || corrida3).prorrogaVence === 0 && !enviados.slice(n).some((m) => m.a === D), 'si la corrida se repite, el aviso de la prórroga no se duplica');
+  const lista2 = await fetch(BASE + '/admin/api/prorrogas', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+  const pD = (lista2.prorrogas || []).find((p) => p.telefono === D) || {};
+  es(pD.restan === 1 && pD.avisado === true && pD.yaPago === false, `el panel lo dice de un vistazo: vence mañana, ya avisado, no ha pagado (${pD.restan}/${pD.avisado}/${pD.yaPago})`);
 }
 
 console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ===');

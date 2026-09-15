@@ -6234,7 +6234,11 @@ app.get('/admin/api/prorrogas', verifyAdminToken, (_req, res) => {
     .filter(([, p]) => p && p.hasta >= hoy)
     .map(([tel, p]) => ({ telefono: tel, nombre: (wisphubClients.get(tel) || {}).name || '', ...p,
       // Quién la dio, con palabras: "asesor …1234" si fue por WhatsApp, el usuario si fue por el panel.
-      porTexto: /^\d{10,13}$/.test(String(p.por || '')) ? `asesor por WhatsApp (…${String(p.por).slice(-4)})` : (p.por || 'panel') }))
+      porTexto: /^\d{10,13}$/.test(String(p.por || '')) ? `asesor por WhatsApp (…${String(p.por).slice(-4)})` : (p.por || 'panel'),
+      // Cuántos días le quedan, si ya pagó mientras tanto y si ya se le recordó que vence.
+      restan: Math.round((new Date(p.hasta + 'T12:00:00').getTime() - new Date(hoy + 'T12:00:00').getTime()) / 86400000),
+      yaPago: !!pagoRecienteDe(tel),
+      avisado: !!corteReminders[`${tel}|prorroga|${p.hasta}`] }))
     .sort((a, b) => a.hasta.localeCompare(b.hasta));
   res.json({ prorrogas: lista, total: lista.length });
 });
