@@ -6163,7 +6163,9 @@ app.get('/admin/api/prorrogas', verifyAdminToken, (_req, res) => {
   const hoy = fechaLocalISO();
   const lista = Object.entries(prorrogas)
     .filter(([, p]) => p && p.hasta >= hoy)
-    .map(([tel, p]) => ({ telefono: tel, nombre: (wisphubClients.get(tel) || {}).name || '', ...p }))
+    .map(([tel, p]) => ({ telefono: tel, nombre: (wisphubClients.get(tel) || {}).name || '', ...p,
+      // Quién la dio, con palabras: "asesor …1234" si fue por WhatsApp, el usuario si fue por el panel.
+      porTexto: /^\d{10,13}$/.test(String(p.por || '')) ? `asesor por WhatsApp (…${String(p.por).slice(-4)})` : (p.por || 'panel') }))
     .sort((a, b) => a.hasta.localeCompare(b.hasta));
   res.json({ prorrogas: lista, total: lista.length });
 });

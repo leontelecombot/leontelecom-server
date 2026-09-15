@@ -1688,7 +1688,7 @@
           const [y,m,dd] = String(p.hasta).split('-');
           return `<tr><td><b>${esc(p.nombre || p.telefono)}</b><br><span style="color:var(--muted);font-size:.85em">${esc(p.telefono)}</span></td>
             <td>${dd}/${m}/${y}<br><span style="color:var(--muted);font-size:.85em">${p.dias} día${p.dias!==1?'s':''}</span></td>
-            <td>${esc(p.por || '')}</td><td>${esc(p.motivo || '')}</td>
+            <td>${esc(p.porTexto || p.por || '')}</td><td>${esc(p.motivo || '')}</td>
             <td style="text-align:right"><button class="btn btn-danger btn-sm" onclick="quitarProrroga('${esc(p.telefono)}')" title="Quitar la prórroga">✕</button></td></tr>`;
         }).join('') + '</tbody></table>';
     }catch(e){ caja.innerHTML = '<div class="empty">No se pudieron cargar las prórrogas.</div>'; }
