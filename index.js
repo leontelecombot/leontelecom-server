@@ -5332,7 +5332,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
      */
     if ((/^(ya (pagu[eé]|deposit[eé]|transfer[ií]|hice el pago|realic[eé] el pago|se pag[oó])|(se|sea|le|ya se|ya le) ?(deposit|transfir|transfer|hizo el pago|realiz[oó] el pago)|(el )?pago (ya )?(se hizo|est[aá] hecho|fue realizado)|deposit[eé] (los|el|\$)|transfer[ií] (los|el|\$))/.test(_pt)
          // "¿Ya quedó registrado mi pago?", "si fue registrado ya el pago", "ya se reflejó"
-         || /(registr|aplic|reflej|recib)\w*\s.{0,25}pago|pago\s.{0,30}(registr|aplic|reflej|recib)|ya (lleg|entr)[oó] (mi|el) pago/.test(_pt))
+         || /(registr|aplic|reflej|recib)\w*\s.{0,25}pago|pago\s.{0,30}(registr|aplic|reflej|recib)|ya (lleg|entr)[oó] (mi|el) pago/.test(_pt)
+         // "buen día, envío pago de internet", "le mando el comprobante", "aquí está mi pago" (el archivo viene aparte)
+         || /(env[ií]o|envio|le env[ií]o|te env[ií]o|mando|le mando|te mando|adjunto|aqu[ií] (est[aá]|va|le va|te va)|ah[ií] (va|est[aá]))\s+(el |mi |su |la |los |las )?(pago|comprobante|ficha|recibo|captura|transferencia|dep[oó]sito|voucher)|^(pago|comprobante) (de|del) (internet|servicio|mes)/.test(_pt))
         && !_enOtraCosa && !_conComprobante && !_isBtn) {
       const telP = normalizePhone(chatId);
       const visto = pagoRecienteDe(telP);
@@ -5346,6 +5348,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId, `✅ Sí, el pago que hiciste para *${nombreT}* ya está registrado (${canalTexto(porOtro.canal)}). No hace falta que mandes nada más. 🙌`);
       } else if (enRevision) {
         await sendMsg(chatId, '📄 Ya tenemos tu comprobante y la oficina lo está revisando. En cuanto lo registren te aviso por aquí; no hace falta que lo vuelvas a mandar. 🙌');
+      } else if (/(env[ií]o|envio|mando|adjunto|aqu[ií]|ah[ií])/.test(_pt)) {
+        // Avisa que lo manda: el archivo llega aparte, y con él el bot pregunta a nombre de quién.
+        await sendMsg(chatId, '👍 Perfecto. En cuanto llegue la *foto o el PDF* del comprobante lo mando a revisar y te confirmo por aquí. Si el servicio está a nombre de otra persona, escríbeme su nombre completo.');
       } else {
         await sendMsg(chatId, '👍 Gracias. Para registrarlo, *mándame la foto o el PDF de tu comprobante* aquí mismo y te confirmo en cuanto la oficina lo revise. Si pagaste por el bot (tarjeta, OXXO o tu CLABE), no hace falta: se registra solo.');
       }

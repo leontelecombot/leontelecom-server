@@ -1182,6 +1182,14 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
   await entra(D, 'Sea depositado 350');
   r = await respuestas(n);
   es(dice(r, /comprobante|ya está registrado|revisando/), '"Sea depositado 350" (frase real) también se entiende como aviso de pago');
+  n = enviados.length;
+  await entra(G, 'Buen día, envío pago de internet');
+  r = await respuestas(n);
+  es(dice(r, /En cuanto llegue la \*foto o el PDF\* del comprobante/), '"buen día, envío pago de internet" (el archivo viene aparte): se le dice que en cuanto llegue se manda a revisar');
+  n = enviados.length;
+  await entra(G, 'Buena tarde le envío el comprobante de pago');
+  r = await respuestas(n);
+  es(dice(r, /En cuanto llegue la \*foto o el PDF\*/), 'y "le envío el comprobante de pago" igual');
 
   // El pago de Ana sabe qué factura cubrió (vence mañana): cuenta para ESTE corte aunque tenga días,
   // y NO cuenta para el corte del mes que viene (antes, con la ventana de 31 días, el pago puntual
