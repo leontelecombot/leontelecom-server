@@ -1781,6 +1781,7 @@
           ${chip(d.sinRevisar, 'comprobantes sin revisar', d.sinRevisar ? '#fef3c7' : '#e7f6ee')}
           ${chip(d.rechazados, 'automáticos rechazados sin pagar', d.rechazados ? '#fde8e8' : '#e7f6ee')}
           ${chip(d.vencen, 'prórrogas que vencen mañana', d.vencen ? '#fef3c7' : '#e7f6ee')}
+          ${d.pedidas ? chip(d.pedidas, 'prórrogas pedidas sin responder', '#fde8e8') : ''}
           ${chip(d.pagosBot, 'pagos por el bot en 24 h · $' + Number(d.montoBot||0).toFixed(2), '#e8eefc')}
         </div>
         <div style="font-size:.85em;color:var(--muted);margin-top:8px">Ya cubiertos para mañana: ${d.yaPagaron} pagaron por el bot, ${d.conProrroga} con prórroga, ${d.conAuto} con automático.${(d.nombres||[]).length ? ' Deben: ' + d.nombres.map(esc).join(', ') + (d.debenManana > d.nombres.length ? '…' : '') + '.' : ''}</div>`;

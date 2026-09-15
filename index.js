@@ -4018,6 +4018,7 @@ async function resumenCobranzaDiario(force = false, enviar = true) {
   const vencen = Object.entries(prorrogas).filter(([, p]) => p && p.hasta === manana).length;
   const rechazados = Object.entries(autoCobros).filter(([tel, log]) => (stripeClientes.get(tel) || {}).cobroAutomatico && Object.values(log || {}).some((per) => per && /^(rechazado|sin-tarjeta)$/.test(per.estado)) && !pagoRecienteDe(tel)).length;
   const sinRevisar = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').length;
+  const pedidas = Object.values(prorrogasPedidas).filter((x) => x && x.cuando).length;
   const desde = Date.now() - 86400000;
   let pagosBot = 0, montoBot = 0;
   for (const lista of stripePagosRecientes.values()) for (const p of lista || []) if (p && p.cuando >= desde) { pagosBot++; montoBot += Number(p.monto) || 0; }
@@ -4026,10 +4027,11 @@ async function resumenCobranzaDiario(force = false, enviar = true) {
     `• Cortan mañana y deben: ${debenManana}${nombres.length ? ` (${nombres.join(', ')}${debenManana > nombres.length ? '…' : ''})` : ''}`,
     `• Ya cubiertos para mañana: ${yaPagaron} pagaron, ${conProrroga} con prórroga, ${conAuto} con automático`,
     `• Prórrogas que vencen mañana: ${vencen}`,
+    pedidas ? `• Prórrogas pedidas sin responder: ${pedidas} (le llegaron al ${PRORROGA_WHATSAPP_NUMBER ? PRORROGA_WHATSAPP_NUMBER.replace(/^52/, '') : 'jefe'}; también en panel → Cobranza)` : '',
     `• Automáticos rechazados sin pagar: ${rechazados}`,
     `• Comprobantes sin revisar: ${sinRevisar}${sinRevisar ? ' (panel → Cobranza)' : ''}`,
     `• Pagos por el bot en 24 h: ${pagosBot} por $${montoBot.toFixed(2)}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   let enviados = 0;
   if (enviar) {
     for (const tel of AGENT_WHATSAPP_NUMBERS) {
@@ -4037,7 +4039,39 @@ async function resumenCobranzaDiario(force = false, enviar = true) {
     }
     resumenCobranzaFecha = hoy; schedulePersist();
   }
-  return { enviados, debenManana, nombres, yaPagaron, conProrroga, conAuto, vencen, rechazados, sinRevisar, pagosBot, montoBot, manana, texto };
+  return { enviados, debenManana, nombres, yaPagaron, conProrroga, conAuto, vencen, rechazados, sinRevisar, pedidas, pagosBot, montoBot, manana, texto };
+}
+
+/*
+ * SI EL JEFE NO HA RESPONDIDO UNA PRÓRROGA EN TRES HORAS, SE LE RECUERDA UNA VEZ.
+ *
+ * El cliente se quedó con "te aviso por aquí" y el aviso de corte le va a
+ * salir igual si nadie decide. Solo cuenta el tiempo en horario de oficina
+ * (una pedida a las 9 de la noche no se recuerda a medianoche) y se recuerda
+ * una sola vez por solicitud, por plantilla, para que pase la ventana de 24 h.
+ */
+const PRORROGA_RECORDAR_MS = Number(process.env.PRORROGA_RECORDAR_HORAS || 3) * 3600 * 1000;
+async function recordarProrrogasSinResponder(force = false) {
+  if (!PRORROGA_WHATSAPP_NUMBER) return { sinNumero: true };
+  if (!force && !isWithinBusinessHours()) return { fueraDeHorario: true };
+  const ahora = Date.now();
+  const viejas = Object.entries(prorrogasPedidas).filter(([, x]) => x && x.cuando && !x.recordado && ahora - x.cuando >= PRORROGA_RECORDAR_MS);
+  if (!viejas.length) return { recordadas: 0 };
+  const lineas = viejas.map(([tel, x]) => {
+    const corto = tel.replace(/^52/, '');
+    const horas = Math.round((ahora - x.cuando) / 3600000);
+    return `• ${x.nombre || corto} (${corto}) · hace ${horas} h${x.dias ? ` · pide ${x.dias} días` : ''}\n  Responde: PRORROGA ${corto} ${x.dias || 3}  o  NO PRORROGA ${corto}`;
+  });
+  const texto = `⏰ Tienes ${viejas.length} solicitud${viejas.length !== 1 ? 'es' : ''} de prórroga sin responder:\n${lineas.join('\n')}\n\nTambién puedes resolverlas en el panel → Cobranza → Prórrogas.`;
+  try {
+    await avisarPorIniciativa(PRORROGA_WHATSAPP_NUMBER, texto);
+    for (const [, x] of viejas) x.recordado = new Date().toISOString();
+    schedulePersist();
+    return { recordadas: viejas.length };
+  } catch (e) {
+    console.warn('[prórroga] no se pudo recordar al jefe:', e.message);
+    return { recordadas: 0, error: e.message };
+  }
 }
 
 let _ultimoBarridoAuto = null;
@@ -6995,7 +7029,15 @@ if (process.env.PRUEBAS === '1') {
     for (const t of tickets.values()) if (t.estado !== 'resuelto') t.createdAt = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
     res.json(await preguntarSiYaQuedo(true));
   });
-  app.post('/api/pruebas/resumen-cobranza', async (_req, res) => {
+  app.post('/api/pruebas/prorroga-pedida-vieja', (req, res) => {
+  if (process.env.PRUEBAS !== '1') return res.status(404).end();
+  const tel = normalizePhone(String((req.body || {}).telefono || ''));
+  const horas = Number((req.body || {}).horas || 4);
+  if (!prorrogasPedidas[tel]) return res.status(404).json({ error: 'no hay solicitud' });
+  prorrogasPedidas[tel].cuando -= horas * 3600 * 1000;
+  recordarProrrogasSinResponder(true).then((r) => res.json({ ok: true, ...r }));
+});
+app.post('/api/pruebas/resumen-cobranza', async (_req, res) => {
     res.json(await resumenCobranzaDiario(true));
   });
   app.post('/api/pruebas/cobro-automatico', async (_req, res) => {
@@ -10067,6 +10109,7 @@ const port = Number(process.env.PORT || 3000);
   // Resumen de cobranza a la oficina: se intenta cada 20 min y sale una vez, entre 9 y 11.
   setTimeout(() => resumenCobranzaDiario().catch(() => {}), 90000);
   setInterval(() => resumenCobranzaDiario().catch(() => {}), 20 * 60000);
+  setInterval(() => recordarProrrogasSinResponder().catch(() => {}), 15 * 60000);
 
   // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
   setInterval(() => flushConversations().catch(() => {}), 60000);

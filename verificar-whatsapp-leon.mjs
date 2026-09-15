@@ -1583,6 +1583,19 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   n = enviados.length;
   await entra(H, 'de verdad necesito unos días más para pagar');
   await respuestas(n, 2);
+  // Mientras está pedida, cuenta en el resumen de cobranza y en "Hoy en cobranza".
+  {
+    const hoy = await fetch(BASE + '/admin/api/cobranza/resumen', { headers: H_ }).then((x) => x.json());
+    es(hoy.pedidas === 1 && /Prórrogas pedidas sin responder: 1/.test(hoy.texto) && /9516529988/.test(hoy.texto), 'el resumen de cobranza dice cuántas prórrogas pedidas siguen sin responder y a quién le llegaron');
+    // Tres horas después sin respuesta, al jefe se le recuerda una vez, por plantilla.
+    n = enviados.length;
+    const rec = await fetch(BASE + '/api/pruebas/prorroga-pedida-vieja', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H, horas: 4 }) }).then((x) => x.json());
+    r = await respuestas(n, 1);
+    const av = r.find((m) => m.a === JEFE && /solicitud de prórroga sin responder/.test(m.texto));
+    es(rec.recordadas === 1 && !!av && av.tipo === 'template' && /Hugo Sáenz/.test(av.texto) && /hace 4 h/.test(av.texto) && /NO PRORROGA 9518888888/.test(av.texto), 'a las 3 h sin respuesta, al jefe le llega un recordatorio por plantilla con cómo responder');
+    const rec2 = await fetch(BASE + '/api/pruebas/prorroga-pedida-vieja', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H, horas: 1 }) }).then((x) => x.json());
+    es(rec2.recordadas === 0, 'y no se le vuelve a recordar la misma solicitud');
+  }
   n = enviados.length;
   const neg = await fetch(BASE + '/admin/api/prorrogas/negar', { method: 'POST', headers: { ...H_, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H }) }).then((x) => x.json());
   r = await respuestas(n, 1);

@@ -199,7 +199,10 @@ ser asesor. Si el envío normal falla por la ventana de 24 h, va por plantilla c
 la instrucción escrita.
 
 Al cliente se le dice "ya pasé tu solicitud a la oficina, te aviso por aquí"; si
-insiste antes de que respondan, se le repite sin molestar dos veces al jefe. Al
+insiste antes de que respondan, se le repite sin molestar dos veces al jefe. Si a
+las 3 h (en horario, `PRORROGA_RECORDAR_HORAS`) sigue sin respuesta, al jefe le
+llega un recordatorio por plantilla, una sola vez por solicitud; el resumen de las 9
+y "Hoy en cobranza" dicen cuántas siguen pedidas sin responder. Al
 aprobar, le llega por plantilla hasta qué día tiene; al negar, que por esta vez no
 y cómo pagar. En el panel (Cobranza → Prórrogas) las pedidas sin responder salen
 arriba con los mismos botones, y también se pueden resolver desde ahí.
@@ -416,13 +419,13 @@ node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  51 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  # 272 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
+node verificar-whatsapp-leon.mjs  # 275 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**642 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
+**645 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.
