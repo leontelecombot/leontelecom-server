@@ -3793,8 +3793,10 @@ async function barrerCobroAutomatico(force = false) {
     const log = autoCobros[tel] || (autoCobros[tel] = {});
     const per = log[corte] || (log[corte] = {});
 
-    // Dos días antes: el aviso, con el monto que Wisphub diga hoy.
+    // Dos días antes: el aviso, con el monto que Wisphub diga hoy. Si este mes ya
+    // pagó por su cuenta (o va adelantado), no se le anuncia un cobro que no va a pasar.
     if (corte === pasadoManana && !per.avisado) {
+      if (pagoRecienteDe(tel)) { per.avisado = new Date().toISOString(); per.estado = 'ya-pago'; schedulePersist(); continue; }
       let monto = 0;
       try { monto = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; } catch (_) { /* se avisa sin monto */ }
       if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;
