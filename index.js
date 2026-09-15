@@ -5279,6 +5279,52 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
     /*
+     * "Para que me reconecten", "ya pagué y sigo sin servicio", "aún no tengo
+     * servicio": frases reales. Si el bot ya vio el pago y Wisphub lo tiene
+     * suspendido, se manda reactivar de una vez (con el contrato correcto) y
+     * se avisa a la oficina; si está activo, es cosa del módem; si no hay
+     * pago a la vista, se le pide el comprobante.
+     */
+    if (/(reconect|reconex|restable|reactiv)|(ya pagu[eé]|ya deposit[eé]|ya transfer[ií]).{0,40}(sin (servicio|internet|se[ñn]al)|no (tengo|hay|me han)|sigo|todav[ií]a|a[uú]n)|(a[uú]n|todav[ií]a) no (tengo|hay) (servicio|internet|se[ñn]al)|sigo sin (servicio|internet)/.test(_pt)
+        && !_enOtraCosa && !_conComprobante && !_isBtn && !_emergencyNow) {
+      const telR = normalizePhone(chatId);
+      const cR = wisphubClients.get(telR);
+      if (cR) {
+        const visto = pagoRecienteDe(telR);
+        const enRev = comprobanteEnRevisionDe(telR);
+        const suspendido = /suspend|cort/i.test(String(cR.status || ''));
+        if (visto && suspendido) {
+          // El pago ya está y sigue cortado: se reactiva ya, sin esperar a nadie.
+          let ok = false;
+          try {
+            const varios = await serviciosDeLaCuenta(telR);
+            const objetivo = varios.length === 1 ? varios[0] : (varios.find((x) => /suspend|cort/i.test(x.estado)) || null);
+            const idSvc = (objetivo && objetivo.id) || cR.wisphubId;
+            if (idSvc) { await wisphubReactivar.reactivarServicio(idSvc); ok = true; }
+          } catch (e) { console.warn('[reconexion] no se pudo reactivar a', telR, '·', e.message); }
+          if (ok) {
+            await sendMsg(chatId, `✅ Tu pago ya está registrado (${canalTexto(visto.canal)}) y acabo de mandar reactivar tu servicio. En unos minutos reinicia tu módem (desconéctalo 10 segundos) y ya debe navegar. Si en media hora sigue igual, escríbeme *no tengo internet* y levanto el reporte. 🙌`);
+          } else {
+            await notifyAgentRequest(chatId, ['🔌 PAGÓ Y SIGUE SIN SERVICIO', `Cliente: ${cR.name || telR}`, `Pago visto: ${canalTexto(visto.canal)}`, 'Wisphub lo tiene suspendido y no se pudo reactivar desde aquí: revísalo.'].join('\n'), '').catch(() => false);
+            await sendMsg(chatId, `Tu pago ya está registrado (${canalTexto(visto.canal)}), pero tu servicio sigue marcado como suspendido. Ya le pasé el caso a la oficina para que te reconecten en un momento. 🙏`);
+          }
+          return;
+        }
+        if (visto && !suspendido) {
+          await sendMsg(chatId, `Tu pago ya está registrado (${canalTexto(visto.canal)}) y tu servicio aparece *activo*. Reinicia tu módem: desconéctalo 10 segundos y vuelve a conectarlo. Si sigue sin navegar, escríbeme *no tengo internet* y levanto el reporte. 🙌`);
+          return;
+        }
+        if (enRev) {
+          await sendMsg(chatId, '📄 Tu comprobante ya lo tiene la oficina y lo está revisando; en cuanto lo registren se reactiva tu servicio y te aviso por aquí. 🙏');
+          return;
+        }
+        if (suspendido) {
+          await sendMsg(chatId, `Tu servicio está *suspendido* y no veo un pago registrado. Si ya pagaste, *mándame la foto o el PDF de tu comprobante* y en cuanto la oficina lo revise te reconectan. Si prefieres, escribe *pagar* y te digo cómo pagar desde tu teléfono${stripeLeon.permitido(telR, TELEFONO_PILOTO_STRIPE) ? ' (con tarjeta se reactiva al momento)' : ''}. 🙌`);
+          return;
+        }
+      }
+    }
+    /*
      * "Ya pagué" / "ya deposité" sin comprobante. Es de lo más común en las
      * conversaciones reales ("Sea depositado 440", "el pago se hizo el 14").
      * Si el bot ya vio ese pago, se lo confirma; si no, le pide la foto del

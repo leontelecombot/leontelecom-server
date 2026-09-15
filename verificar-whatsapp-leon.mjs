@@ -1196,6 +1196,21 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
   es(cubre.esteCorte === true && cubre.siguienteCorte === false, 'y para el corte del mes que viene ese mismo pago ya NO cuenta: le tocará aviso y cobro');
 }
 
+console.log('\n=== 17b. "PARA QUE ME RECONECTEN" ===');
+{
+  // Gloria: suspendida, sin pago a la vista → se le pide el comprobante (o pagar por el bot).
+  let n = enviados.length;
+  await entra(G, 'Para que me reconecten');
+  let r = await respuestas(n);
+  es(dice(r, /suspendido\* y no veo un pago registrado/) && dice(r, /comprobante/), 'sin pago a la vista, se le pide el comprobante');
+  // Ana: pagó por el bot y Wisphub la sigue teniendo suspendida → se manda reactivar de una vez.
+  const antesAct = wisphub.activaciones.length;
+  n = enviados.length;
+  await entra(B, 'Ya pagué y sigo sin servicio');
+  r = await respuestas(n);
+  es(dice(r, /acabo de mandar reactivar tu servicio/) && wisphub.activaciones.length === antesAct + 1 && wisphub.activaciones.at(-1) === 102, 'con el pago visto y suspendida, se manda reactivar su servicio (102) y se le dice qué hacer con el módem');
+}
+
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
 {
   let n = enviados.length;
