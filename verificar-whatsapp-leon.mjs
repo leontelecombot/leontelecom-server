@@ -777,6 +777,23 @@ console.log('\n=== 11c. COBRO AUTOMÁTICO CADA MES ===');
   es(dice(r, /quité el cobro automático/), '"cancelar automático" lo quita al instante');
 }
 
+console.log('\n=== 11d. PAGAR POR OTRO QUE TIENE DOS CONTRATOS ===');
+{
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(A, 'a nombre de Fermín Ortiz');
+  await respuestas(n);
+  n = enviados.length;
+  await toca(A, 'pago_otro_es_0');
+  let r = await respuestas(n);
+  es(dice(r, /Tiene \*2 servicios\*; al pagar te pregunto cuál/), 'al confirmar a alguien con dos contratos, no se adelanta un monto que podría ser del otro');
+  n = enviados.length;
+  await toca(A, 'pago_con_tarjeta');
+  r = await respuestas(n);
+  es(dice(r, /tiene \*2 servicios\*/) && conBotones(r).botones.length === 2, 'y al pagar pregunta cuál de los dos');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+}
+
 console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN TIENE PRÓRROGA ===');
 {
   const ASESOR = '529519999999';
