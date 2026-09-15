@@ -1828,7 +1828,9 @@
            ${((e.automatico||{}).pendientes||[]).length ? `<tr><td class="muted">Automáticos que no pasaron y siguen sin pagar</td><td>
              ${e.automatico.pendientes.map(p => `<div style="margin:2px 0"><b style="color:#b3261e">${esc(p.nombre || p.telefono)}</b> <span class="muted" style="font-size:.85em">· corte ${esc(String(p.corte).split('-').reverse().join('/'))} · ${p.estado === 'sin-tarjeta' ? 'sin tarjeta guardada' : 'tarjeta rechazada'}${p.motivo ? ' (' + esc(p.motivo) + ')' : ''}</span></div>`).join('')}
            </td></tr>` : ''}
-           <tr><td class="muted">Pagos por registrar en Wisphub</td><td><b>${e.porRegistrar}</b></td></tr>
+           <tr><td class="muted">Facturas por marcar en Wisphub <span title="El pago ya entró y el servicio ya se reactivó solo. Lo único que Wisphub no deja hacer por API es marcar la factura como pagada: eso se hace a mano con este número.">ⓘ</span></td><td><b>${e.porRegistrar}</b>
+             ${(e.porRegistrarLista||[]).length ? '<div style="margin-top:6px;font-size:.85em">' + e.porRegistrarLista.map(r => `<div style="margin:2px 0">${r.tipo === 'afavor' ? '⭐' : r.tipo === 'ambiguo' ? '❓' : '🧾'} <b>${esc(r.nombre || r.telefono)}</b> <span class="muted">· ${r.factura ? 'factura #' + esc(String(r.factura)) + ' · ' : ''}$${Number(r.total).toFixed(2)}${r.tipo === 'afavor' ? ' a favor' : ''}${r.cuando ? ' · ' + esc(fechaCorta(r.cuando)) : ''}${r.detalle ? ' · ' + esc(r.detalle) : ''}</span></div>`).join('') + '</div>' : ''}
+           </td></tr>
            <tr><td class="muted">Pagos revertidos (contracargos y devoluciones)</td>
                <td><b style="color:${e.revertidos?'#b3261e':'inherit'}">${e.revertidos}</b></td></tr>
            <tr><td class="muted">Pagos sin cargo cobrado <span title="El cliente transfirió justo lo que debía, sin sumarle el cargo por pagar en línea. Su pago quedó perfecto, pero a nosotros esa transferencia nos cuesta $8.12 de Stripe.">ⓘ</span><br>

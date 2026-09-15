@@ -5462,11 +5462,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
           return;
         }
         if (enRev) {
-          await sendMsg(chatId, '📄 Tu comprobante ya lo tiene la oficina y lo está revisando; en cuanto lo registren se reactiva tu servicio y te aviso por aquí. 🙏');
+          await sendMsg(chatId, '📄 Tu comprobante ya lo tiene la oficina y lo está revisando; en cuanto lo den por bueno tu servicio se reactiva solo y te aviso por aquí. 🙏');
           return;
         }
         if (suspendido) {
-          await sendMsg(chatId, `Tu servicio está *suspendido* y no veo un pago registrado. Si ya pagaste, *mándame la foto o el PDF de tu comprobante* y en cuanto la oficina lo revise te reconectan. Si prefieres, escribe *pagar* y te digo cómo pagar desde tu teléfono${stripeLeon.permitido(telR, TELEFONO_PILOTO_STRIPE) ? ' (con tarjeta se reactiva al momento)' : ''}. 🙌`);
+          await sendMsg(chatId, `Tu servicio está *suspendido* y no veo un pago registrado. Si ya pagaste, *mándame la foto o el PDF de tu comprobante* y en cuanto la oficina lo dé por bueno tu servicio se reactiva solo. Si prefieres, escribe *pagar* y te digo cómo pagar desde tu teléfono${stripeLeon.permitido(telR, TELEFONO_PILOTO_STRIPE) ? ' (con tarjeta se reactiva al momento)' : ''}. 🙌`);
           return;
         }
       }
@@ -5494,7 +5494,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         const nombreT = (wisphubClients.get(porOtro.titular) || {}).name || 'esa cuenta';
         await sendMsg(chatId, `✅ Sí, el pago que hiciste para *${nombreT}* ya está registrado (${canalTexto(porOtro.canal)}). No hace falta que mandes nada más. 🙌`);
       } else if (enRevision) {
-        await sendMsg(chatId, '📄 Ya tenemos tu comprobante y la oficina lo está revisando. En cuanto lo registren te aviso por aquí; no hace falta que lo vuelvas a mandar. 🙌');
+        await sendMsg(chatId, '📄 Ya tenemos tu comprobante y la oficina lo está revisando. En cuanto lo den por bueno te aviso por aquí (y si estabas suspendido, se reactiva solo); no hace falta que lo vuelvas a mandar. 🙌');
       } else if (/(env[ií]o|envio|mando|adjunto|aqu[ií]|ah[ií])/.test(_pt)) {
         // Avisa que lo manda: el archivo llega aparte, y con él el bot pregunta a nombre de quién.
         await sendMsg(chatId, '👍 Perfecto. En cuanto llegue la *foto o el PDF* del comprobante lo mando a revisar y te confirmo por aquí. Si el servicio está a nombre de otra persona, escríbeme su nombre completo.');
@@ -5754,7 +5754,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         '', { docUrl: _pdoc.docUrl, docName: _pdoc.fname, caseType: 'pago' });
       pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pdoc.userName, type: 'pago', stage: 0 });
       if (typeof schedulePersist === 'function') schedulePersist();
-      await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+      await sendMsg(chatId, '✅ ¡Gracias! Tu comprobante ya está con la oficina. En cuanto lo den por bueno te aviso por aquí y, si tu servicio estaba suspendido, se reactiva solo. 🙌');
       await preguntarServicioDelComprobante(chatId, titular, sendMsg);
       return;
     }
@@ -5785,7 +5785,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         if (_pend.titular) {   // ya lo dijo ("a nombre de X"): no preguntamos doble
           pendingImage.delete(_pendKey);
           await enviarComprobante(lines, headline);
-          await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+          await sendMsg(chatId, '✅ ¡Gracias! Tu comprobante ya está con la oficina. En cuanto lo den por bueno te aviso por aquí y, si tu servicio estaba suspendido, se reactiva solo. 🙌');
           return;
         }
         _pend.stage = 'titular';
@@ -5838,7 +5838,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         pendingImage.delete(_pendKey);
         const lines = [...(_pend.lineasListas || []), '🧾 Servicio a nombre de: ' + titular, lineaCoincidencias(titular, normalizePhone(chatId))];
         await enviarComprobante(lines, _pend.headlinePend || '💳 COMPROBANTE DE PAGO');
-        await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
+        await sendMsg(chatId, '✅ ¡Gracias! Tu comprobante ya está con la oficina. En cuanto lo den por bueno te aviso por aquí y, si tu servicio estaba suspendido, se reactiva solo. 🙌');
         return;
       }
       // Regex estrictos: solo respuestas cortas/explícitas disparan sí/no (evita que
@@ -9698,6 +9698,11 @@ app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
     rezagados: stripeSaldosRezagados.size,
     atorado: +atorado.toFixed(2),
     porRegistrar: porTipo('factura') + porTipo('afavor') + porTipo('ambiguo'),
+    // La lista en sí, para que el panel enseñe factura y monto y no solo un número.
+    porRegistrarLista: stripeRegistrosPendientes
+      .filter((r) => r && r.tipo !== 'disputa' && r.tipo !== 'devolucion')
+      .slice(-30).reverse()
+      .map((r) => ({ tipo: r.tipo, nombre: r.nombre || '', telefono: r.telefono || '', factura: r.factura || '', total: Number(r.total) || 0, detalle: r.detalle || '', cuando: r.cuando || null })),
     revertidos: porTipo('disputa') + porTipo('devolucion'),
     /*
      * Lo que costó cobrar sin haber podido cobrar el cargo. Cada transferencia
