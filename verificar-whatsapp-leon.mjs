@@ -433,6 +433,7 @@ console.log('\n=== 4. OXXO POR OTRO: LA FICHA LA RECIBE QUIEN LA SACÓ ===');
   if (!s) console.log('    recibió:', JSON.stringify(r.map((m) => m.texto.slice(0, 120))));
   es(s && s.forma === 'oxxo' && s.telefono === B && s.pagadoPor === A, 'la ficha de OXXO va a la cuenta de Ana Pérez, sacada por A');
   es(dice(r, /la ficha para pagar en OXXO/), 'el mensaje habla de "la ficha", no de "tu ficha"');
+  es(dice(r, /OXXO puede tardar hasta un día.*el servicio de \*Ana Pérez\* quede activo hoy/s), 'y como Ana está suspendida, avisa que OXXO tarda y que tarjeta o transferencia reactivan al momento');
   const activacionesAntes = wisphub.activaciones.length;
 
   // Stripe avisa que la ficha se generó (completed + unpaid). Eso NO es un pago.

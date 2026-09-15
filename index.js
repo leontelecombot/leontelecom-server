@@ -4644,10 +4644,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
         const cabeza = forma === 'oxxo'
           ? (paraOtro ? '🏪 Aquí sale la ficha para pagar en OXXO:' : '🏪 Aquí sale tu ficha para pagar en OXXO:')
           : '💳 Aquí puedes pagar con tu tarjeta, sin salir de tu casa:';
+        // Si el corte es hoy o mañana (o ya está suspendido), OXXO puede llegar tarde: que lo sepa antes de ir a la tienda.
+        const corteCuenta = parseFechaCorte((servicio && servicio.fechaCorte) || c.fechaCorte);
+        const urge = /suspend|cort/i.test(String((servicio && servicio.estado) || c.status || '')) || (corteCuenta && corteCuenta <= fechaMasDias(1));
         const cola = forma === 'oxxo'
           ? '\n\nAbre el link y te da la ficha con el código de barras. Llévala a cualquier OXXO y págala en caja.\n\n'
             + '⏱️ Tienes 30 minutos para abrir el link, pero la *ficha te dura varios días*.\n\n'
             + `Cuando la tienda reporte el pago te avisamos por aquí y ${suServicio} se reactiva solo. Puede tardar unas horas. *No mandes comprobante*, nosotros lo vemos.`
+            + (urge ? `\n\n⚠️ Ojo: OXXO puede tardar hasta un día en reportar el pago. Si te urge que ${suServicio} quede activo hoy, con *tarjeta* o *transferencia* se reactiva al momento.` : '')
           : `\n\nEn cuanto se confirme te avisamos por aquí y ${suServicio} se reactiva solo — no hace falta comprobante.\n\n`
             + '⏱️ Tienes 30 minutos para abrir el link.';
 
