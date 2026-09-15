@@ -1696,6 +1696,11 @@
          <table class="data-table"><tbody>
            <tr><td class="muted">Se le ofrece a</td><td><b>${esc(e.alcance)}</b></td></tr>
            <tr><td class="muted">Clientes con su CLABE fija</td><td><b>${e.conClabe}</b></td></tr>
+           <tr><td class="muted">Con cobro automático cada mes</td><td><b>${(e.automatico||{}).activos||0}</b>${
+             (e.automatico||{}).ultimoBarrido ? ` <span class="muted" style="font-size:.85em">· última pasada: ${
+               (e.automatico.ultimoBarrido.apagado ? 'apagado' : e.automatico.ultimoBarrido.fueraDeHorario ? 'fuera de horario' :
+               `${e.automatico.ultimoBarrido.avisados||0} avisados, ${e.automatico.ultimoBarrido.cobrados||0} cobrados, ${e.automatico.ultimoBarrido.rechazados||0} rechazados`)}</span>` : ''
+           }</td></tr>
            <tr><td class="muted">Pagos por registrar en Wisphub</td><td><b>${e.porRegistrar}</b></td></tr>
            <tr><td class="muted">Pagos revertidos (contracargos y devoluciones)</td>
                <td><b style="color:${e.revertidos?'#b3261e':'inherit'}">${e.revertidos}</b></td></tr>

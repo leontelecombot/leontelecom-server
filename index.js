@@ -3717,12 +3717,14 @@ function fechaMasDias(dias) {
   const d = new Date(); d.setDate(d.getDate() + dias);
   return fechaLocalISO(d);
 }
+let _ultimoBarridoAuto = null;
 async function barrerCobroAutomatico(force = false) {
   const hechos = { avisados: 0, cobrados: 0, rechazados: 0, sinDeuda: 0, sinTarjeta: 0 };
-  if (!stripeLeon.activo() || !stripeLeon.cuentaLista()) return { ...hechos, apagado: true };
+  const _resultado = (r) => { _ultimoBarridoAuto = { ...r, cuando: new Date().toISOString() }; return r; };
+  if (!stripeLeon.activo() || !stripeLeon.cuentaLista()) return _resultado({ ...hechos, apagado: true });
   const hora = Number(new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: 'numeric', hour12: false }).format(new Date()));
   // Entre las 9 y las 20: a nadie le gusta un cargo (ni un aviso) de madrugada.
-  if (!force && (hora < 9 || hora >= 20)) return { ...hechos, fueraDeHorario: true };
+  if (!force && (hora < 9 || hora >= 20)) return _resultado({ ...hechos, fueraDeHorario: true });
   const manana = fechaMasDias(1);
   const pasadoManana = fechaMasDias(2);
 
@@ -3810,7 +3812,7 @@ async function barrerCobroAutomatico(force = false) {
       }
     }
   }
-  return hechos;
+  return _resultado(hechos);
 }
 
 async function sweepCorteReminders(force = false) {
@@ -8600,6 +8602,11 @@ app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
      * la variable hacía que el tablero dijera "falta configurar Stripe" aunque
      * él ya la hubiera dado de alta con sus propias manos.
      */
+    // Cobro automático: cuántos lo tienen y qué hizo la última pasada.
+    automatico: {
+      activos: [...stripeClientes.entries()].filter(([k, v]) => v && v.cobroAutomatico && !stripeLeon.partirClave(k).servicioId).length,
+      ultimoBarrido: _ultimoBarridoAuto,
+    },
     cuentaConectada: !!stripeLeon.cuentaConectada(),
     cuentaLista: stripeLeon.cuentaLista(),
     reactivacionActiva: wisphubReactivar.activo(),
