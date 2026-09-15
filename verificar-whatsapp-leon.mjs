@@ -1044,7 +1044,8 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   es(r.some((m) => m.a === G && /Si ya pagaste tu ficha de OXXO, no hagas caso/.test(m.texto)), 'y como tiene una ficha de OXXO viva, el aviso le aclara que si ya la pagó no haga caso');
   es(!r.some((m) => m.a === B), 'Ana Pérez NO: pagó por el bot hace un rato, aunque Wisphub todavía la tenga como deudora');
   es(!r.some((m) => m.a === D), 'Diego NO: tiene prórroga');
-  es(c.yaPagaron === 2 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagaron, ${c.conProrroga} con prórroga`);
+  es(c.yaPagaron === 3 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagaron (Andrés, Ana y el local de Fermín, mirado contrato por contrato), ${c.conProrroga} con prórroga`);
+  es(!r.some((m) => m.a === F), 'Fermín NO: su local (corte mañana) está pagado dos meses y su casa corta pasado mañana');
   es(!r.some((m) => m.a === H), 'Hugo NO: su corte es pasado mañana, y además ya está al corriente');
   es(!r.some((m) => m.a === I), 'Inés NO: tiene cobro automático (y ya se le cobró hoy)');
   es(c.prorrogaVence === 0, 'y a Diego no se le avisa nada: su prórroga vence en 3 días');
@@ -1083,6 +1084,13 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   const est = await fetch(BASE + '/admin/api/stripe/estado', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
   const pend = ((est.automatico || {}).pendientes || []);
   es(pend.length === 1 && pend[0].telefono === I && pend[0].estado === 'rechazado' && pend[0].nombre === 'Inés Vega', 'y el panel lista a Inés entre los automáticos que no pasaron y siguen sin pagar');
+  // Si el local de Fermín NO estuviera pagado, el aviso le llegaría diciendo de qué contrato es (su casa no corta mañana).
+  await fetch(BASE + '/api/pruebas/olvidar-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: F }) });
+  n = enviados.length;
+  const corrida5 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
+  r = await respuestas(n, 1, 6000);
+  const c5 = corrida5.result || corrida5;
+  es(c5.porContrato === 1 && r.some((m) => m.a === F && m.tipo === 'template' && /Es tu servicio: Plan 50 · Local, Av\. Juárez/.test(m.texto)), 'con dos contratos, el aviso de corte va por contrato: a Fermín le llega el del LOCAL y dice cuál es');
   const lista2 = await fetch(BASE + '/admin/api/prorrogas', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
   const pD = (lista2.prorrogas || []).find((p) => p.telefono === D) || {};
   es(pD.restan === 1 && pD.avisado === true && pD.yaPago === false, `el panel lo dice de un vistazo: vence mañana, ya avisado, no ha pagado (${pD.restan}/${pD.avisado}/${pD.yaPago})`);
@@ -1284,7 +1292,7 @@ console.log('\n=== 17d. EL RESUMEN DE COBRANZA DE LAS 9 ===');
   const msg = r.find((m) => m.a === ASESOR && /RESUMEN DE COBRANZA/.test(m.texto));
   es(!!msg && msg.tipo === 'template', 'al asesor le llega por plantilla el resumen de cobranza del día');
   es(!!msg && /Cortan mañana y deben: \d+/.test(msg.texto) && /Ya cubiertos para mañana: \d+ pagaron, \d+ con prórroga, \d+ con automático/.test(msg.texto) && /Comprobantes sin revisar: \d+/.test(msg.texto) && /Pagos por el bot en 24 h: \d+ por \$/.test(msg.texto), 'con quién debe mañana, quién ya está cubierto, prórrogas, automáticos rechazados, comprobantes y pagos por el bot');
-  es(r0.enviados === 1 && r0.pagosBot >= 3 && r0.montoBot > 1000, `y las cifras salen del estado real (${r0.pagosBot} pagos por $${r0.montoBot})`);
+  es(r0.enviados === 1 && r0.pagosBot >= 2 && r0.montoBot > 1000, `y las cifras salen del estado real (${r0.pagosBot} pagos por $${r0.montoBot})`);
 }
 
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');

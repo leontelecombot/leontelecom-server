@@ -4140,7 +4140,45 @@ async function sweepCorteReminders(force = false) {
     const candidatos = [];
     const enRevision = [];
     let alCorriente = 0, yaPagaron = 0, conProrroga = 0, conAutomatico = 0;
+    /*
+     * Teléfonos con varios contratos. El padrón trae UN registro por teléfono,
+     * así que el otro contrato nunca recibiría su aviso. A los que ya se sabe
+     * que tienen varios (una CLABE por contrato o el automático de uno en
+     * particular) se les mira contrato por contrato en Wisphub; al resto no,
+     * para no pegarle a Wisphub por todo el padrón cada mañana.
+     */
+    const conVarios = new Set();
+    for (const [clave, reg] of stripeClientes) {
+      const { tel, servicioId } = stripeLeon.partirClave(clave);
+      if (servicioId || (reg && reg.autoServicioId)) conVarios.add(tel);
+    }
+    const porContrato = [];   // [phone, c(etiquetado), fc, autoFallo, servicio]
+    for (const tel of conVarios) {
+      const c0 = wisphubClients.get(tel);
+      if (!c0) continue;
+      let lista = [];
+      try { lista = await serviciosDeLaCuenta(tel); } catch (_) { lista = []; }
+      if (lista.length <= 1) { conVarios.delete(tel); continue; }
+      for (const x of lista) {
+        if (!x.fechaCorte || x.fechaCorte !== manana) continue;
+        let debe = /suspend|cort/i.test(String(x.estado || ''));
+        if (!debe) { try { debe = ((await wisphubReactivar.deudaDelCliente(x.usuario)).total || 0) > 0; } catch (_) { debe = clienteDebe(c0); } }
+        if (!debe) { alCorriente++; continue; }
+        if (pagoRecienteDe(tel, x.fechaCorte, x.id)) { yaPagaron++; continue; }
+        if (comprobanteEnRevisionDe(tel)) { enRevision.push(`${c0.name || tel} (${x.etiqueta})`); continue; }
+        if (prorrogaVigente(tel)) { conProrroga++; continue; }
+        let autoFallo = '';
+        const regA = stripeClientes.get(tel) || {};
+        if (regA.cobroAutomatico && String(regA.autoServicioId || c0.wisphubId || '') === String(x.id)) {
+          const per = ((autoCobros[tel] || {})[x.fechaCorte]) || {};
+          if (per.estado !== 'rechazado' && per.estado !== 'sin-tarjeta') { conAutomatico++; continue; }
+          autoFallo = per.estado;
+        }
+        porContrato.push([tel, { ...c0, plan: x.etiqueta }, x.fechaCorte, autoFallo, x]);
+      }
+    }
     for (const [phone, c] of wisphubClients.entries()) {
+      if (conVarios.has(phone)) continue;   // ya se miró contrato por contrato
       const fc = parseFechaCorte(c.fechaCorte);
       if (!fc || fc !== manana) continue;
       if (!clienteDebe(c)) { alCorriente++; continue; }
@@ -4161,9 +4199,9 @@ async function sweepCorteReminders(force = false) {
     }
 
     let sent = 0, failed = 0, yaEnviados = 0;
-    for (const [phone, c, fc, autoFallo] of candidatos) {
+    for (const [phone, c, fc, autoFallo, servicio] of [...candidatos, ...porContrato]) {
       try {
-        const key = `${phone}|${fc}`;
+        const key = servicio ? `${phone}|${fc}|${servicio.id}` : `${phone}|${fc}`;
         if (corteReminders[key]) { yaEnviados++; continue; }
         const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
         const nombre = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
@@ -4175,6 +4213,7 @@ async function sweepCorteReminders(force = false) {
         // plantilla que es solo "{plan}" y el cliente no tiene plan), usamos la
         // predeterminada — WhatsApp rechaza un cuerpo de plantilla vacío.
         if (!msgCorte.replace(/\s+/g, ' ').trim()) msgCorte = renderCorteVars(CORTE_MSG_DEFAULT, datos);
+        if (servicio) msgCorte = (msgCorte.trim() + ` (Es tu servicio: ${servicio.etiqueta}.)`).slice(0, 900);
         /*
          * A los del piloto se les dice que YA pueden pagar desde el teléfono.
          *
@@ -4244,13 +4283,13 @@ async function sweepCorteReminders(force = false) {
     // cuenta como al corriente; si Wisphub usa ese texto, el filtro se apoya solo en el
     // saldo). Falla hacia "no mandar", que es lo seguro, pero en silencio nadie se
     // enteraría hasta que un cliente reclamara que lo cortaron sin avisar.
-    if (!candidatos.length && alCorriente) {
+    if (!candidatos.length && !porContrato.length && alCorriente) {
       alertAdmin('corte-filtro', `Hoy NINGÚN cliente pasó el filtro de deuda: los ${alCorriente} con corte el ${manana} salieron todos "al corriente". Revisa saldo y estado de facturas en el panel antes de dar ese cero por bueno.`);
     }
     if (enRevision.length) {
       alertAdmin('corte-en-revision', `📄 ${enRevision.length} cliente(s) con corte mañana mandaron comprobante y siguen SIN REVISAR: ${enRevision.slice(0, 8).join(', ')}${enRevision.length > 8 ? '…' : ''}. No se les mandó aviso de corte; revísalos hoy en el panel (Comprobantes por revisar) para que no se corten con el pago hecho.`);
     }
-    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico, candidatos: candidatos.length, forzada: !!force });
+    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico, candidatos: candidatos.length + porContrato.length, porContrato: porContrato.length, forzada: !!force });
     // Si AYER no quedó constancia, hubo gente que cortó sin recibir su aviso. Se avisa
     // SOLO el día siguiente al hueco (no los 7 días que el hueco sigue apareciendo en la
     // lista), para que la alerta signifique algo y no se vuelva ruido que nadie lee.
@@ -4258,7 +4297,7 @@ async function sweepCorteReminders(force = false) {
     if (huecos[0] === mexicoDateStr(new Date(Date.now() - 86400000))) {
       alertAdmin('corte-hueco', `Sin avisos de corte el/los día(s): ${huecos.join(', ')}. Revisa el despertador de GitHub Actions (parece que Render se durmió).`);
     }
-    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico };
+    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico, porContrato: porContrato.length };
   } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 
@@ -6804,6 +6843,7 @@ if (process.env.PRUEBAS === '1') {
     const tel = normalizePhone(String((req.body || {}).telefono || ''));
     stripePagosRecientes.delete(tel);
     for (const c of caseLog) if (c.clientId === tel && c.type === 'pago') c.status = 'viejo';
+    for (const [k, v] of stripeClientes) if (v && stripeLeon.partirClave(k).tel === tel && v.adelantadoHasta) { delete v.adelantadoHasta; delete v.adelantadoMeses; delete v.adelantadoServicio; }
     res.json({ ok: true });
   });
   app.post('/api/pruebas/auto-estado', (req, res) => {
