@@ -211,6 +211,32 @@ El cobro va a la cuenta del otro, el acuse a quien pagó, la reconexión al due�
 y el aviso a los dos. Lo dicho vale media hora: después, PAGAR vuelve a ser para
 la propia cuenta. "menú" saca del paso en cualquier momento.
 
+**Cobro automático cada mes.** El cliente escribe *AUTOMÁTICO*, confirma con un
+botón y paga una vez con tarjeta (queda guardada). Después, cada mes: dos días
+antes de su fecha de corte se le avisa cuánto se va a cobrar; un día antes se
+cobra lo que Wisphub diga que debe (si está al corriente, no se cobra nada) y
+se le confirma a qué tarjeta. Rechazos: se le pide pagar por otra vía y se
+avisa a la oficina. *CANCELAR AUTOMÁTICO* lo quita al instante. Una sola vez
+por periodo aunque el servidor se reinicie (`autoCobros`), y el barrido corre
+cada hora entre 9 y 20.
+
+**Varios meses de jalón.** "quiero pagar 6 meses": lo que debe más los meses
+siguientes al precio de su plan. Queda anotado hasta cuándo está cubierto
+(sin avisos de corte) y la oficina recibe el aviso de registrar los meses que
+Wisphub no tiene.
+
+**Prórrogas.** El asesor escribe `PRORROGA 9511234567 3` (días) y el cliente
+recibe hasta cuándo tiene; el aviso de corte se calla hasta que venza. También
+desde el panel (`/admin/api/prorrogas`).
+
+**El aviso de corte no le llega a quien ya pagó.** Ni por el bot (tarjeta,
+OXXO, CLABE, automático) ni con comprobante ya aceptado por la oficina, aunque
+Wisphub siga marcando la factura pendiente.
+
+**Un teléfono con varios contratos.** Se pregunta cuál antes de cobrar por
+cualquier vía; el link y la CLABE llevan el id del servicio y el webhook abona
+y reactiva exactamente ese.
+
 **Nada se reactiva antes de tiempo.** Ni al generar el link ni al sacar la ficha
 de OXXO se toca el servicio. Solo cuando Stripe avisa que el dinero entró
 (`checkout.session.completed` pagado o `async_payment_succeeded`), y solo a
@@ -333,13 +359,13 @@ node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  51 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  #  62 de la conversación: pagar por otro, OXXO, callejones
+node verificar-whatsapp-leon.mjs  # 105 de la conversación: pagar por otro, contratos, meses, automático, corte
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**432 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
+**475 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.

@@ -468,6 +468,14 @@ let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (ev
  * hasta que venza.
  */
 let prorrogas = {};         // telefono → { hasta: 'YYYY-MM-DD', por, cuando, motivo }
+/*
+ * COBRO AUTOMÁTICO MENSUAL. El cliente que lo acepta paga una vez con
+ * tarjeta y la deja guardada; de ahí en adelante, dos días antes de su fecha
+ * de pago se le avisa y un día antes se le cobra lo que Wisphub diga que
+ * debe. Aquí se anota qué se hizo en cada periodo, para no avisar ni cobrar
+ * dos veces aunque el servidor se reinicie a media mañana.
+ */
+let autoCobros = {};        // telefono → { 'YYYY-MM-DD': { avisado, estado, cuando, ref, motivo } }
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
 // Bitácora de corridas del aviso de corte: una línea por día, para ver de un vistazo
 // qué días SÍ salieron los avisos y cuáles se saltaron. Hace falta porque en Render
@@ -1240,6 +1248,7 @@ function buildStateSnapshot() {
     // Para cazar pagos dobles entre canales tras un reinicio de Render.
     stripePagosRecientes: Object.fromEntries(stripePagosRecientes),
     prorrogas,
+    autoCobros,
     stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX),
     /*
      * Los avisos de Stripe ya procesados.
@@ -1421,6 +1430,7 @@ function hydrateState(s) {
   if (s.agentPingSent && typeof s.agentPingSent === 'object') agentPingSent = new Map(Object.entries(s.agentPingSent));
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
   if (s.prorrogas && typeof s.prorrogas === 'object') prorrogas = s.prorrogas;
+  if (s.autoCobros && typeof s.autoCobros === 'object') autoCobros = s.autoCobros;
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
@@ -3667,6 +3677,89 @@ function huecosCorte(dias = 7) {
 }
 
 // force=true (desde el panel) corre ya, sin esperar la hora — el dedup evita repetir.
+/*
+ * ¿A quién le toca aviso o cobro automático hoy? Se decide con la fecha de
+ * corte que trae Wisphub: dos días antes, aviso; un día antes, cobro.
+ */
+function fechaMasDias(dias) {
+  const d = new Date(); d.setDate(d.getDate() + dias);
+  return fechaLocalISO(d);
+}
+async function barrerCobroAutomatico(force = false) {
+  const hechos = { avisados: 0, cobrados: 0, rechazados: 0, sinDeuda: 0, sinTarjeta: 0 };
+  if (!stripeLeon.activo() || !stripeLeon.cuentaLista()) return { ...hechos, apagado: true };
+  const hora = Number(new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: 'numeric', hour12: false }).format(new Date()));
+  // Entre las 9 y las 20: a nadie le gusta un cargo (ni un aviso) de madrugada.
+  if (!force && (hora < 9 || hora >= 20)) return { ...hechos, fueraDeHorario: true };
+  const manana = fechaMasDias(1);
+  const pasadoManana = fechaMasDias(2);
+
+  for (const [clave, reg] of stripeClientes) {
+    if (!reg || !reg.cobroAutomatico || !reg.clienteId) continue;
+    const { tel } = stripeLeon.partirClave(clave);
+    const c = wisphubClients.get(tel) || {};
+    const corte = parseFechaCorte(c.fechaCorte);
+    if (!corte) continue;
+    const log = autoCobros[tel] || (autoCobros[tel] = {});
+    const per = log[corte] || (log[corte] = {});
+
+    // Dos días antes: el aviso, con el monto que Wisphub diga hoy.
+    if (corte === pasadoManana && !per.avisado) {
+      let monto = 0;
+      try { monto = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; } catch (_) { /* se avisa sin monto */ }
+      if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;
+      per.avisado = new Date().toISOString(); schedulePersist();
+      await sendWhatsAppMessage(tel,
+        `📅 Hola. Tu fecha de pago es el ${corte.split('-').reverse().join('/')}. *Mañana se cobrará${monto > 0 ? ` $${monto.toFixed(2)}` : ' tu mensualidad'} a tu tarjeta guardada*, como lo pediste, y tu servicio sigue sin cortes.\n\n`
+        + 'Si prefieres pagar de otra forma este mes, escribe *CANCELAR AUTOMÁTICO* antes de mañana.').catch(() => {});
+      hechos.avisados++;
+      continue;
+    }
+
+    // Un día antes: el cobro. Una sola vez por periodo, pase lo que pase.
+    if (corte === manana && !per.estado) {
+      per.estado = 'en-proceso'; per.cuando = new Date().toISOString(); schedulePersist();
+      try {
+        let deuda = 0;
+        try { deuda = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; }
+        catch (e) { throw new Error('No se pudo leer la deuda: ' + e.message); }
+        if (deuda <= 0) {
+          per.estado = 'sin-deuda'; schedulePersist(); hechos.sinDeuda++;
+          await sendWhatsAppMessage(tel, '✅ Hoy tocaba tu cobro automático, pero tu cuenta ya está al corriente: no se cobró nada. 🙌').catch(() => {});
+          continue;
+        }
+        const tarjeta = await stripeLeon.metodoGuardadoDe(reg.clienteId);
+        if (!tarjeta) {
+          per.estado = 'sin-tarjeta'; schedulePersist(); hechos.sinTarjeta++;
+          await sendWhatsAppMessage(tel, `⚠️ Tocaba cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta, pero ya no hay una tarjeta guardada. Escribe *pagar* para pagar de otra forma, o vuelve a activar el automático al pagar con tarjeta. 🙏`).catch(() => {});
+          continue;
+        }
+        const r = await stripeLeon.cobrarGuardado({ clienteId: reg.clienteId, metodoPago: tarjeta.id, monto: deuda, telefono: tel, nombre: c.name, periodo: corte });
+        if (r.ok) {
+          per.estado = 'cobrado'; per.ref = r.id; per.monto = r.mensualidad; schedulePersist(); hechos.cobrados++;
+          registrarPagoYRevisarDoble({ telefono: tel, monto: r.mensualidad, canal: 'tarjeta-automatico', ref: r.id });
+          markCases(tel, 'recibido', 'stripe-auto');
+          sumarAlMes(r.mensualidad, 'tarjeta');
+          await sendWhatsAppMessage(tel, `✅ Se cobró tu mensualidad de *$${r.mensualidad.toFixed(2)}* (más $${r.cargo.toFixed(2)} por pagar en línea) a tu tarjeta terminación ${tarjeta.ultimos4}. Tu servicio sigue activo, sin cortes. 🙌`).catch(() => {});
+          try {
+            const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: r.mensualidad, referencia: r.id });
+            avisarRegistroPendiente(w, tel);
+          } catch (e) { console.error('[auto] aplicar pago:', e.message); }
+        } else {
+          per.estado = 'rechazado'; per.motivo = r.motivo || r.estado; schedulePersist(); hechos.rechazados++;
+          await sendWhatsAppMessage(tel, `⚠️ No se pudo cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta terminación ${tarjeta.ultimos4} (${r.necesitaAlCliente ? 'el banco pide tu autorización' : 'fue rechazada'}). Para que no se corte tu servicio, escribe *pagar* y elige otra forma. 🙏`).catch(() => {});
+          alertAdmin('cobro-automatico', `El cobro automático de ${c.name || tel} ($${deuda.toFixed(2)}) fue rechazado (${r.motivo || r.estado}). Ya se le pidió que pague por otra vía.`);
+        }
+      } catch (e) {
+        per.estado = 'error'; per.motivo = e.message; schedulePersist();
+        console.error('[auto] cobro de', tel, ':', e.message);
+        alertAdmin('cobro-automatico', `No se pudo hacer el cobro automático de ${c.name || tel}: ${e.message}. Conviene revisarlo antes de su corte de mañana.`);
+      }
+    }
+  }
+  return hechos;
+}
+
 async function sweepCorteReminders(force = false) {
   try {
     if (!CORTE_REMINDER_ENABLED && !force) return null;
@@ -4351,7 +4444,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
           + `${pago.url}`
           + cola
           + `\n\n⚠️ No pagues además por otra vía: se te cobraría dos veces.\n\n`
-          + `Si prefieres pagar como siempre, por depósito o transferencia directa, sigue siendo gratis: solo mándanos tu comprobante. 🙌`);
+          + `Si prefieres pagar como siempre, por depósito o transferencia directa, sigue siendo gratis: solo mándanos tu comprobante. 🙌`
+          + (forma === 'tarjeta' && !paraOtro && !(stripeClientes.get(telCuenta) || {}).cobroAutomatico ? '\n\n🔁 ¿Quieres que cada mes se cobre solo a tu tarjeta y nunca se corte? Escribe *AUTOMÁTICO*.' : ''));
       } catch (e) {
         console.error('[stripe-leon] generando link de', forma, ':', e.message);
         /*
@@ -4594,6 +4688,70 @@ async function handleChatMessage(chatId, text, sendMsg) {
       setSession(chatId, { state: 'pago_otro_listo', data: { ...data, pagarPara: data.pagarPara || '', meses, desde: Date.now() } });
       if (meses === 1) return handleChatMessage(chatId, 'pagar', sendMsg);
       return handleChatMessage(chatId, 'pago_tarjeta', sendMsg);
+    }
+    /*
+     * ── COBRO AUTOMÁTICO: ACTIVAR Y CANCELAR ──────────────────────────────
+     * Se pide con una palabra, se explica en dos líneas y se confirma con un
+     * botón. Cancelar es igual de fácil: nadie debe sentirse atrapado.
+     */
+    if (/^(cancelar|quitar|desactivar|ya no)\s+(el\s+)?(cobro\s+)?autom[aá]tico|^auto_no$/.test(_pt) && !_enOtraCosa) {
+      const tel = normalizePhone(chatId);
+      const reg = stripeClientes.get(tel);
+      if (reg && reg.cobroAutomatico) {
+        stripeClientes.set(tel, { ...reg, cobroAutomatico: false, autoCanceladoEn: new Date().toISOString() });
+        schedulePersist();
+        await sendMsg(chatId, 'Listo, quité el cobro automático: ya no se va a cobrar nada a tu tarjeta por su cuenta. Cada mes escribe *pagar* y eliges cómo. 🙌');
+      } else {
+        await sendMsg(chatId, 'No tienes cobro automático activo, así que no hay nada que quitar. Si quieres activarlo, escribe *AUTOMÁTICO*.');
+      }
+      return;
+    }
+    if ((/^(autom[aá]tico|cobro autom[aá]tico|activar (el )?(cobro )?autom[aá]tico|suscripci[oó]n|domiciliar|domiciliaci[oó]n|pago autom[aá]tico)[\s.!]*$/.test(_pt) || _pt === 'auto_si')
+        && !_enOtraCosa && !_conComprobante
+        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+      const tel = normalizePhone(chatId);
+      const c = wisphubClients.get(tel) || {};
+      if (_pt !== 'auto_si') {
+        const reg = stripeClientes.get(tel);
+        if (reg && reg.cobroAutomatico) {
+          await sendMsg(chatId, 'Ya tienes el cobro automático activo: un día antes de tu fecha de pago se cobra a tu tarjeta guardada, y te aviso el día anterior. Para quitarlo, escribe *CANCELAR AUTOMÁTICO*.');
+          return;
+        }
+        await sendMsg(chatId,
+          '🔁 *Cobro automático cada mes*\n\n'
+          + 'Pagas una vez con tu tarjeta y queda guardada. De ahí en adelante:\n'
+          + '• Dos días antes de tu fecha de pago te aviso cuánto se va a cobrar.\n'
+          + '• Un día antes se cobra solo, y tu servicio nunca se corta.\n'
+          + '• Lo quitas cuando quieras escribiendo *CANCELAR AUTOMÁTICO*.\n\n'
+          + '¿Lo activamos?',
+          [], { buttons: [{ id: 'auto_si', title: '✅ Sí, cada mes' }, { id: 'auto_no', title: '❌ Ahora no' }] });
+        return;
+      }
+      try {
+        if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'auto_si')) return;
+        const servicio = servicioEnSesion(chatId);
+        const cobro = await montoACobrar(chatId, '', servicio);
+        // Hace falta un cliente de Stripe al cual pegarle la tarjeta: el mismo de su CLABE.
+        const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name, servicioId: servicio ? servicio.servicioId : undefined });
+        const monto = cobro.ok ? cobro.monto : (parseFloat(c.precioPlan) || 0);
+        if (monto <= 0) { await sendMsg(chatId, 'No veo un saldo ni un plan en tu cuenta para activar el cobro. Escríbele a un asesor. 🙏'); return; }
+        const pago = await stripeLeon.generarLinkPago({
+          telefono: tel, monto, nombre: c.name, urlBase: SERVER_BASE_URL, forma: 'tarjeta',
+          guardarTarjeta: true, clienteId: datos.clienteId,
+          servicioId: servicio ? servicio.servicioId : undefined,
+        });
+        await sendMsg(chatId,
+          '💳 Paga esta vez con tu tarjeta y queda guardada para los meses que vienen:\n\n'
+          + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${cobro.ok ? cobro.deTexto : ''}\n`
+          + `• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n`
+          + `• *Total: $${pago.total.toFixed(2)}*\n\n`
+          + `${pago.url}\n\n`
+          + 'En cuanto se confirme, el cobro automático queda activo. ⏱️ Tienes 30 minutos para abrir el link.');
+      } catch (e) {
+        console.error('[auto] activar:', e.message);
+        await sendMsg(chatId, /cuenta|aprobada/i.test(e.message || '') ? 'El pago en línea no está disponible en este momento. Paga como siempre y mándanos tu comprobante. 🙏' : 'No pude preparar el cobro automático ahorita. Intenta de nuevo en un rato. 🙏');
+      }
+      return;
     }
     if (/^(oficina|en la oficina|pagar en oficina|otras formas)[\s.!]*$/.test(_pt) && !_enOtraCosa) {
       return handleChatMessage(chatId, 'pago_otras', sendMsg);
@@ -5729,6 +5887,9 @@ app.get('/api/cuenta-cobro/estado', async (_req, res) => {
  * En producción esta ruta no existe.
  */
 if (process.env.PRUEBAS === '1') {
+  app.post('/api/pruebas/cobro-automatico', async (_req, res) => {
+    res.json(await barrerCobroAutomatico(true));
+  });
   app.post('/api/pruebas/envejecer-sesion', (req, res) => {
     const tel = normalizePhone(String((req.body || {}).telefono || ''));
     const ms = Number((req.body || {}).ms || 0);
@@ -6571,6 +6732,7 @@ app.post('/webhook/stripe', async (req, res) => {
             });
             schedulePersist();
             console.log('[stripe-leon] cobro automático activado para', telefono);
+            await sendWhatsAppMessage(telefono, '🔁 Tu cobro automático quedó activo. Cada mes te aviso dos días antes de tu fecha de pago y un día antes se cobra a esta tarjeta. Para quitarlo, escribe *CANCELAR AUTOMÁTICO*.').catch(() => {});
           } catch (e) { console.error('[stripe-leon] no se pudo guardar el cobro automático:', e.message); }
         }
         /*
@@ -8534,6 +8696,9 @@ const port = Number(process.env.PORT || 3000);
   // ventana, dedup) impiden que mande nada de más.
   setTimeout(() => sweepCorteReminders().catch(() => {}), 45000);
   setInterval(() => sweepCorteReminders().catch(() => {}), 5 * 60000);
+  // Cobro automático: cada hora mira si a alguien le toca aviso o cobro.
+  setTimeout(() => barrerCobroAutomatico().catch(() => {}), 60000);
+  setInterval(() => barrerCobroAutomatico().catch(() => {}), 60 * 60000);
 
   // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
   setInterval(() => flushConversations().catch(() => {}), 60000);

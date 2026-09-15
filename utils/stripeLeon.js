@@ -1055,6 +1055,18 @@ async function cobrarDelSaldo({ clienteId, deposito, deuda, telefono, nombre, re
  * No hace falta que sea así: cada Customer se creó con el teléfono en su
  * metadata, así que Stripe SIEMPRE sabe de quién es. Esto lo va a preguntar.
  */
+/**
+ * La tarjeta guardada de un cliente (la que aceptó guardar al pagar). Devuelve
+ * null si no hay: el que llama decide qué decirle al cliente.
+ */
+async function metodoGuardadoDe(clienteId) {
+  if (!clienteId) return null;
+  const r = await stripe(`customers/${encodeURIComponent(clienteId)}/payment_methods?type=card&limit=1`);
+  const pm = (r.data || [])[0];
+  if (!pm) return null;
+  return { id: pm.id, ultimos4: (pm.card && pm.card.last4) || '', marca: (pm.card && pm.card.brand) || '' };
+}
+
 async function obtenerCliente(clienteId) {
   if (!clienteId) throw new Error('Falta el cliente de Stripe');
   return stripe(`customers/${encodeURIComponent(clienteId)}`);
@@ -1131,7 +1143,7 @@ module.exports = {
   claveDeRegistro, partirClave,
   hayLlave, activo, permitido, usarRegistro, usarCuenta, usarPadron, usarPiloto,
   cuentaConectada, cuentaLista, crearCuentaConectada, enlaceOnboarding, estadoCuenta, olvidarCuenta,
-  generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo,
+  generarLinkPago, clabeDelCliente, cobrarGuardado, cobrarDelSaldo, saldoDisponible, obtenerCliente, ultimoMovimientoSaldo, metodoGuardadoDe,
   verificarFirma, calcularCargo, clabeValida,
   TARIFAS, FORMAS,
 };
