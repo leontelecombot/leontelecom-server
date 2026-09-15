@@ -4975,9 +4975,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const suspendido = /suspend|cort/i.test(String(c.status || ''));
       let monto = '';
       try { const cobro = await montoACobrar(chatId, ''); if (cobro.ok && clienteDebe(c)) monto = ` Tienes pendiente *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`; } catch (_) { /* sin monto */ }
+      const prC = prorrogaVigente(telC);
+      const prTexto = prC ? `\n⏳ Tienes prórroga hasta el *${prC.hasta.split('-').reverse().join('/')}*: no se te corta antes.` : '';
       await sendMsg(chatId,
         (suspendido ? '🔴 Tu servicio está *suspendido*.' : (corte ? `📅 Tu fecha de corte es el *${bonita}*.` : '📅 No tengo tu fecha de corte a la mano.'))
-        + monto
+        + monto + prTexto
         + (suspendido || monto ? '\n\nEscribe *pagar* y te digo cómo, o *cuánto debo* para ver el detalle.' : '\n\nEstás al corriente. 🙌'));
       return;
     }
@@ -5113,6 +5115,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
     if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && isProrrogaRequest(text)) {
       addMessageToHistory(chatId, 'user', text);
       const _nom = nameOf(getProfile(chatId));
+      // Si ya tiene una prórroga, se le recuerda hasta cuándo; no se abre otro caso.
+      const _prV = prorrogaVigente(normalizePhone(chatId));
+      if (_prV) {
+        await sendMsg(chatId, `⏳ Ya tienes una prórroga hasta el *${_prV.hasta.split('-').reverse().join('/')}*: no se te corta antes de esa fecha. Si necesitas más días, escribe *asesor* y lo revisa una persona.`);
+        return;
+      }
       const _notif = await notifyAgentRequest(chatId, [
         '📅 SOLICITUD DE PRÓRROGA / PLAZO DE PAGO',
         _nom ? `Cliente: ${_nom}` : '',

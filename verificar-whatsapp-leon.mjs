@@ -865,6 +865,16 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   let r = await respuestas(n, 2);
   es(r.some((m) => m.a === ASESOR && /Prórroga registrada para \*Diego Ruiz\*/.test(m.texto)), 'el asesor registra una prórroga con "PRORROGA <tel> 3"');
   es(r.some((m) => m.a === D && /te dimos hasta el/.test(m.texto)), 'y a Diego le llega hasta cuándo tiene');
+  // Diego pregunta por su corte y vuelve a pedir tiempo: el bot le recuerda su fecha, sin abrir otro caso.
+  n = enviados.length;
+  await entra(D, '¿cuándo es mi corte?');
+  r = await respuestas(n);
+  es(dice(r, /Tienes prórroga hasta el \*\d\d\/\d\d\/\d{4}\*/), '"¿cuándo es mi corte?" le dice hasta cuándo tiene prórroga');
+  n = enviados.length;
+  await entra(D, 'me dan chance de pagar hasta el lunes?');
+  r = await respuestas(n);
+  es(dice(r, /Ya tienes una prórroga hasta el/), 'si vuelve a pedir tiempo, se le recuerda la que ya tiene');
+  es(!r.some((m) => m.a === ASESOR), 'y al asesor no le llega otro caso por lo mismo');
 
   // Sesión de dueño para forzar el barrido de avisos de corte.
   const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
