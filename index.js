@@ -4910,11 +4910,17 @@ async function handleChatMessage(chatId, text, sendMsg) {
           console.warn('[stripe-leon] sin deuda para la CLABE de', tel, '·', e.message);
         }
         if (deuda <= 0) deuda = parseFloat(c.precioPlan) || 0;
+        // Con meses adelantados en la sesión, la transferencia también los lleva.
+        const mesesClabe = mesesEnSesion(chatId);
+        if (mesesClabe > 1 && deuda > 0) { const precioC = parseFloat(c.precioPlan) || deuda; deuda = +(deuda + (mesesClabe - 1) * precioC).toFixed(2); }
         const cargo = deuda > 0 ? stripeLeon.calcularCargo(deuda, 'clabe') : null;
 
+        const etiquetaMonto = mesesClabe > 1
+          ? (ajenaClabe ? `Sus ${mesesClabe} meses` : `Tus ${mesesClabe} meses`)
+          : cuantas > 1 ? (ajenaClabe ? `Sus ${cuantas} mensualidades` : `Tus ${cuantas} mensualidades`) : (ajenaClabe ? 'Su mensualidad' : 'Tu mensualidad');
         const bloqueMonto = cargo
           ? `\n💵 *Transfiere: $${(cargo.totalCentavos / 100).toFixed(2)}*\n`
-            + `   • ${cuantas > 1 ? (ajenaClabe ? `Sus ${cuantas} mensualidades` : `Tus ${cuantas} mensualidades`) : (ajenaClabe ? 'Su mensualidad' : 'Tu mensualidad')}: $${(cargo.baseCentavos / 100).toFixed(2)}\n`
+            + `   • ${etiquetaMonto}: $${(cargo.baseCentavos / 100).toFixed(2)}\n`
             + `   • Cargo por pagar en línea: $${(cargo.cargoCentavos / 100).toFixed(2)}\n`
           : '\n💵 Transfiere el monto de tu recibo más el cargo por pagar en línea.\n';
 

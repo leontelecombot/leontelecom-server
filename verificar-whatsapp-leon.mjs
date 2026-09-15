@@ -800,6 +800,13 @@ console.log('\n=== 11b. SEIS MESES DE JALÓN ===');
   await entra(A, 'quiero pagar 6 meses');
   r = await respuestas(n);
   es(dice(r, /\(6 meses\)/), 'y se puede volver a pedir 6');
+  // Por transferencia también van los 6 meses, no solo lo de este mes.
+  n = enviados.length;
+  await entra(A, 'transferencia');
+  r = await respuestas(n);
+  es(dice(r, /Tus 6 meses: \$1800\.00/) && dice(r, /\*CLABE:\* \d{18}/), 'si elige transferencia con 6 meses, la CLABE dice "Tus 6 meses: $1,800" (antes solo el mes)');
+  n = enviados.length;
+  await entra(A, 'quiero pagar 6 meses'); await respuestas(n);
   n = enviados.length;
   const antes = stripe.sesiones.length;
   await toca(A, 'pago_con_tarjeta');
