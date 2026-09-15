@@ -9,70 +9,28 @@ ven exactamente lo mismo de siempre: horario en oficina y datos de pago.
 | Variable | Qué hace |
 |---|---|
 | `COBRO_LINEA_ACTIVO` | `true` enciende. Cualquier otra cosa lo deja apagado. |
-| `COBRO_LINEA_TELEFONOS` | A quién se le ofrece. Vacío = solo el piloto. Un número = esa cantidad de clientes. Lista con comas = esos. `NN%` = esa fracción del padrón. `*` = todos. |
-| `PRORROGA_WHATSAPP_NUMBER` | A quién le llegan las solicitudes de prórroga, con botones. Si no se pone: 9516529988 (el jefe). |
-| `PRORROGA_RECORDAR_HORAS` | Horas en horario de oficina sin respuesta antes de recordárselo una vez. Si no se pone: 3. |
+| `COBRO_LINEA_TELEFONOS` | A quién se le ofrece. Vacío = solo el piloto. Lista con comas = esos. `*` = todos. |
 
 ```
 Solo tú (piloto 529516549145):  COBRO_LINEA_ACTIVO=true
-Los 50 acordados con León:      COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=50
-Unos cuantos a dedo:            COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=5219511111111,5219512222222
-Uno de cada diez:               COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=10%
+Unos cuantos:                   COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=5219511111111,5219512222222
 Todo el pueblo:                 COBRO_LINEA_ACTIVO=true   COBRO_LINEA_TELEFONOS=*
 Apagar de emergencia:           COBRO_LINEA_ACTIVO=false
 ```
-
-**Un número pelón son CLIENTES, y es la forma recomendada de abrir.** Los tratos
-se cierran en clientes, no en porcentajes: con León se acordó empezar con 50, y
-`COBRO_LINEA_TELEFONOS=50` son exactamente 50, no "más o menos". Si el padrón
-crece, siguen siendo 50 hasta que alguien decida otra cosa, que es justo lo que
-un porcentaje NO hace: 4.8% de 1,050 son 50 clientes, pero de 1,400 son 67 sin
-que nadie lo haya decidido.
-
-Entre el teléfono piloto y `*` hay un salto de 1 a 1,430 clientes, y en el
-primer mes de mover dinero de verdad conviene enterarse de los problemas con 50
-personas, no con todas.
-
-**Y los 50 no se eligen al azar: entran primero los suspendidos o con adeudo.**
-Son los que de verdad van a usar el pago en línea. Un piloto hecho con clientes
-que pagan puntual en la oficina mide mal, y puede hacer parecer que la cosa no
-sirve cuando lo que pasa es que a esos no les hacía falta.
-
-La lista se decide UNA vez y se guarda. Quien entró se queda, aunque pague y lo
-reactiven: si dependiera de su estado, vería el botón un día y no al otro.
-
-Quién entra se decide con el número de teléfono, no al azar, así que **el mismo
-cliente obtiene siempre la misma respuesta**: nadie ve el botón un día y lo
-pierde al siguiente. Y al subir el cupo solo se agrega gente, nunca se le quita
-a quien ya lo tenía.
-
-Si el padrón todavía no ha cargado (Wisphub caído, servidor recién arrancado),
-un cupo por número **no se reparte a ciegas**: se queda solo el piloto y se
-avisa en el registro. Preferible una persona de menos que mil de más.
 
 Apagar no requiere tocar código ni volver a desplegar. Es una variable en Render.
 
 ## Lo que falta antes de encenderlo
 
-1. **La cuenta a la que le cae el dinero.** Ya NO hace falta crearla a mano:
-   León la da de alta desde su panel, en Cobranza → "¿A dónde te llega el
-   dinero?". Necesita identificación, RFC y CLABE. `LEON_STRIPE_CUENTA_CONECTADA`
-   sigue funcionando como respaldo si se prefiere ponerla a mano.
+1. **`LEON_STRIPE_CUENTA_CONECTADA`** — la cuenta de Stripe Connect de León
+   Telecom. Es a donde cae su dinero. Sin esto no se genera ningún cobro.
 2. **`STRIPE_SECRET_KEY`** — la misma llave de plataforma que usa Aforo.
 3. **`STRIPE_WEBHOOK_SECRET_LEON`** — el secreto del webhook, distinto del de
    Aforo aunque la llave de plataforma sea la misma.
 4. **Registrar el webhook en Stripe** apuntando a `POST /webhook/stripe` con
    estos eventos:
    - `checkout.session.completed`
-   - `checkout.session.async_payment_succeeded` ← cuando pagan la ficha de OXXO
-   - `checkout.session.async_payment_failed`
-   - `checkout.session.expired` (el link venció sin abrirse: se le avisa al cliente)
    - `customer_cash_balance_transaction.created` ← **el de la CLABE, no se te olvide**
-   - `charge.dispute.created` y `charge.dispute.closed` ← los contracargos
-   - `charge.refunded`
-   - `payment_intent.payment_failed`
-
-   `node revisar-listo.mjs` los revisa uno por uno y dice cuál falta.
 5. **Activar transferencias bancarias MXN** en el panel de Stripe. Sin eso, la
    CLABE no se genera.
 
@@ -83,11 +41,8 @@ suya, para siempre. La anota una vez en su banco y cada mes deposita ahí. No
 caduca, no hay links, y el pago se registra solo. Es la que más le va a servir a
 la gente que paga por transferencia o en ventanilla.
 
-**Tarjeta u OXXO** (`💳 Tarjeta u OXXO`) — **primero cotiza las dos y pregunta
-cuál**, porque cada una tiene su tarifa. Al elegir, sale un link de Checkout
-amarrado a esa forma (`payment_method_types` de una sola), que vence en 32
-minutos. Antes era un solo link donde el cliente elegía dentro de Stripe; con
-tarifas distintas eso significaba cotizarle una forma y cobrarle la otra.
+**Tarjeta u OXXO** (`💳 Tarjeta u OXXO`) — un link de Checkout que vence en 32
+minutos.
 
 **Otras formas** (`🏢 Otras formas`) — horario de oficina y los datos de pago de
 siempre, con comprobante. Nunca desaparece: pagar como toda la vida sigue siendo
@@ -95,31 +50,13 @@ gratis.
 
 ## El dinero
 
-León Telecom recibe **su precio de plan íntegro**. El cargo por pagar en línea lo
-paga el cliente que elige la comodidad, y de ahí sale tanto el costo real de
-Stripe como la parte de OBEX. Es el mismo trato que un organizador en Aforo.
+León Telecom recibe **su precio de plan íntegro**. El cargo por pagar en línea
+(`$8 + 5%`, ajustable en `utils/stripeLeon.js`) lo paga el cliente que elige la
+comodidad, y de ahí sale tanto el costo real de Stripe como la parte de OBEX.
+Es el mismo trato que un organizador en Aforo.
 
-**Hay una tarifa por forma de pago**, en `TARIFAS` dentro de `utils/stripeLeon.js`.
-Son los números de la propuesta **AFO-LT-003** que León Telecom ya tiene en la
-mano, y tienen que seguir coincidiendo: un documento que promete $460 y un cobro
-que pide $470 es la peor forma de estrenar el servicio.
-
-| Forma | Cargo | Con un plan de $440 | Cuesta procesar | Queda |
-|---|---|---|---|---|
-| Transferencia (CLABE) | `$20` fijo | Paga $460.00 | $8.12 | $11.88 |
-| Tarjeta | `$12 + 5.5%` | Paga $476.20 | $23.37 | $12.83 |
-| OXXO | `$12 + 6%` | Paga $478.40 | $25.68 | $12.72 |
-| Efectivo en oficina | `$0` | Paga $440.00 | — | — |
-
-Recibir cada forma cuesta distinto, por eso la tarifa es distinta: con una tarifa
-pareja sobraba margen en la transferencia y casi no quedaba nada en OXXO. La de
-transferencia es **fija** porque el costo de SPEI también lo es; cobrar
-porcentaje ahí sería cobrar por nada.
-
-`calcularCargo(monto, forma)` **exige la forma** y truena si no la reconoce. Un
-valor por omisión ahí significaría cobrar la tarifa equivocada en silencio el día
-que alguien agregue una vía nueva y olvide pasarla, y eso no se nota hasta que no
-cuadra la caja.
+> Los `$8 + 5%` son un **marcador de posición**. Con Stripe MX cobrando 3.6% + $3
+> más IVA, revisa el número antes de encender para todos.
 
 ## Reactivación automática en Wisphub
 
@@ -169,95 +106,12 @@ resultados**. El módulo prueba las dos formas.
 
 ## Cobro automático
 
-Ya está enganchado a la conversación. El cliente escribe *AUTOMÁTICO* (o "quiero
-que se cobre solo"), se le explica en dos líneas y confirma con botón o con un
-"sí" escrito; paga una vez con tarjeta y esa tarjeta queda guardada. De ahí en
-adelante, `barrerCobroAutomatico` (cada hora, entre 9 y 20 h) hace esto por
-periodo (`autoCobros[tel][corte]`):
+Existe pero **no está enganchado a ningún botón todavía**, a propósito. El código
+(`cobrarGuardado`) solo cobra si el cliente aceptó explícitamente, y la tarjeta
+solo se guarda si `generarLinkPago` recibe `guardarTarjeta: true`.
 
-- **Dos días antes** del corte avisa cuánto se va a cobrar (por plantilla).
-- **Un día antes** cobra lo que Wisphub diga que debe, una sola vez por periodo.
-- **No cobra** si ese mes ya pagó por otra vía (tarjeta, OXXO, CLABE o comprobante
-  aceptado): le dice "este mes ya pagaste por tu cuenta".
-- **Se pospone** si mandó un comprobante que la oficina no ha revisado (para no
-  cobrar doble); la oficina recibe un aviso y lo ve marcado en "Comprobantes por revisar".
-- **Con prórroga**, el cobro se recorre: aviso dos días antes de que venza y cobro
-  un día antes de que venza, no en la fecha de corte.
-- **Si la tarjeta es rechazada o ya no hay tarjeta**, se le pide pagar de otra
-  forma, el aviso de corte SÍ le llega (con la razón), "pagar" ya no le dice "no
-  tienes que hacer nada", y el panel lo lista en "Automáticos que no pasaron".
-- Se cancela con *CANCELAR AUTOMÁTICO* o cualquier frase parecida.
-
-## Prórrogas
-
-**Las decide una sola persona, con un botón.** Cuando un cliente pide más tiempo
-("dame chance hasta el viernes", "me esperan unos 5 días"), la solicitud NO va a
-todos los asesores: le llega solo al número de `PRORROGA_WHATSAPP_NUMBER` (por
-defecto el del jefe, 951 652 9988) con el nombre, si está suspendido, su corte,
-lo que debe, lo que escribió y tres botones: dar los días que pidió (o 3), dar la
-otra opción (5 o 3), o no dar. El toque entra como el comando de siempre
-(`PRORROGA <tel> <días>` / `NO PRORROGA <tel>`), así que ese número no necesita
-ser asesor. Si el envío normal falla por la ventana de 24 h, va por plantilla con
-la instrucción escrita.
-
-Al cliente se le dice "ya pasé tu solicitud a la oficina, te aviso por aquí"; si
-insiste antes de que respondan, se le repite sin molestar dos veces al jefe. Si a
-las 3 h (en horario, `PRORROGA_RECORDAR_HORAS`) sigue sin respuesta, al jefe le
-llega un recordatorio por plantilla, una sola vez por solicitud; el resumen de las 9
-y "Hoy en cobranza" dicen cuántas siguen pedidas sin responder. Al
-aprobar, le llega por plantilla hasta qué día tiene; al negar, que por esta vez no
-y cómo pagar. En el panel (Cobranza → Prórrogas) las pedidas sin responder salen
-arriba con los mismos botones, y también se pueden resolver desde ahí.
-
-`PRORROGA <tel> <días> [motivo]` sigue funcionando para cualquier asesor y desde la
-tarjeta del panel. Mientras dura, el aviso de corte se calla; el día antes de que
-venza se le recuerda (salvo que tenga automático, que se cobra solo). El panel dice
-cuánto le queda a cada prórroga, si ya pagó y si ya se le avisó.
-
-## Por qué "a veces no llegaban los comprobantes" (15 sep 2026)
-
-No era el horario: el bot avisa al momento a cualquier hora (el 🌙 en PENDIENTES solo
-marca que el cliente escribió fuera del horario de oficina). Era la **ventana de 24 h de
-WhatsApp**: Meta solo deja mandar foto, texto y botones a quien le escribió al bot en las
-últimas 24 h. Si el asesor no le había escrito desde el día anterior (mañanas, lunes),
-el comprobante se rechazaba (error 131047), el error se quedaba en la consola y el caso
-solo aparecía al pedir PENDIENTES. Ahora, si el envío normal falla, el comprobante llega
-**por plantilla** con la información, el enlace del archivo y cómo responder; si la
-plantilla también falla, se avisa al administrador y el caso sigue en el panel.
-
-También se corrigió la lectura del recibo: en Banco Azteca y parecidos el nombre visible
-es el de la cuenta DESTINO (David León) y la IA lo ponía como "pagó David L***". Ahora
-"pagó" es quien paga (cuenta origen); si no aparece, se usa el concepto; y si el dinero
-fue a una cuenta que no parece la de León, el asesor lo ve marcado.
-
-## Exportar a Excel (CSV)
-
-En Cobranza cada tarjeta tiene su botón ⬇️ CSV: **Pagos** (fecha, teléfono, nombre,
-monto, vía, quién pagó, hasta cuándo cubre, contrato, referencia de Stripe; para
-conciliar con Wisphub y el banco), **Comprobantes** (todos los recibidos con su
-estado) y **Prórrogas** (vigentes, vencidas y pedidas sin responder). Rutas
-`/admin/api/exportar/{pagos,comprobantes,prorrogas}.csv` con la sesión del panel.
-
-## Varios contratos en un teléfono
-
-Cada pago (link, CLABE, automático, comprobante aceptado) guarda de qué contrato es.
-Lo pagado o adelantado del local no calla el aviso de la casa. El barrido de corte mira
-contrato por contrato solo a los teléfonos que ya se sabe que tienen varios (una CLABE
-por contrato o el automático de uno), y el aviso dice cuál es. Cuando alguien con dos
-contratos manda comprobante, el bot le pregunta para cuál es y lo anota en el caso.
-
-## Lo que la oficina recibe cada mañana
-
-A las 9 sale por plantilla a los asesores el resumen de cobranza (quién corta mañana y
-debe, cubiertos, prórrogas que vencen, automáticos rechazados, comprobantes sin revisar,
-pagos por el bot en 24 h). El panel lo muestra en "Hoy en cobranza" y puede mandarlo.
-
-## A quién NO se le manda "mañana te cortamos"
-
-A quien pagó por el bot este mes, a quien va adelantado (`adelantadoHasta`, por
-link o por transferencia de varias mensualidades), a quien tiene prórroga, a
-quien tiene automático (salvo que ese mes haya sido rechazado) y a quien mandó
-comprobante que sigue sin revisar (a la oficina se le pide revisarlo hoy).
+Antes de encenderlo, el texto que ve el cliente tiene que decir con esas palabras
+que se le va a cobrar cada mes y cómo se cancela.
 
 ## Casos raros que ya están cubiertos
 
@@ -284,50 +138,6 @@ el resto) y se le dice cuánto falta. Se puede cambiar con
 pagos entran de verdad. No se bloquea (hay razones legítimas), pero se detecta
 dentro de 20 días y se avisa el mismo día para poder devolverle.
 
-**Paga completo pero Wisphub no deja marcar la factura.** Es el caso NORMAL, no
-uno raro: la API casi nunca deja marcar. La reconexión se decide con el dinero
-que entró, no con lo que Wisphub alcanzó a registrar: si pagó lo que debía, se
-reconecta, y la factura sin marcar le llega a la oficina como pendiente con su
-número. Antes de este arreglo el cliente pagaba sus $440 y se quedaba cortado.
-
-**Pagar la cuenta de otro.** La mamá sin WhatsApp, el vecino, la suegra. Quien
-escribe manda *OTRO*, dice de quién es (teléfono o nombre como está en el
-contrato), confirma con un botón y de ahí paga con tarjeta u OXXO como siempre.
-El cobro va a la cuenta del otro, el acuse a quien pagó, la reconexión al dueño
-y el aviso a los dos. Lo dicho vale media hora: después, PAGAR vuelve a ser para
-la propia cuenta. "menú" saca del paso en cualquier momento.
-
-**Cobro automático cada mes.** El cliente escribe *AUTOMÁTICO*, confirma con un
-botón y paga una vez con tarjeta (queda guardada). Después, cada mes: dos días
-antes de su fecha de corte se le avisa cuánto se va a cobrar; un día antes se
-cobra lo que Wisphub diga que debe (si está al corriente, no se cobra nada) y
-se le confirma a qué tarjeta. Rechazos: se le pide pagar por otra vía y se
-avisa a la oficina. *CANCELAR AUTOMÁTICO* lo quita al instante. Una sola vez
-por periodo aunque el servidor se reinicie (`autoCobros`), y el barrido corre
-cada hora entre 9 y 20.
-
-**Varios meses de jalón.** "quiero pagar 6 meses": lo que debe más los meses
-siguientes al precio de su plan. Queda anotado hasta cuándo está cubierto
-(sin avisos de corte) y la oficina recibe el aviso de registrar los meses que
-Wisphub no tiene.
-
-**Prórrogas.** El asesor escribe `PRORROGA 9511234567 3` (días) y el cliente
-recibe hasta cuándo tiene; el aviso de corte se calla hasta que venza. También
-desde el panel (`/admin/api/prorrogas`).
-
-**El aviso de corte no le llega a quien ya pagó.** Ni por el bot (tarjeta,
-OXXO, CLABE, automático) ni con comprobante ya aceptado por la oficina, aunque
-Wisphub siga marcando la factura pendiente.
-
-**Un teléfono con varios contratos.** Se pregunta cuál antes de cobrar por
-cualquier vía; el link y la CLABE llevan el id del servicio y el webhook abona
-y reactiva exactamente ese.
-
-**Nada se reactiva antes de tiempo.** Ni al generar el link ni al sacar la ficha
-de OXXO se toca el servicio. Solo cuando Stripe avisa que el dinero entró
-(`checkout.session.completed` pagado o `async_payment_succeeded`), y solo a
-través del webhook firmado.
-
 **OXXO.** Llega en dos avisos separados por días (`async_payment_succeeded`), no
 como un pago normal. Sin escuchar ese evento, quien paga en la tienda nunca
 recibe confirmación.
@@ -336,75 +146,7 @@ recibe confirmación.
 reactivación se reporta como fallida en vez de tronar.
 
 **Si no se puede leer la deuda.** NO se reactiva. Reconectar sin saber si pagó lo
-suficiente es regalar servicio. Y tampoco se reparte el dinero: sin saber cuánto
-debía, no se puede saber cuánto de su depósito es excedente, y cobrar comisión a
-ciegas sería quitársela a la mensualidad de León. El depósito se queda en Stripe
-(a salvo, a nombre del cliente) y se reintenta cada 10 minutos. Si Wisphub no
-vuelve en 40 minutos, el dinero se manda **completo a León Telecom, sin cobrar
-comisión**: perder el cargo es mucho más barato que cobrarle de más.
-
-**El dinero que se atora en Stripe.** Una transferencia a la CLABE cae en el
-saldo del cliente *dentro* de Stripe y no llega a León hasta que alguien la
-cobra. Ese cobro puede fallar, y antes solo salía una alerta esperando a que una
-persona lo moviera a mano. Ahora hay dos redes:
-
-- **Reintento** cada 10 minutos de los depósitos que se sabe que fallaron.
-- **Auditoría** cada 6 horas de **todos** los clientes con CLABE, por si el aviso
-  de Stripe nunca llegó y entonces nadie sabía siquiera que había dinero.
-
-Cuando la auditoría encuentra dinero del que nadie estaba enterado, además de
-moverlo le avisa al cliente y aplica el pago, porque para él ya había pagado y
-no había pasado nada.
-
-En el panel de administración, dentro de **Cobranza**, hay una tarjeta *Cobro en
-línea* que enseña cuánto dinero está atorado, de quién, desde cuándo y por qué,
-con un botón para buscarlo y moverlo al momento sin esperar los 10 minutos
-(cuando alguien llama diciendo "ya transferí"). Por API son
-`GET /admin/api/stripe/estado`, `GET /admin/api/stripe/rezagados` y
-`POST /admin/api/stripe/barrer` (con `?auditar=1` para revisar a todos).
-
-**Contracargos y devoluciones.** Antes no se escuchaban: el banco se llevaba el
-dinero y el sistema seguía creyendo que ese mes estaba pagado. Ahora llegan al
-webhook y se avisan con nombre y monto. **A nadie se le corta el internet
-automáticamente** por un contracargo: la mayoría nacen de no reconocer el nombre
-del cargo en el estado de cuenta, no de un fraude. La decisión es de una persona.
-En el resumen matutino van en su propio bloque, separados de los pagos por
-registrar, con la advertencia de no marcar esas facturas como pagadas.
-
-**Un depósito de un cliente que el registro no reconoce.** Pasa si el registro
-local se pierde (base nueva, migración). No hace falta rendirse: cada cliente se
-creó con su teléfono en el metadata de Stripe, así que se le pregunta a Stripe de
-quién era y se vuelve a anotar.
-
-**Un aviso que Stripe reintenta después de un reinicio de Render.** Stripe
-reintenta hasta tres días y Render reinicia en cada despliegue. El candado de
-"esto ya se procesó" ahora se guarda con el estado, así que el reintento no
-vuelve a cobrar ni manda un segundo "ya quedó".
-
-**Wisphub contestando con la lista vacía.** Lo más peligroso que le puede pasar
-al bot: dejaría de reconocer a los 1,430 clientes de golpe, nadie podría pedir su
-CLABE, y el respaldo se sobrescribiría vacío. Ahora la lista nueva se arma aparte
-y solo sustituye a la buena si llegó entera; una lista vacía o cortada a la mitad
-se rechaza, se conserva la anterior y se avisa.
-
-### El monto que se le pide al cliente NO es su plan
-
-Es la parte del sistema donde más fácil se pierde dinero, y no se nota.
-
-El cargo por pagar en línea sale del **excedente** sobre lo que el cliente
-debía. Si transfiere justo su mensualidad, el excedente es cero y no se cobra
-nada. Y recibir esa transferencia le cuesta a la plataforma **$8.12**
-(comprobado contra la API de Stripe con un cargo real: entraron $440, quedaron
-$431.88). O sea que un pago sin cargo no es "ganar cero", es **perder $8.12**.
-
-Por eso el mensaje de la CLABE trae el **total exacto** con el cargo ya sumado,
-sacado de sus facturas pendientes. Si dijera "transfiere el monto de tu plan",
-todo el mundo transferiría justo eso y con el padrón entero serían más de once
-mil pesos al mes de pérdida, en silencio.
-
-Los pagos que aun así entran sin cargo (alguien que transfiere de memoria) se
-cuentan y se ven en el panel, en la tarjeta de Cobro en línea, con lo que
-costaron.
+suficiente es regalar servicio.
 
 ## Lo que sigue siendo manual
 
@@ -440,21 +182,16 @@ se entera, o el cliente paga y sigue cortado.
 ## Pruebas
 
 ```
-node verificar-cobro-leon.mjs     #  94 comprobaciones del módulo de cobro
-node verificar-webhook-leon.mjs   #  53 del cableado en index.js
-node verificar-wisphub.mjs        #  51 de la reactivación
-node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
-node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  # 296 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
-node revisar-stripe.mjs           # la cuenta de Stripe a detalle
-node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
+node verificar-cobro-leon.mjs     # 53 comprobaciones del módulo de cobro
+node verificar-webhook-leon.mjs   # 17 del cableado en index.js
+node verificar-wisphub.mjs        # 44 de la reactivación
+node revisar-stripe.mjs          # la cuenta de Stripe a detalle
+node revisar-listo.mjs           # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**666 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
-Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
-del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
-sistema cuando no contesta.
+Ninguna toca Stripe de verdad: hay un Stripe falso que reproduce el retraso de
+indexado, la idempotencia y los rechazos del banco.
 
 ## Lo que está blindado, y por qué
 

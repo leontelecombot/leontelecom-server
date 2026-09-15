@@ -112,15 +112,6 @@ const AGENT_WHATSAPP_NUMBERS = [...new Set(
 )];
 const AGENT_WHATSAPP_NUMBER = AGENT_WHATSAPP_NUMBERS[0] || '';
 function isAgentNumber(n) { const x = _normAgentNum(n); return !!x && AGENT_WHATSAPP_NUMBERS.includes(x); }
-/*
- * QUIÉN DECIDE LAS PRÓRROGAS. Dar plazo es decisión de una sola persona, no
- * de todos los asesores: las solicitudes se le mandan SOLO a este número, con
- * botones para resolverlas de un toque (dar 3 días, dar 5, no dar). Ese número
- * no necesita ser asesor: sus respuestas de prórroga se aceptan igual.
- */
-const PRORROGA_WHATSAPP_NUMBER = _normAgentNum(process.env.PRORROGA_WHATSAPP_NUMBER || '9516529988');
-function esQuienApruebaProrrogas(n) { const x = _normAgentNum(n); return !!x && x === PRORROGA_WHATSAPP_NUMBER; }
-function esRespuestaDeProrroga(text) { return /^\s*(NO\s+)?PR[OÓ]RROGA\b/i.test(String(text || '')); }
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'leon123'; // Change in production!
 // Secreto para firmar los tokens del panel. Si no se define, se deriva de la
 // contraseña (estable entre reinicios). Definir ADMIN_SECRET en Render es lo ideal.
@@ -193,12 +184,6 @@ const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || '';
 const WHATSAPP_WEBHOOK_VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'leontelecom-verify';
 const WHATSAPP_API_VERSION = 'v22.0';
-/*
- * A dónde se le habla a Meta. En producción no se toca. Las pruebas lo apuntan
- * a un WhatsApp de mentira en la misma máquina para LEER lo que el bot le
- * contestaría a un cliente, que es lo único que de verdad importa comprobar.
- */
-const WHATSAPP_GRAPH = (process.env.WHATSAPP_API_BASE || 'https://graph.facebook.com').replace(/\/+$/, '');
 // Plantilla aprobada para avisos masivos (corte/reparación/reactivado) — permite
 // enviar a TODOS aunque hayan pasado +24h sin chatear. Cuerpo con un parámetro {{1}}.
 const WHATSAPP_AVISO_TEMPLATE = process.env.WHATSAPP_AVISO_TEMPLATE || '';
@@ -397,20 +382,8 @@ function isUbicacionRequest(text) {
 function isProrrogaRequest(text) {
   const v = normalizeText(text);
   if (/\bprorrog\w*/.test(v)) return true;                       // "prórroga", "prorrogar"
-  // Lo que ya se pagó no es una solicitud de tiempo ("ya pagué el viernes").
-  if (/\b(ya|si) (pague|pago|deposite|transferi|abone)\b/.test(v) && !/\b(no|todavia|aun)\b/.test(v)) return false;
-  const DIA = '(lunes|martes|miercoles|jueves|viernes|sabado|domingo|manana|pasado manana|quincena|fin de semana|proxim\\w+|\\d{1,2}(?: de \\w+)?)';
-  // Sin la palabra "pago" también se entiende: "no me corten, el lunes pago", "me esperan hasta la quincena", "me dan unos días".
-  if (/\b(no me (corten|suspendan|quiten|desconecten)|no me vayan a (cortar|suspender)|que no me (corten|suspendan)|me van a cortar)\b/.test(v)) return true;
-  if (/\b(me esperan|esperenme|esperame|me aguantan|aguantenme|aguantame|me dan chance|me pueden esperar)\b/.test(v)) return true;
-  if (/\b(me (dan|den|pueden dar|podrian dar)|denme|dame) (unos|mas|un par de|dos|tres|cuatro|cinco) dias\b/.test(v)) return true;
-  if (new RegExp('\\b(me dan|me den|me pueden dar|me esperan|esperenme) hasta (el|la) ' + DIA + '\\b').test(v)) return true;
   const pago = /\b(pag\w*|abon\w*|recibo|mensualidad|adeudo|deuda)\b/;
   if (!pago.test(v)) return false;
-  // "pago el viernes", "puedo pagar el 25?", "les pago mañana", "pago después", "pago en cuanto me paguen"
-  if (new RegExp('\\b(pago|pagare|pagaria|pagamos|pagaremos|puedo pagar|podria pagar|podre pagar|les pago|le pago|lo pago|te pago) (el |este |hasta el |para el |la |esta |hasta la )?' + DIA + '\\b').test(v)) return true;
-  if (/\b(pago|pagar|pagare|pagamos) (despues|luego|mas tarde|al rato|en cuanto (me paguen|cobre|pueda|tenga))\b/.test(v)) return true;
-  if (/\b(todavia|aun) no (puedo|he podido|tengo para|voy a poder) (pagar|abonar)\b/.test(v)) return true;
   // pedir chance / más tiempo / que lo esperen / quincena / otra semana
   if (/\b(chance|plazo|mas tiempo|mas dias?|unos dias?|un dia mas|otro dia|otros dias?|otra semana|proxima semana|me espera\w*|esper\w*me|aguant\w*|tiempito|quincena|(el mes|la semana) que (entra|viene))\b/.test(v)) return true;
   // "para/hasta" + un día futuro / semana
@@ -481,24 +454,6 @@ let lastDigestDate = '';    // 'YYYY-MM-DD' (México) del último resumen matuti
 let agentLastInbound = new Map(); // num → ISO del último mensaje del asesor
 let agentPingSent = new Map();    // num → ISO del último recordatorio enviado (uno por ventana)
 let corteReminders = {};    // "telefono|fecha" → ISO de cuándo se envió (evita duplicados)
-/*
- * PRÓRROGAS. "Dame chance hasta el viernes" es de las cosas que más se piden,
- * y hasta ahora vivía en la cabeza del asesor: el bot le seguía mandando el
- * aviso de corte al cliente al que ya le habían dado plazo. Ahora el asesor
- * la registra con un mensaje (PRORROGA 9511234567 3) y el aviso se calla
- * hasta que venza.
- */
-let prorrogas = {};         // telefono → { hasta: 'YYYY-MM-DD', por, cuando, motivo }
-// Solicitudes que ya se le mandaron a quien decide y siguen sin respuesta.
-let prorrogasPedidas = {};  // telefono → { cuando: ts, nombre, texto, dias }
-/*
- * COBRO AUTOMÁTICO MENSUAL. El cliente que lo acepta paga una vez con
- * tarjeta y la deja guardada; de ahí en adelante, dos días antes de su fecha
- * de pago se le avisa y un día antes se le cobra lo que Wisphub diga que
- * debe. Aquí se anota qué se hizo en cada periodo, para no avisar ni cobrar
- * dos veces aunque el servidor se reinicie a media mañana.
- */
-let autoCobros = {};        // telefono → { 'YYYY-MM-DD': { avisado, estado, cuando, ref, motivo } }
 let lastCorteRunDate = '';  // 'YYYY-MM-DD' (México) de la última corrida de recordatorios de corte
 // Bitácora de corridas del aviso de corte: una línea por día, para ver de un vistazo
 // qué días SÍ salieron los avisos y cuáles se saltaron. Hace falta porque en Render
@@ -526,7 +481,7 @@ const _alertLast = new Map(); // tipo -> ts del último aviso
 
 // --- Anti-flood por número (rate-limit ligero del webhook) ---
 const _msgRate = new Map();     // chatId -> [timestamps]
-const RATE_MAX = Number(process.env.RATE_MAX) || 12;   // máx mensajes por ventana y número (las pruebas lo suben)
+const RATE_MAX = 12;            // máx mensajes por ventana y número
 const RATE_WINDOW_MS = 30000;   // ventana de 30 s
 
 // --- Bienvenida automática a NUEVOS clientes de Wisphub ---
@@ -725,23 +680,7 @@ async function syncWisphubClients() {
     }
     if (!authHeader) throw new Error('Wisphub rechazó la llave de API (401/403). Hay que revisar WISPHUB_API_KEY en Render.');
 
-    /*
-     * La lista nueva se arma APARTE y solo sustituye a la buena si sale entera.
-     *
-     * Antes se vaciaba aquí mismo, antes de leer nada. Con eso, un Wisphub que
-     * contestara 200 con la lista vacía —una llave sin permisos, un filtro que
-     * les cambia, un mal día de su API— dejaba al bot con CERO clientes: no
-     * reconocía a nadie, nadie podía pedir su CLABE, y el respaldo que existe
-     * justo para eso se sobrescribía vacío en el siguiente guardado. Lo mismo si
-     * la paginación se cortaba a la mitad: se quedaba con 500 de 1,430 y los
-     * otros 930 dejaban de existir hasta la siguiente sincronización, seis
-     * horas después.
-     *
-     * Ahora una lista peor que la que ya se tiene se rechaza y se conserva la
-     * anterior, que es vieja pero completa.
-     */
-    const nuevos = new Map();
-    const teniamos = wisphubClients.size;
+    wisphubClients.clear();
     let synced = 0, revisados = 0, pages = 0, offset = 0;
     const count = (data && data.count) || null;
 
@@ -762,7 +701,7 @@ async function syncWisphubClients() {
         if (phone.startsWith('521') && phone.length === 13) phone = '52' + phone.slice(3);
         if (phone.length < 12) continue; // teléfono inválido
         const name = [c.nombre, c.apellidos].filter(Boolean).join(' ') || c.razon_social || c.usuario || rawPhone;
-        nuevos.set(phone, {
+        wisphubClients.set(phone, {
           name, phone, status: c.estado, wisphubId: c.id_servicio || c.id, source: 'wisphub',
           // Datos de cuenta para la búsqueda/estado de cuenta en el panel:
           saldo: c.saldo, fechaCorte: c.fecha_corte,
@@ -779,32 +718,6 @@ async function syncWisphubClients() {
       if (!res.ok) break; // ⚠️ se cortó a media paginación → NO es un sync completo
       data = await res.json();
     }
-
-    /*
-     * ¿Esta lista está en condiciones de sustituir a la que ya tenemos?
-     *
-     * La primera sincronización de todas entra siempre: algo es mejor que nada.
-     * Después, solo se acepta si llegó completa o si al menos no encogió.
-     */
-    let rechazo = '';
-    if (teniamos) {
-      if (!nuevos.size) rechazo = 'Wisphub contestó bien pero no devolvió ni un cliente';
-      else if (!complete && nuevos.size < teniamos) rechazo = `la lista llegó cortada (${nuevos.size} de ${teniamos})`;
-    }
-    if (rechazo) {
-      wisphubSyncError = rechazo;
-      console.error('[Wisphub] Sync RECHAZADO:', rechazo, '— se conserva la lista anterior de', teniamos);
-      alertAdmin('wisphub', [
-        'La sincronización con Wisphub trajo una lista peor que la que ya teníamos.',
-        `Motivo: ${rechazo}.`,
-        `El bot sigue trabajando con la última lista buena (${teniamos} clientes).`,
-        'Se reintenta solo cada 6 horas. Si se repite todo el día, hay que revisar la llave o los permisos en Wisphub.',
-      ].join('\n'));
-      return { synced: 0, error: rechazo, conservados: teniamos };
-    }
-
-    wisphubClients.clear();
-    for (const [k, v] of nuevos) wisphubClients.set(k, v);
 
     const unicos = wisphubClients.size;       // números de WhatsApp únicos (lo real)
     const sinTelefono = revisados - synced;   // activos sin teléfono válido en Wisphub
@@ -976,7 +889,7 @@ async function sendWhatsAppTemplate(to, message, opts = {}) {
       parameters: [{ type: 'payload', payload: String(opts.buttonPayload) }]
     });
   }
-  const res = await fetch(`${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const res = await fetch(`https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -988,25 +901,6 @@ async function sendWhatsAppTemplate(to, message, opts = {}) {
   });
   if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`); }
   return true;
-}
-
-/*
- * AVISOS QUE EL BOT MANDA POR SU CUENTA (nadie escribió antes).
- *
- * WhatsApp solo deja mandar texto libre dentro de las 24 h siguientes al
- * último mensaje del cliente. Un "se cobró tu mensualidad", un "¿ya quedó tu
- * servicio?" tres días después, o el aviso al dueño de que otra persona pagó
- * por él, casi siempre caen FUERA de esa ventana: Meta los rechaza en
- * silencio (error 131047) y nadie se entera. Por eso van por la plantilla
- * aprobada de avisos, igual que el recordatorio de corte. Si no hay plantilla
- * configurada, se intenta el texto libre: mejor un intento que ninguno.
- */
-async function avisarPorIniciativa(to, message, opts = {}) {
-  if (WHATSAPP_AVISO_TEMPLATE) {
-    try { return await sendWhatsAppTemplate(to, message, opts); }
-    catch (e) { console.warn('[aviso] plantilla falló para', to, '·', e.message); }
-  }
-  return sendWhatsAppMessage(to, message);
 }
 
 // Envío masivo por PLANTILLA a todos los clientes (sin límite 24h).
@@ -1112,14 +1006,10 @@ function getSession(chatId) {
 
 function setSession(chatId, session) {
   sessions.set(String(chatId), session);
-  // Las de pago se guardan: son las que no pueden perderse en un reinicio.
-  if (session && /^pago_(otro_|servicio_)/.test(String(session.state || ''))) schedulePersist();
 }
 
 function clearSession(chatId) {
-  const habia = sessions.get(String(chatId));
   sessions.delete(String(chatId));
-  if (habia && /^pago_(otro_|servicio_)/.test(String(habia.state || ''))) schedulePersist();
 }
 
 // In-memory folio store - tracks active appointment folios for cancellation
@@ -1293,48 +1183,7 @@ function buildStateSnapshot() {
     stripeClientes: Object.fromEntries(stripeClientes),
     // Para cazar pagos dobles entre canales tras un reinicio de Render.
     stripePagosRecientes: Object.fromEntries(stripePagosRecientes),
-    prorrogas,
-    prorrogasPedidas,
-    autoCobros,
-    /*
-     * Solo las sesiones de PAGO (a quién le paga, qué contrato, cuántos
-     * meses). Son las que duelen si el servidor se reinicia a media
-     * conversación: el cliente ya dijo "es la cuenta de mi mamá", toca
-     * Tarjeta, y de pronto el bot le cotiza la suya. Caducan solas a la
-     * media hora, así que guardar las demás no aporta nada.
-     */
-    sesionesDePago: Object.fromEntries([...sessions].filter(([, v]) => v && /^pago_(otro_|servicio_)/.test(String(v.state || '')))),
-    // Lo chico que también sobrevive a un reinicio: fichas de OXXO vivas, el último
-    // link mandado (para "no me abre") y a quién se le ofreció el automático.
-    fichasOxxo: Object.fromEntries([...fichasOxxo].filter(([, v]) => v && Date.now() - v.cuando < 4 * 86400000)),
-    ultimoLinkPago: Object.fromEntries([...ultimoLinkPago].filter(([, v]) => v && Date.now() - v.cuando < 3 * 3600000)),
-    autoOfrecido: Object.fromEntries([...autoOfrecido].filter(([, v]) => Date.now() - v < 30 * 60000)),
-    resumenCobranzaFecha,
-    stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX),
-    /*
-     * Los avisos de Stripe ya procesados.
-     *
-     * Se guardan porque Stripe reintenta un aviso hasta por tres días, y Render
-     * reinicia cada vez que se despliega. Si esto viviera solo en memoria, el
-     * reintento que cae DESPUÉS de un reinicio encontraría la lista vacía y
-     * volvería a correr el pago entero: segundo "ya quedó" al cliente, segunda
-     * reactivación, y una falsa alerta de pago doble sobre un pago que era uno.
-     */
-    stripeVistos: Object.fromEntries(stripeVistos),
-    // Depósitos que entraron a Stripe y todavía NO llegaron a León Telecom.
-    stripeSaldosRezagados: Object.fromEntries(stripeSaldosRezagados),
-    stripeCargosPerdidos: stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX),
-    /*
-     * La cuenta de Stripe a la que le cae el dinero de León.
-     *
-     * Se persiste porque se da de alta UNA vez desde su panel. Si se perdiera
-     * en un reinicio, el sistema creería que nunca la dio de alta y le pediría
-     * hacer otra: dos cuentas conectadas, el dinero partido entre las dos y
-     * ninguna forma sencilla de juntarlo.
-     */
-    stripeCuentaLeon: stripeCuentaLeon || null,
-    stripePilotoLeon: stripePilotoLeon || null,
-    stripeCobrado: Object.fromEntries(stripeCobrado)
+    stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX)
   };
 }
 
@@ -1347,53 +1196,11 @@ function buildStateSnapshot() {
  * indexar y podría crear un cliente duplicado con otra CLABE. El registro es lo
  * que hace que eso no pase nunca.
  */
-/*
- * Cuántos clientes hay, para poder repartir un cupo de "50 clientes" sin que
- * nadie tenga que convertirlo a porcentaje a mano cada vez que crece el padrón.
- */
-stripeLeon.usarPadron({
-  total: () => wisphubClients.size,
-  telefonos: () => Array.from(wisphubClients.keys()),
-  /*
-   * Quiénes deberían entrar primero al piloto: los que están suspendidos o con
-   * adeudo. Son los que de verdad van a usar el pago en línea. Un piloto hecho
-   * con clientes que pagan puntual en la oficina mide mal, y puede hacer
-   * parecer que la cosa no sirve cuando lo que pasa es que a esos no les hacía
-   * falta.
-   */
-  prioritarios: () => Array.from(wisphubClients.entries())
-    .filter(([, c]) => /suspend|corte|adeud|moroso/i.test(String((c && c.status) || '')))
-    .map(([tel]) => tel),
-});
-
-/*
- * Quiénes quedaron dentro del piloto. Se guarda con el resto del estado porque
- * la decisión se toma una vez: si se perdiera en un reinicio, se elegirían
- * otros 50 y los primeros perderían la opción de un día para otro.
- */
-let stripePilotoLeon = null;
-stripeLeon.usarPiloto({
-  obtener: () => stripePilotoLeon,
-  guardar: (datos) => { stripePilotoLeon = datos; schedulePersist(); },
-});
-
-let stripeCuentaLeon = null;
-stripeLeon.usarCuenta({
-  obtener: () => stripeCuentaLeon,
-  guardar: (datos) => { stripeCuentaLeon = datos; schedulePersist(); },
-});
-
 const stripeClientes = new Map();
 stripeLeon.usarRegistro({
   obtener: (tel) => stripeClientes.get(String(tel)) || null,
   guardar: (tel, datos) => {
-    /*
-     * Se FUNDE con lo que ya había, no se reemplaza. En el mismo registro
-     * viven la CLABE, el cobro automático y "pagado hasta": si sacar la CLABE
-     * borrara lo demás, un cliente perdería su cobro automático (o sus meses
-     * adelantados) por pedir su número de cuenta.
-     */
-    stripeClientes.set(String(tel), { ...(stripeClientes.get(String(tel)) || {}), ...datos });
+    stripeClientes.set(String(tel), datos);
     schedulePersist();
   },
 });
@@ -1409,27 +1216,6 @@ function hydrateState(s) {
     if (wisphubClients.size) console.log(`[Wisphub] Lista restaurada del respaldo: ${wisphubClients.size} clientes (del ${String(s.wisphubClientesAl || '').slice(0, 16)})`);
   }
   if (Array.isArray(s.wisphubLog)) wisphubLog = s.wisphubLog.slice(0, WISPHUB_LOG_MAX);
-  /*
-   * La cuenta de cobro de León, primero que nada: el módulo tiene que saberla
-   * ANTES de que llegue el primer pago, no después.
-   */
-  if (s.stripeCobrado && typeof s.stripeCobrado === 'object') {
-    for (const [k, v] of Object.entries(s.stripeCobrado)) stripeCobrado.set(String(k), v);
-  }
-  if (s.stripePilotoLeon && Array.isArray(s.stripePilotoLeon.telefonos)) {
-    stripePilotoLeon = s.stripePilotoLeon;
-    stripeLeon.usarPiloto({
-      obtener: () => stripePilotoLeon,
-      guardar: (datos) => { stripePilotoLeon = datos; schedulePersist(); },
-    });
-  }
-  if (s.stripeCuentaLeon && s.stripeCuentaLeon.id) {
-    stripeCuentaLeon = s.stripeCuentaLeon;
-    stripeLeon.usarCuenta({
-      obtener: () => stripeCuentaLeon,
-      guardar: (datos) => { stripeCuentaLeon = datos; schedulePersist(); },
-    });
-  }
   if (s.stripeClientes && typeof s.stripeClientes === 'object') {
     for (const [k, v] of Object.entries(s.stripeClientes)) stripeClientes.set(String(k), v);
   }
@@ -1440,21 +1226,6 @@ function hydrateState(s) {
     for (const [k, v] of Object.entries(s.stripePagosRecientes)) {
       if (Array.isArray(v)) stripePagosRecientes.set(String(k), v);
     }
-  }
-  if (s.stripeVistos && typeof s.stripeVistos === 'object') {
-    // Solo lo del último día: lo más viejo Stripe ya no lo va a reintentar.
-    const limite = Date.now() - 24 * 3600 * 1000;
-    for (const [k, v] of Object.entries(s.stripeVistos)) {
-      if (Number(v) > limite) stripeVistos.set(String(k), Number(v));
-    }
-  }
-  if (s.stripeSaldosRezagados && typeof s.stripeSaldosRezagados === 'object') {
-    for (const [k, v] of Object.entries(s.stripeSaldosRezagados)) {
-      if (v && typeof v === 'object') stripeSaldosRezagados.set(String(k), v);
-    }
-  }
-  if (Array.isArray(s.stripeCargosPerdidos)) {
-    stripeCargosPerdidos = s.stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX);
   }
   const fill = (map, obj) => { if (obj) for (const [k, v] of Object.entries(obj)) map.set(k, v); };
   fill(clientProfiles, s.clientProfiles);
@@ -1496,19 +1267,6 @@ function hydrateState(s) {
   if (s.agentLastInbound && typeof s.agentLastInbound === 'object') agentLastInbound = new Map(Object.entries(s.agentLastInbound));
   if (s.agentPingSent && typeof s.agentPingSent === 'object') agentPingSent = new Map(Object.entries(s.agentPingSent));
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
-  if (s.prorrogas && typeof s.prorrogas === 'object') prorrogas = s.prorrogas;
-  if (s.prorrogasPedidas && typeof s.prorrogasPedidas === 'object') prorrogasPedidas = s.prorrogasPedidas;
-  if (s.autoCobros && typeof s.autoCobros === 'object') autoCobros = s.autoCobros;
-  if (s.sesionesDePago && typeof s.sesionesDePago === 'object') {
-    const limite = Date.now() - 30 * 60 * 1000;   // misma vigencia que la sesión de pago
-    for (const [k, v] of Object.entries(s.sesionesDePago)) {
-      if (v && v.data && Number(v.data.desde) > limite) sessions.set(String(k), v);
-    }
-  }
-  for (const [k, v] of Object.entries(s.fichasOxxo || {})) if (v && v.cuando) fichasOxxo.set(String(k), v);
-  for (const [k, v] of Object.entries(s.ultimoLinkPago || {})) if (v && v.url) ultimoLinkPago.set(String(k), v);
-  for (const [k, v] of Object.entries(s.autoOfrecido || {})) if (Number(v)) autoOfrecido.set(String(k), Number(v));
-  if (typeof s.resumenCobranzaFecha === 'string') resumenCobranzaFecha = s.resumenCobranzaFecha;
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
@@ -2640,7 +2398,7 @@ async function sendWhatsAppMessage(to, text, mediaUrls = [], _options = {}) {
     return;
   }
 
-  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   const headers = {
     'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
     'Content-Type': 'application/json'
@@ -2743,7 +2501,7 @@ async function sendWhatsAppMessage(to, text, mediaUrls = [], _options = {}) {
 
 async function downloadWhatsAppMedia(mediaId) {
   const urlResponse = await fetch(
-    `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${mediaId}`,
+    `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${mediaId}`,
     { headers: { 'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}` } }
   );
   if (!urlResponse.ok) throw new Error(`WhatsApp media URL failed: ${urlResponse.status}`);
@@ -2790,7 +2548,7 @@ async function storeIncomingFile(base64, contentType, ext) {
 // Envía un documento (PDF, etc.) por WhatsApp a partir de un link público.
 async function sendWhatsAppDocument(to, link, filename, caption) {
   if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return false;
-  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   const doc = { link, filename: String(filename || 'documento.pdf').slice(0, 240) };
   // El caption viaja DENTRO del mismo mensaje que el documento (anclados: no se
   // pueden separar ni entrelazar con otros casos).
@@ -2810,7 +2568,7 @@ async function sendWhatsAppDocument(to, link, filename, caption) {
 // foto y su información llegan pegadas ("hermanitos") y jamás se cruzan con otro caso.
 async function sendWhatsAppImageCaption(to, link, caption) {
   if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN || !link) return false;
-  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   try {
     const r = await fetch(base, {
       method: 'POST',
@@ -2836,7 +2594,7 @@ async function sendWhatsAppMediaButtons(to, media, bodyText, buttons) {
       ? { type: 'document', document: { link: media.docUrl, filename: String(media.docName || 'documento.pdf').slice(0, 240) } }
       : null;
   if (!header) return false;
-  const base = `${WHATSAPP_GRAPH}/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  const base = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
   try {
     const r = await fetch(base, {
       method: 'POST',
@@ -2898,67 +2656,6 @@ async function sendToAllAgents(text, media = [], opts = {}) {
     }
   })));
 }
-/*
- * LA SOLICITUD DE PRÓRROGA VA SOLO A QUIEN DECIDE, CON BOTONES.
- *
- * Antes se mandaba a todos los asesores como un caso más, con la instrucción
- * de escribir "PRORROGA 9511234567 3". Ahora le llega a una sola persona con
- * tres botones: dar los días que pidió el cliente (o 3), dar 5, o no dar. El
- * toque en el botón entra como el mismo comando de siempre. Si el envío
- * normal falla (ventana de 24 h), va por plantilla explicando cómo responder.
- */
-async function pedirProrrogaAQuienDecide(chatId, nombre, texto) {
-  const tel = normalizePhone(chatId);
-  const corto = tel.replace(/^52/, '');
-  const c = wisphubClients.get(tel) || {};
-  const v = normalizeText(texto);
-  let dias = 0;
-  const m = v.match(/\b(\d{1,2})\s*d[ií]as?\b/);
-  if (m) dias = parseInt(m[1], 10);
-  else if (/\b(una|1)\s+semana\b|\b8\s+d[ií]as\b/.test(v)) dias = 7;
-  else if (/\bquincena\b|\b15\s+d[ií]as\b/.test(v)) dias = 15;
-  if (dias < 1 || dias > 30) dias = 0;
-  // Primer botón: los días que pidió (o 3); segundo: la otra opción usual.
-  const primero = dias || 3;
-  const segundo = primero === 3 ? 5 : 3;
-  const botones = [
-    { id: `PRORROGA ${corto} ${primero} la pidió por WhatsApp`, title: `✅ Dar ${primero} día${primero !== 1 ? 's' : ''}` },
-    { id: `PRORROGA ${corto} ${segundo} la pidió por WhatsApp`, title: `📅 Dar ${segundo} días` },
-    { id: `NO PRORROGA ${corto}`, title: '❌ No dar' },
-  ];
-  const susp = /suspend|cort/i.test(String(c.status || ''));
-  const corte = parseFechaCorte(c.fechaCorte);
-  const lineas = [
-    '📅 SOLICITUD DE PRÓRROGA',
-    `Cliente: ${c.name || nombre || corto} · ${corto}` + (c.name && nombre && c.name !== nombre ? ` (en WhatsApp: ${nombre})` : ''),
-    `Servicio: ${susp ? '🔴 suspendido' : '🟢 activo'}` + (corte ? ` · corte ${corte.split('-').reverse().join('/')}` : '') + (parseFloat(c.saldo) > 0 ? ` · debe $${parseFloat(c.saldo).toFixed(2)}` : ''),
-    `Dice: "${String(texto || '').replace(/\s+/g, ' ').trim().slice(0, 200)}"`,
-    dias ? `Pide ${dias} día${dias !== 1 ? 's' : ''}.` : '',
-    // Si el bot ya le vio un pago este periodo, el jefe debe saberlo antes de decidir.
-    (() => { const pg = pagoRecienteDe(tel); return pg ? `⚠️ Ojo: el bot ya le vio un pago el ${new Date(pg.cuando).toLocaleDateString('es-MX', { timeZone: BUSINESS_TZ })} (${pg.canal}).` : ''; })(),
-    prorrogaVigente(tel) ? `⚠️ Ya tiene prórroga hasta el ${fechaConDia(prorrogaVigente(tel).hasta)}.` : '',
-    '',
-    'Toca un botón, o escribe PRORROGA ' + corto + ' [días] / NO PRORROGA ' + corto + '.',
-  ].filter((x) => x !== '');
-  const cuerpo = lineas.join('\n');
-  prorrogasPedidas[tel] = { cuando: Date.now(), nombre: c.name || nombre || '', texto: String(texto || '').slice(0, 200), dias };
-  logCase(chatId, c.name || nombre || '', 'prorroga', `Pide prórroga: ${String(texto || '').slice(0, 160)}`);
-  schedulePersist();
-  if (!PRORROGA_WHATSAPP_NUMBER) { await sendToAllAgents(cuerpo, [], { buttons: botones }); return true; }
-  return agentQueue(PRORROGA_WHATSAPP_NUMBER, async () => {
-    try { await sendWhatsAppMessage(PRORROGA_WHATSAPP_NUMBER, cuerpo, [], { buttons: botones }); return true; }
-    catch (e) {
-      console.warn('[prórroga] envío normal falló a quien decide (¿ventana de 24h?), probando plantilla:', e.message);
-      try { await sendWhatsAppTemplate(PRORROGA_WHATSAPP_NUMBER, cuerpo); return true; }
-      catch (e2) {
-        console.error('[prórroga] plantilla también falló:', e2.message);
-        alertAdmin('aviso-no-entregado', `No pude mandar una solicitud de prórroga de ${corto} al ${PRORROGA_WHATSAPP_NUMBER}. Está en el panel (Cobranza → Prórrogas).`);
-        return false;
-      }
-    }
-  });
-}
-
 // Reenvía un documento a TODOS los asesores.
 async function sendDocToAllAgents(docUrl, docName) {
   if (!docUrl) return;
@@ -3166,62 +2863,6 @@ function buildMigrationNotification(d, name) {
   ].filter(Boolean).join('\n');
 }
 
-/*
- * Dar por bueno el comprobante de un cliente: marca sus casos, le avisa (por
- * plantilla, puede ser de hace días) y, si el comprobante era de otra cuenta,
- * también al titular. Lo usan el asesor por WhatsApp (RECIBIDO) y el panel.
- */
-async function confirmarPagoRecibido(clientId, porQuien) {
-  // Qué factura cubre ese comprobante: la que debía al aceptarlo. Se anota en el
-  // caso para que "ya pagó este mes" se decida por periodo también aquí.
-  try {
-    const telC = String(clientId).replace(/\D/g, '');
-    const pendientesC = caseLog.filter((c) => c.clientId === telC && c.type === 'pago' && c.status === 'pendiente');
-    // Si el cliente dijo para cuál contrato era, la factura que cubre es la de ESE contrato.
-    const conServicio = pendientesC.find((c) => c.servicioId);
-    let cubre = '';
-    if (conServicio) {
-      const svc = (await serviciosDeLaCuenta(telC)).find((x) => x.id === String(conServicio.servicioId));
-      if (svc) { const d = await wisphubReactivar.deudaDelCliente(svc.usuario); cubre = (d.facturas || []).map((f) => String(f.fecha_vencimiento || '').slice(0, 10)).filter(Boolean).sort().pop() || ''; }
-    }
-    if (!cubre) { const dc = await deudaConocidaDe(telC); if (dc.conocida) cubre = dc.cubreHasta || ''; }
-    if (cubre) for (const c of pendientesC) c.cubreHasta = cubre;
-  } catch (_) { /* sin factura a la mano, vale la ventana de días */ }
-  const casoPago = caseLog.find((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
-  const titularAjeno = (String((casoPago || {}).resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1];
-  const marcados = markCases(clientId, 'recibido', porQuien);
-  if (!marcados) return { marcados: 0, eraPago: !!casoPago, titularAjeno: '' };
-  pendingAgentRequests.delete(clientId);
-  schedulePersist();
-  /*
-   * Dar por bueno el comprobante ES el pago: si el servicio está suspendido, se
-   * manda reactivar aquí mismo (el del titular si pagó otro por él, y el
-   * contrato que dijo el cliente si tiene varios). La oficina no tiene que ir a
-   * Wisphub a reconectar; lo único que le queda a mano es marcar la factura.
-   */
-  const telServicio = titularAjeno && titularAjeno !== clientId ? titularAjeno : clientId;
-  const cSvc = wisphubClients.get(telServicio) || {};
-  const suspendidoAun = /suspend|cort/i.test(String(cSvc.status || ''));
-  let reactivado = false;
-  if (suspendidoAun && casoPago) {
-    const idSvc = (casoPago.servicioId) || cSvc.wisphubId;
-    if (idSvc) {
-      try { await wisphubReactivar.reactivarServicio(idSvc); reactivado = true; console.log('[recibido] reactivado', telServicio, 'servicio', idSvc); }
-      catch (e) { console.warn('[recibido] no se pudo reactivar a', telServicio, '·', e.message); alertAdmin('recibido-reactivar', `El comprobante de ${cSvc.name || telServicio} se dio por bueno pero Wisphub no dejó reactivar el servicio ${idSvc}: ${e.message}. Reconéctalo a mano.`); }
-    }
-  }
-  try {
-    await avisarPorIniciativa(clientId, casoPago
-      ? '✅ Tu pago quedó registrado. ¡Gracias! 🙌' + (suspendidoAun ? (reactivado ? ' Ya mandé reactivar tu servicio: en unos minutos reinicia tu módem y listo.' : ' Tu servicio se reactiva en unos minutos; si en una hora sigue sin navegar, reinicia tu módem o escríbenos.') : '')
-      : '✅ ¡Recibido, gracias! 🙌');
-  } catch (e) { console.error('[recibido] aviso al cliente:', e.message); }
-  if (titularAjeno && titularAjeno !== clientId) {
-    try { await avisarPorIniciativa(titularAjeno, '✅ Recibimos el pago de tu servicio de internet (lo mandó otra persona por ti) y ya quedó registrado. ¡Gracias! 🙌'); }
-    catch (e) { console.error('[recibido] aviso al titular:', e.message); }
-  }
-  return { marcados, eraPago: !!casoPago, titularAjeno: titularAjeno && titularAjeno !== clientId ? titularAjeno : '' };
-}
-
 async function handleAgentCommand(agentNumber, text) {
   const v = text.trim().toUpperCase();
 
@@ -3233,7 +2874,7 @@ async function handleAgentCommand(agentNumber, text) {
   }
 
   // ATENDER [número] — toma el control y activa el relay
-  const atenderMatch = v.match(/^ATENDER\s+(\d[\d\s-]{6,})/);
+  const atenderMatch = v.match(/^ATENDER\s+(\d+)/);
   if (atenderMatch) {
     const clientId = normalizeClientNumber(atenderMatch[1]);
 
@@ -3292,36 +2933,8 @@ async function handleAgentCommand(agentNumber, text) {
     return;
   }
 
-  // PRORROGA [número] [días] [motivo] — le da plazo al cliente y calla el aviso de corte
-  const prorrogaMatch = text.trim().match(/^PR[OÓ]RROGA\s+(\d[\d\s-]{6,})\s+(\d{1,2})\s*(?:d[ií]as?)?\s*(.*)$/i);
-  if (prorrogaMatch) {
-    const clientId = normalizeClientNumber(prorrogaMatch[1]);
-    const p = darProrroga(clientId, prorrogaMatch[2], agentNumber, prorrogaMatch[3]);
-    const nombre = (wisphubClients.get(clientId) || {}).name || clientId;
-    const [y, m, d] = p.hasta.split('-');
-    const hastaTxt = `${d}/${m}/${y}`;
-    cerrarSolicitudProrroga(clientId, agentNumber);
-    await sendWhatsAppMessage(agentNumber, `📅 Prórroga registrada para *${nombre}* hasta el *${hastaTxt}* (${p.dias} día${p.dias !== 1 ? 's' : ''}). No le va a llegar aviso de corte hasta entonces.`);
-    try {
-      await avisarProrroga(clientId, p);
-    } catch (_) { /* si no se le pudo avisar, la prórroga vale igual */ }
-    return;
-  }
-
-  // NO PRORROGA [número] — se le niega el plazo y se le avisa al cliente cómo pagar
-  const noProrrogaMatch = text.trim().match(/^NO\s+PR[OÓ]RROGA\s+(\d[\d\s-]{6,})/i);
-  if (noProrrogaMatch) {
-    const clientId = normalizeClientNumber(noProrrogaMatch[1]);
-    const nombre = (wisphubClients.get(clientId) || {}).name || clientId;
-    cerrarSolicitudProrroga(clientId, agentNumber);
-    try { await avisarPorIniciativa(clientId, TEXTO_PRORROGA_NEGADA); }
-    catch (_) { /* el cliente se entera al pedir de nuevo */ }
-    await sendWhatsAppMessage(agentNumber, `❌ Prórroga negada a *${nombre}*. Ya le avisé cómo pagar.`);
-    return;
-  }
-
   // LIBERAR [número] — cierra el relay y devuelve al bot
-  const liberarMatch = v.match(/^LIBERAR\s+(\d[\d\s-]{6,})/);
+  const liberarMatch = v.match(/^LIBERAR\s+(\d+)/);
   if (liberarMatch) {
     const clientId = normalizeClientNumber(liberarMatch[1]);
     unpauseChat(clientId);
@@ -3339,7 +2952,7 @@ async function handleAgentCommand(agentNumber, text) {
   }
 
   // RECIBIDO [número] — acuse de recibo: agradece al cliente y cierra la espera (NO abre relay)
-  const recibidoMatch = v.match(/^RECIBIDO\s+(\d[\d\s-]{6,})/);
+  const recibidoMatch = v.match(/^RECIBIDO\s+(\d+)/);
   if (recibidoMatch) {
     const clientId = normalizeClientNumber(recibidoMatch[1]);
     const cName = nameOf(getProfile(clientId), clientId);
@@ -3350,19 +2963,22 @@ async function handleAgentCommand(agentNumber, text) {
       return;
     }
     // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
-    // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
-    const yaHabia = caseLog.some((c) => c.clientId === clientId && c.status === 'pendiente');
-    if (!yaHabia && !pendingAgentRequests.has(clientId)) {
+    const marcados = markCases(clientId, 'recibido', agentNumber);
+    if (!marcados && !pendingAgentRequests.has(clientId)) {
+      // Si quedó anotado quién lo gestionó, se dice; si es un caso viejo de
+      // antes de que se guardara, se queda en el genérico de siempre.
       const quien = quienGestiono(clientId);
       await sendWhatsAppMessage(agentNumber, quien
         ? `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por ${describeAgent(quien)}.`
         : `ℹ️ El caso de *${cName}* (${clientId}) ya había sido gestionado por otro asesor.`);
       return;
     }
-    const rc = await confirmarPagoRecibido(clientId, agentNumber);
-    if (!rc.marcados) { pendingAgentRequests.delete(clientId); schedulePersist(); try { await sendWhatsAppMessage(clientId, '✅ ¡Recibido, gracias! 🙌'); } catch (_) {} }
-    const titularAjeno = rc.titularAjeno;
-    await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId})${titularAjeno && titularAjeno !== clientId ? ` y al titular (${titularAjeno})` : ''}. El bot sigue atendiéndolo.`);
+    pendingAgentRequests.delete(clientId);
+    schedulePersist();
+    try {
+      await sendWhatsAppMessage(clientId, '✅ ¡Recibido, gracias! 🙌');
+    } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
+    await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
     // Avisa a los demás asesores que este caso ya fue gestionado.
     await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por ${describeAgent(agentNumber)}.`);
     return;
@@ -3415,8 +3031,6 @@ async function handleAgentCommand(agentNumber, text) {
     'ATENDER [número] → Tomar un caso (activa relay)',
     'RECIBIDO [número] → Acuse: agradece al cliente y cierra la espera',
     'LIBERAR [número] → Cerrar caso y devolver al bot',
-    'PRORROGA [número] [días] [motivo] → Darle días para pagar (se le avisa y no le llega aviso de corte)',
-    'NO PRORROGA [número] → Negarle el plazo (se le avisa cómo pagar)',
     'PAUSADOS → Ver casos activos',
     '',
     'Solo puedes tener UN caso a la vez: ciérralo (LIBERAR) antes de tomar otro.',
@@ -3549,23 +3163,16 @@ const VENTANA_AVISAR_ANTES_MS = 2 * 3600 * 1000; // tocarle el hombro 2 h antes
  * Es preventivo; el reintento con plantilla al fallar un aviso sigue estando
  * como red por debajo.
  */
-// A quiénes hay que cuidarles la ventana: los asesores y quien decide las prórrogas
-// (sus botones de "dar 3 días" solo llegan con la ventana abierta).
-function numerosConVentana() {
-  return [...new Set([...AGENT_WHATSAPP_NUMBERS, PRORROGA_WHATSAPP_NUMBER].filter(Boolean))];
-}
-async function sweepAgentWindow(force = false) {
-  const hechos = { recordados: [] };
+async function sweepAgentWindow() {
   try {
-    const numeros = numerosConVentana();
-    if (!numeros.length) return hechos;
+    if (!AGENT_WHATSAPP_NUMBERS.length) return;
     // Nunca de madrugada: un recordatorio a las 3 a.m. nadie lo va a tocar y
     // solo despierta a alguien. Entre 8:00 y 21:00 de México.
     const { minutesOfDay } = mexicoNow();
-    if (!force && (minutesOfDay < 480 || minutesOfDay > 1260)) return hechos;
+    if (minutesOfDay < 480 || minutesOfDay > 1260) return;
 
     const ahora = Date.now();
-    for (const num of numeros) {
+    for (const num of AGENT_WHATSAPP_NUMBERS) {
       const ultimo = agentLastInbound.get(num);
       // Sin dato = nunca ha escrito, o se perdió en un reinicio. Se asume lo
       // peor (ventana cerrada) y se le avisa: equivocarse hacia el aviso de más
@@ -3591,7 +3198,6 @@ async function sweepAgentWindow(force = false) {
           await sendWhatsAppTemplate(num, `${texto} (Responde cualquier cosa a este chat.)`);
         }
         agentPingSent.set(num, new Date().toISOString());
-        hechos.recordados.push(num);
         schedulePersist();
         console.log(`[ventana] Recordatorio enviado a ${num} (quedaban ${horas} h)`);
       } catch (e) {
@@ -3599,7 +3205,6 @@ async function sweepAgentWindow(force = false) {
       }
     }
   } catch (e) { console.error('[ventana] sweep error:', e.message); }
-  return hechos;
 }
 
 /**
@@ -3687,28 +3292,9 @@ async function sweepMorningDigest() {
      */
     const facturas = registros.filter((r) => r.tipo === 'factura');
     const aFavor = registros.filter((r) => r.tipo === 'afavor');
-    /*
-     * El dinero que se fue para atrás va en SU PROPIO bloque.
-     *
-     * Un contracargo no es "un pago por registrar": es lo contrario, un pago
-     * que se deshizo. Mezclarlo con los demás haría que la oficina fuera a
-     * marcar como pagada una factura cuyo dinero el banco ya se llevó, que es
-     * exactamente el error que este aviso existe para evitar.
-     */
-    const enContra = registros.filter((r) => r.tipo === 'disputa' || r.tipo === 'devolucion');
-    const porRegistrar = registros.filter((r) => r.tipo !== 'disputa' && r.tipo !== 'devolucion');
-    const bloqueContra = !enContra.length ? [] : [
+    const bloqueRegistros = !registros.length ? [] : [
       '',
-      `🚨 *${enContra.length} pago${enContra.length === 1 ? '' : 's'} que se revirtió*`,
-      '(el dinero YA NO está: no marques estas facturas como pagadas)',
-      '',
-      ...enContra.slice(0, 8).map((r) => (r.tipo === 'disputa'
-        ? `⚖️ *${r.nombre || r.telefono}* — contracargo por $${Number(r.total).toFixed(2)}\n     ${r.detalle || ''}`
-        : `↩️ *${r.nombre || r.telefono}* — devolución de $${Number(r.total).toFixed(2)}`)),
-    ].filter(Boolean);
-    const bloqueRegistros = !porRegistrar.length ? [] : [
-      '',
-      `💰 *${porRegistrar.length} pago${porRegistrar.length === 1 ? '' : 's'} por registrar en Wisphub*`,
+      `💰 *${registros.length} pago${registros.length === 1 ? '' : 's'} por registrar en Wisphub*`,
       '(ya se les reactivó el servicio; falta marcar su factura o su saldo a favor)',
       '',
       ...facturas.slice(0, 12).map((r) =>
@@ -3717,7 +3303,7 @@ async function sweepMorningDigest() {
         `⭐ *${r.nombre}* — $${Number(r.total).toFixed(2)} a favor (no debía nada)`),
       ...registros.filter((r) => r.tipo === 'ambiguo').slice(0, 6).map((r) =>
         `❓ *${r.nombre}* (${r.telefono}) — pagó, pero tiene varios servicios\n     ${r.detalle || ''}`),
-      porRegistrar.length > 18 ? `…y ${porRegistrar.length - 18} más.` : '',
+      registros.length > 18 ? `…y ${registros.length - 18} más.` : '',
       '',
       '⚠️ Mientras no se marquen, esos clientes siguen apareciendo con deuda y les pueden volver a cortar.',
     ].filter(Boolean);
@@ -3729,7 +3315,7 @@ async function sweepMorningDigest() {
          'Toca *📥 Ver casos* para bajarlos uno por uno con sus botones, o responde *RECIBIDO [número]* / *ATENDER [número]*.']
       : ['☀️ ¡Buenos días! No hay casos pendientes de clientes.'];
 
-    const msg = [...encabezado, ...bloqueRegistros, ...bloqueContra].filter(Boolean).join('\n');
+    const msg = [...encabezado, ...bloqueRegistros].filter(Boolean).join('\n');
     await sendAgentMessageSafe(msg, pend.length ? { buttons: [{ id: 'PENDIENTES', title: '📥 Ver casos' }] } : {});
     console.log(`[digest] Resumen matutino enviado: ${pend.length} casos · ${registros.length} pagos por registrar`);
   } catch (e) { console.error('[digest] sweep error:', e.message); }
@@ -3834,172 +3420,6 @@ function facturaDebe(fact) {
   if (/\b(no|sin)\s+pagad/.test(f)) return true;    // "No Pagado", "sin pagar"
   return !f.includes('pagad');                       // "Pendiente de Pago", "Vencida"…
 }
-/*
- * ¿Ya pagó, aunque Wisphub todavía no lo sepa?
- *
- * La factura en Wisphub se marca a mano (la API no deja), así que entre que
- * el cliente paga y la oficina lo registra pueden pasar días. En ese hueco
- * Wisphub dice "debe" y el bot le mandaba "mañana te cortamos" a alguien que
- * ya pagó por el propio bot. Aquí se mira lo que el bot SÍ sabe: los pagos
- * en línea que entraron y los comprobantes que la oficina ya dio por buenos.
- */
-/*
- * Cuántos días atrás cuenta un pago como "ya pagó este mes". Tres semanas, no
- * un mes: con 31 días, quien paga puntual el día antes de su corte (el 14 para
- * el 15) tenía ese pago "reciente" cuando llegaba el aviso del mes siguiente
- * (el 14 del otro mes, 30 días después) y se le callaba el recordatorio que sí
- * le tocaba; mes tras mes. Con 21 días, el pago de hace un mes ya no cuenta y
- * el de hace dos semanas (el que Wisphub a veces tarda en marcar) sí.
- */
-const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_RECIENTE) || 21);
-/*
- * ¿Ya pagó lo de este periodo? Si el pago trae hasta qué vencimiento cubre
- * (`cubreHasta`, la factura que pagó), se compara con el corte que se está
- * evaluando: cubre si cae a ±15 días de ese corte o más adelante. Si no lo
- * trae (pagos viejos, comprobantes), vale la ventana de días.
- */
-function pagoRecienteDe(telefono, corte = '', servicioId = '') {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  if (!tel) return null;
-  const desde = Date.now() - CORTE_DIAS_PAGO_RECIENTE * 24 * 3600 * 1000;
-  /*
-   * Con varios contratos en un teléfono, un pago del local no cubre la casa.
-   * El contrato que se evalúa es el que se pida o, si no, el que trae el
-   * padrón para ese teléfono; los pagos marcados con OTRO contrato no cuentan.
-   */
-  const svc = String(servicioId || (wisphubClients.get(tel) || {}).wisphubId || '').replace(/\D/g, '');
-  const deEste = (x) => !x || !svc || !x.servicioId || String(x.servicioId) === svc;
-  const hoy = fechaLocalISO();
-  const reg = stripeClientes.get(tel) || {};
-  if (reg.adelantadoHasta && reg.adelantadoHasta >= hoy && (!reg.adelantadoServicio || !svc || reg.adelantadoServicio === svc)) return { cuando: Date.now(), canal: `adelantado hasta ${reg.adelantadoHasta}` };
-  const regSvc = svc ? (stripeClientes.get(stripeLeon.claveDeRegistro(tel, svc)) || {}) : {};
-  if (regSvc.adelantadoHasta && regSvc.adelantadoHasta >= hoy) return { cuando: Date.now(), canal: `adelantado hasta ${regSvc.adelantadoHasta}` };
-  const ref = corte || hoy;
-  const refMs = new Date(ref + 'T12:00:00').getTime();
-  const cubre = (p) => {
-    if (!p.cubreHasta) return p.cuando >= desde;
-    const dif = (new Date(p.cubreHasta + 'T12:00:00').getTime() - refMs) / 86400000;
-    return dif >= -15;
-  };
-  const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && deEste(p) && cubre(p) && p.cuando >= Date.now() - 400 * 86400000);
-  if (enLinea.length) { const u = enLinea[enLinea.length - 1]; return { cuando: u.cuando, canal: u.canal || 'en línea' }; }
-  for (const c of caseLog) {
-    if (c.type !== 'pago' || c.status !== 'recibido') continue;
-    /*
-     * El comprobante lo manda quien paga, que muchas veces no es el titular.
-     * Si el aviso al asesor ya traía "Coincide: ... · <teléfono del titular>",
-     * ese pago cuenta para el TITULAR: es a él a quien no hay que mandarle
-     * "mañana te cortamos" cuando su hija ya pagó por él.
-     */
-    const esSuyo = c.clientId === tel || String(c.resumen || '').includes('· ' + tel);
-    if (!esSuyo || !deEste(c)) continue;
-    const t = new Date(c.ts).getTime();
-    const vale = c.cubreHasta ? ((new Date(c.cubreHasta + 'T12:00:00').getTime() - refMs) / 86400000 >= -15 && t >= Date.now() - 400 * 86400000) : t >= desde;
-    if (vale) return { cuando: t, canal: c.clientId === tel ? 'comprobante' : 'comprobante de otra persona' };
-  }
-  return null;
-}
-/*
- * Pagó meses adelantados (por link o por transferencia): se anota hasta
- * cuándo, para que el aviso de corte no le llegue en esos meses, y se le
- * dice a la oficina que registre los meses que vienen (Wisphub solo tiene la
- * factura de hoy). Devuelve la fecha hasta la que queda cubierto.
- */
-function anotarMesesAdelantados(telefono, mesesPagados, montoTexto, servicioId = '') {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  const w0 = wisphubClients.get(tel) || {};
-  const base = parseFechaCorte(w0.fechaCorte) || fechaLocalISO();
-  const h = new Date(base + 'T12:00:00'); h.setMonth(h.getMonth() + (mesesPagados - 1));
-  const hasta = fechaLocalISO(h);
-  // Con contrato conocido, lo adelantado es de ESE contrato (clave tel~servicio); si no, del teléfono.
-  const svc = String(servicioId || '').replace(/\D/g, '');
-  const clave = svc && svc !== String(w0.wisphubId || '') ? stripeLeon.claveDeRegistro(tel, svc) : tel;
-  stripeClientes.set(clave, { ...(stripeClientes.get(clave) || {}), adelantadoHasta: hasta, adelantadoMeses: mesesPagados, ...(svc ? { adelantadoServicio: svc } : {}) });
-  schedulePersist();
-  alertAdmin('meses-adelantados', `📅 ${w0.name || tel} pagó *${mesesPagados} meses* de una vez (${montoTexto}). Wisphub solo tiene la factura de este mes: hay que registrar los ${mesesPagados - 1} siguientes a mano. Queda cubierto hasta el ${hasta}.`);
-  return hasta;
-}
-
-// Un comprobante que ya mandaron (él o alguien por él) y la oficina todavía
-// no revisa. No es un pago confirmado, pero tampoco se le puede decir
-// "mañana te cortamos" como si no hubiera mandado nada.
-function comprobanteEnRevisionDe(telefono, dias = 3) {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  if (!tel) return null;
-  const desde = Date.now() - dias * 24 * 3600 * 1000;
-  return caseLog.find((c) => c.type === 'pago' && c.status === 'pendiente' && new Date(c.ts).getTime() >= desde
-    && (c.clientId === tel || String(c.resumen || '').includes('· ' + tel))) || null;
-}
-
-// El último pago reciente que este teléfono hizo por la cuenta de OTRO (la hija
-// que paga lo de su mamá y luego pregunta "¿ya quedó?").
-function pagoHechoPor(telefono) {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  if (!tel) return null;
-  const desde = Date.now() - CORTE_DIAS_PAGO_RECIENTE * 24 * 3600 * 1000;
-  let mejor = null;
-  for (const [titular, lista] of stripePagosRecientes) {
-    for (const p of lista || []) {
-      if (p && p.pagadoPor === tel && p.cuando >= desde && (!mejor || p.cuando > mejor.cuando)) mejor = { ...p, titular };
-    }
-  }
-  return mejor;
-}
-function canalTexto(canal) {
-  const m = { tarjeta: 'con tarjeta', oxxo: 'en OXXO', transferencia: 'por transferencia a tu CLABE', 'tarjeta-automatico': 'con tu cobro automático', comprobante: 'con el comprobante que mandaste', 'comprobante de otra persona': 'con el comprobante que mandaron por ti' };
-  const k = String(canal || '');
-  return m[k] || (k.startsWith('adelantado') ? 'pagado por adelantado' : 'en línea');
-}
-function fechaLocalISO(d = new Date()) {
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-}
-function prorrogaVigente(telefono) {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  const p = prorrogas[tel];
-  if (!p || !p.hasta) return null;
-  if (p.hasta < fechaLocalISO()) { delete prorrogas[tel]; schedulePersist(); return null; }
-  return p;
-}
-function darProrroga(telefono, dias, por, motivo = '') {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  const n = Math.max(1, Math.min(31, Number(dias) || 0));
-  const hasta = new Date(); hasta.setDate(hasta.getDate() + n);
-  // Si se ajusta una prórroga sin decir por qué, el motivo original se queda.
-  const motivoFinal = String(motivo || '').trim() || ((prorrogas[tel] || {}).motivo || '');
-  prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/[^\w@. -]/g, '').slice(0, 40), cuando: new Date().toISOString(), motivo: motivoFinal.slice(0, 200) };
-  schedulePersist();
-  return { ...prorrogas[tel], conAutomatico: !!(stripeClientes.get(tel) || {}).cobroAutomatico };
-}
-
-// Lo que se le dice al cliente cuando se le da (o se le ajusta) una prórroga,
-// se dé por WhatsApp o desde el panel: la misma frase en los dos lados.
-// "viernes 20/09/2026": con el día de la semana la fecha se entiende de un vistazo.
-function fechaConDia(iso) {
-  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return String(iso || '');
-  const dia = new Intl.DateTimeFormat('es-MX', { weekday: 'long', timeZone: 'UTC' }).format(new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`));
-  return `${dia} ${m[3]}/${m[2]}/${m[1]}`;
-}
-
-const TEXTO_PRORROGA_NEGADA = '📅 Revisamos tu solicitud y por esta vez no podemos dar más tiempo: el servicio se suspende en tu fecha de corte si no hay pago. Puedes pagar por aquí en cualquier momento, escribe *pagar* y te muestro cómo. 🙏';
-
-// La solicitud deja de estar pendiente en cuanto alguien la resuelve (por WhatsApp o desde el panel).
-function cerrarSolicitudProrroga(telefono, por = '') {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  if (!prorrogasPedidas[tel]) return false;
-  delete prorrogasPedidas[tel];
-  for (const c of caseLog) if (c.clientId === tel && c.type === 'prorroga' && c.status === 'pendiente') { c.status = 'atendido'; if (por) c.porAgente = String(por).replace(/\D/g, ''); }
-  schedulePersist();
-  return true;
-}
-
-async function avisarProrroga(telefono, p) {
-  const hastaTxt = fechaConDia(p.hasta);
-  return avisarPorIniciativa(telefono, p.conAutomatico
-    ? `📅 Listo, te dimos hasta el *${hastaTxt}*. Como tienes *cobro automático*, ese mes se cobra a tu tarjeta un día antes de que venza la prórroga (te aviso dos días antes), no en tu fecha de corte. Si prefieres pagar antes de otra forma, escribe *pagar*. 🙌`
-    : `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
-}
-
 function clienteDebe(c) {
   const low = s => String(s || '').toLowerCase();
   const e = low(c && c.status);
@@ -4046,248 +3466,6 @@ function huecosCorte(dias = 7) {
 }
 
 // force=true (desde el panel) corre ya, sin esperar la hora — el dedup evita repetir.
-/*
- * ¿A quién le toca aviso o cobro automático hoy? Se decide con la fecha de
- * corte que trae Wisphub: dos días antes, aviso; un día antes, cobro.
- */
-function fechaMasDias(dias) {
-  const d = new Date(); d.setDate(d.getDate() + dias);
-  return fechaLocalISO(d);
-}
-/*
- * RESUMEN DIARIO DE COBRANZA para la oficina, a las 9 de la mañana, por
- * plantilla a los números de asesor: lo que hoy toca mirar en cinco líneas.
- * Se manda una vez por día (queda en el estado como resumenCobranzaFecha).
- */
-let resumenCobranzaFecha = '';
-async function resumenCobranzaDiario(force = false, enviar = true) {
-  const hoy = fechaLocalISO();
-  if (!force) {
-    if (resumenCobranzaFecha === hoy) return { repetido: true };
-    const hora = Number(new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: 'numeric', hour12: false }).format(new Date()));
-    if (hora < 9 || hora >= 11) return { fueraDeHora: true };
-  }
-  const manana = fechaMasDias(1);
-  let debenManana = 0, yaPagaron = 0, conProrroga = 0, conAuto = 0;
-  const nombres = [];
-  for (const [tel, c] of wisphubClients.entries()) {
-    if (parseFechaCorte(c.fechaCorte) !== manana || !clienteDebe(c)) continue;
-    if (pagoRecienteDe(tel, manana)) { yaPagaron++; continue; }
-    if (prorrogaVigente(tel)) { conProrroga++; continue; }
-    if ((stripeClientes.get(tel) || {}).cobroAutomatico && !/^(rechazado|sin-tarjeta)$/.test(String(((autoCobros[tel] || {})[manana] || {}).estado || ''))) { conAuto++; continue; }
-    debenManana++; if (nombres.length < 6) nombres.push(c.name || tel);
-  }
-  const vencen = Object.entries(prorrogas).filter(([, p]) => p && p.hasta === manana).length;
-  const rechazados = Object.entries(autoCobros).filter(([tel, log]) => (stripeClientes.get(tel) || {}).cobroAutomatico && Object.values(log || {}).some((per) => per && /^(rechazado|sin-tarjeta)$/.test(per.estado)) && !pagoRecienteDe(tel)).length;
-  const sinRevisar = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').length;
-  const pedidasLista = Object.entries(prorrogasPedidas).filter(([, x]) => x && x.cuando).map(([tel, x]) => x.nombre || tel.replace(/^52/, ''));
-  const pedidas = pedidasLista.length;
-  const desde = Date.now() - 86400000;
-  let pagosBot = 0, montoBot = 0;
-  for (const lista of stripePagosRecientes.values()) for (const p of lista || []) if (p && p.cuando >= desde) { pagosBot++; montoBot += Number(p.monto) || 0; }
-  const texto = [
-    `📋 RESUMEN DE COBRANZA · ${hoy.split('-').reverse().join('/')}`,
-    `• Cortan mañana y deben: ${debenManana}${nombres.length ? ` (${nombres.join(', ')}${debenManana > nombres.length ? '…' : ''})` : ''}`,
-    `• Ya cubiertos para mañana: ${yaPagaron} pagaron, ${conProrroga} con prórroga, ${conAuto} con automático`,
-    `• Prórrogas que vencen mañana: ${vencen}`,
-    pedidas ? `• Prórrogas pedidas sin responder: ${pedidas} (${pedidasLista.slice(0, 5).join(', ')}${pedidas > 5 ? '…' : ''}; le llegaron al ${PRORROGA_WHATSAPP_NUMBER ? PRORROGA_WHATSAPP_NUMBER.replace(/^52/, '') : 'jefe'}, también en panel → Cobranza)` : '',
-    `• Automáticos rechazados sin pagar: ${rechazados}`,
-    `• Comprobantes sin revisar: ${sinRevisar}${sinRevisar ? ' (panel → Cobranza)' : ''}`,
-    `• Pagos por el bot en 24 h: ${pagosBot} por $${montoBot.toFixed(2)}`,
-  ].filter(Boolean).join('\n');
-  let enviados = 0;
-  if (enviar) {
-    for (const tel of AGENT_WHATSAPP_NUMBERS) {
-      try { await avisarPorIniciativa(tel, texto); enviados++; } catch (e) { console.warn('[resumen] no salió a', tel, '·', e.message); }
-    }
-    resumenCobranzaFecha = hoy; schedulePersist();
-  }
-  return { enviados, debenManana, nombres, yaPagaron, conProrroga, conAuto, vencen, rechazados, sinRevisar, pedidas, pagosBot, montoBot, manana, texto };
-}
-
-/*
- * SI EL JEFE NO HA RESPONDIDO UNA PRÓRROGA EN TRES HORAS, SE LE RECUERDA UNA VEZ.
- *
- * El cliente se quedó con "te aviso por aquí" y el aviso de corte le va a
- * salir igual si nadie decide. Solo cuenta el tiempo en horario de oficina
- * (una pedida a las 9 de la noche no se recuerda a medianoche) y se recuerda
- * una sola vez por solicitud, por plantilla, para que pase la ventana de 24 h.
- */
-const PRORROGA_RECORDAR_MS = Number(process.env.PRORROGA_RECORDAR_HORAS || 3) * 3600 * 1000;
-async function recordarProrrogasSinResponder(force = false) {
-  if (!PRORROGA_WHATSAPP_NUMBER) return { sinNumero: true };
-  if (!force && !isWithinBusinessHours()) return { fueraDeHorario: true };
-  const ahora = Date.now();
-  const viejas = Object.entries(prorrogasPedidas).filter(([, x]) => x && x.cuando && !x.recordado && ahora - x.cuando >= PRORROGA_RECORDAR_MS);
-  if (!viejas.length) return { recordadas: 0 };
-  const lineas = viejas.map(([tel, x]) => {
-    const corto = tel.replace(/^52/, '');
-    const horas = Math.round((ahora - x.cuando) / 3600000);
-    return `• ${x.nombre || corto} (${corto}) · hace ${horas} h${x.dias ? ` · pide ${x.dias} días` : ''}\n  Responde: PRORROGA ${corto} ${x.dias || 3}  o  NO PRORROGA ${corto}`;
-  });
-  const texto = `⏰ Tienes ${viejas.length} solicitud${viejas.length !== 1 ? 'es' : ''} de prórroga sin responder:\n${lineas.join('\n')}\n\nTambién puedes resolverlas en el panel → Cobranza → Prórrogas.`;
-  try {
-    await avisarPorIniciativa(PRORROGA_WHATSAPP_NUMBER, texto);
-    for (const [, x] of viejas) x.recordado = new Date().toISOString();
-    schedulePersist();
-    return { recordadas: viejas.length };
-  } catch (e) {
-    console.warn('[prórroga] no se pudo recordar al jefe:', e.message);
-    return { recordadas: 0, error: e.message };
-  }
-}
-
-let _ultimoBarridoAuto = null;
-async function barrerCobroAutomatico(force = false) {
-  const hechos = { avisados: 0, cobrados: 0, rechazados: 0, sinDeuda: 0, sinTarjeta: 0 };
-  const _resultado = (r) => { _ultimoBarridoAuto = { ...r, cuando: new Date().toISOString() }; return r; };
-  if (!stripeLeon.activo() || !stripeLeon.cuentaLista()) return _resultado({ ...hechos, apagado: true });
-  const hora = Number(new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: 'numeric', hour12: false }).format(new Date()));
-  // Entre las 9 y las 20: a nadie le gusta un cargo (ni un aviso) de madrugada.
-  if (!force && (hora < 9 || hora >= 20)) return _resultado({ ...hechos, fueraDeHorario: true });
-  const manana = fechaMasDias(1);
-  const pasadoManana = fechaMasDias(2);
-
-  for (const [clave, reg] of stripeClientes) {
-    if (!reg || !reg.cobroAutomatico || !reg.clienteId) continue;
-    const { tel, servicioId: servicioDeClave } = stripeLeon.partirClave(clave);
-    if (servicioDeClave) continue;   // el automático vive en la clave del teléfono, no en la de cada CLABE
-    const c = { ...(wisphubClients.get(tel) || {}) };
-    /*
-     * Con varios contratos, la deuda y la reactivación son las del contrato
-     * que el cliente eligió al activar el automático, no las del primero.
-     */
-    if (reg.autoServicioId) {
-      const varios = await serviciosDeLaCuenta(tel);
-      const el = varios.find((x) => x.id === String(reg.autoServicioId));
-      if (el) { c.usuario = el.usuario || c.usuario; c.etiqueta = el.etiqueta; }
-    }
-    const corte = parseFechaCorte(c.fechaCorte);
-    if (!corte) continue;
-    const log = autoCobros[tel] || (autoCobros[tel] = {});
-    const per = log[corte] || (log[corte] = {});
-    /*
-     * Con prórroga, el día de cobro se recorre: se avisa dos días antes de que
-     * venza y se cobra un día antes, no en la fecha de corte original. Pedir
-     * más días y que la tarjeta se cobre igual no sería una prórroga.
-     */
-    const prAuto = prorrogaVigente(tel);
-    const diaDeCobro = prAuto && prAuto.hasta > corte ? prAuto.hasta : corte;
-    if (diaDeCobro !== corte && !per.estado) hechos.conProrroga = (hechos.conProrroga || 0) + 1;
-
-    // Dos días antes: el aviso, con el monto que Wisphub diga hoy. Si este mes ya
-    // pagó por su cuenta (o va adelantado), no se le anuncia un cobro que no va a pasar.
-    if (diaDeCobro === pasadoManana && !per.avisado) {
-      if (pagoRecienteDe(tel, corte)) { per.avisado = new Date().toISOString(); per.estado = 'ya-pago'; schedulePersist(); continue; }
-      let monto = 0;
-      try { monto = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; } catch (_) { /* se avisa sin monto */ }
-      if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;
-      per.avisado = new Date().toISOString(); schedulePersist();
-      await avisarPorIniciativa(tel,
-        `📅 Hola. Tu fecha de pago es el ${corte.split('-').reverse().join('/')}. *Mañana se cobrará${monto > 0 ? ` $${monto.toFixed(2)}` : ' tu mensualidad'} a tu tarjeta guardada*, como lo pediste, y tu servicio sigue sin cortes.\n\n`
-        + 'Si este mes prefieres pagar de otra forma, escribe *pagar* y elige cómo: al ver tu pago, mañana no se cobra nada a la tarjeta. Para quitar el automático por completo, escribe *CANCELAR AUTOMÁTICO*.').catch(() => {});
-      hechos.avisados++;
-      continue;
-    }
-
-    // Un día antes: el cobro. Una sola vez por periodo, pase lo que pase.
-    if (diaDeCobro === manana && !per.estado) {
-      /*
-       * Si mandó un comprobante que la oficina no ha revisado, cobrarle ahora
-       * sería cobrarle dos veces. Se pospone (la pasada de la siguiente hora lo
-       * vuelve a intentar): si lo dan por bueno, cae en "ya pagó"; si lo
-       * rechazan, se cobra. La oficina se entera una sola vez.
-       */
-      if (comprobanteEnRevisionDe(tel)) {
-        if (!per.avisadoRevision) {
-          per.avisadoRevision = new Date().toISOString(); schedulePersist();
-          alertAdmin('auto-en-revision', `📄 ${c.name || tel} tiene cobro automático para mañana, pero mandó un comprobante que sigue SIN REVISAR. No se le cobró a la tarjeta para no cobrarle doble: revísalo hoy en el panel (Comprobantes por revisar).`);
-        }
-        hechos.enRevision = (hechos.enRevision || 0) + 1;
-        continue;
-      }
-      per.estado = 'en-proceso'; per.cuando = new Date().toISOString(); schedulePersist();
-      try {
-        /*
-         * Si este mes ya pagó por su cuenta (tarjeta, OXXO, CLABE o comprobante
-         * aceptado), no se le cobra en automático aunque Wisphub siga con la
-         * factura pendiente: la oficina la marca a mano y eso tarda días.
-         */
-        const yaPago = pagoRecienteDe(tel, corte);
-        if (yaPago) {
-          per.estado = 'ya-pago'; per.motivo = yaPago.canal; schedulePersist(); hechos.sinDeuda++;
-          await avisarPorIniciativa(tel, '✅ Este mes ya pagaste por tu cuenta, así que no se cobró nada a tu tarjeta. El cobro automático sigue activo para el mes que viene. 🙌').catch(() => {});
-          continue;
-        }
-        let deuda = 0;
-        try { deuda = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; }
-        catch (e) { throw new Error('No se pudo leer la deuda: ' + e.message); }
-        if (deuda <= 0) {
-          per.estado = 'sin-deuda'; schedulePersist(); hechos.sinDeuda++;
-          await avisarPorIniciativa(tel, '✅ Hoy tocaba tu cobro automático, pero tu cuenta ya está al corriente: no se cobró nada. 🙌').catch(() => {});
-          continue;
-        }
-        const tarjeta = await stripeLeon.metodoGuardadoDe(reg.clienteId);
-        if (!tarjeta) {
-          per.estado = 'sin-tarjeta'; schedulePersist(); hechos.sinTarjeta++;
-          await avisarPorIniciativa(tel, `⚠️ Tocaba cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta, pero ya no hay una tarjeta guardada. Escribe *pagar* para pagar de otra forma, o vuelve a activar el automático al pagar con tarjeta. 🙏`).catch(() => {});
-          continue;
-        }
-        const r = await stripeLeon.cobrarGuardado({ clienteId: reg.clienteId, metodoPago: tarjeta.id, monto: deuda, telefono: tel, nombre: c.name, periodo: corte });
-        if (r.ok) {
-          per.estado = 'cobrado'; per.ref = r.id; per.monto = r.mensualidad; schedulePersist(); hechos.cobrados++;
-          registrarPagoYRevisarDoble({ telefono: tel, monto: r.mensualidad, canal: 'tarjeta-automatico', ref: r.id, cubreHasta: corte, servicioId: reg.autoServicioId });
-          markCases(tel, 'recibido', 'stripe-auto');
-          sumarAlMes(r.mensualidad, 'tarjeta');
-          await avisarPorIniciativa(tel, `✅ Se cobró tu mensualidad de *$${r.mensualidad.toFixed(2)}* (más $${r.cargo.toFixed(2)} por pagar en línea) a tu tarjeta terminación ${tarjeta.ultimos4}. Tu servicio sigue activo, sin cortes. 🙌`).catch(() => {});
-          try {
-            const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: r.mensualidad, referencia: r.id, idServicio: reg.autoServicioId || undefined });
-            avisarRegistroPendiente(w, tel);
-          } catch (e) { console.error('[auto] aplicar pago:', e.message); }
-        } else {
-          per.estado = 'rechazado'; per.motivo = r.motivo || r.estado; schedulePersist(); hechos.rechazados++;
-          await avisarPorIniciativa(tel, `⚠️ No se pudo cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta terminación ${tarjeta.ultimos4} (${r.necesitaAlCliente ? 'el banco pide tu autorización' : 'fue rechazada'}). Para que no se corte tu servicio, escribe *pagar* y elige otra forma. 🙏`).catch(() => {});
-          alertAdmin('cobro-automatico', `El cobro automático de ${c.name || tel} ($${deuda.toFixed(2)}) fue rechazado (${r.motivo || r.estado}). Ya se le pidió que pague por otra vía.`);
-        }
-      } catch (e) {
-        per.estado = 'error'; per.motivo = e.message; schedulePersist();
-        console.error('[auto] cobro de', tel, ':', e.message);
-        alertAdmin('cobro-automatico', `No se pudo hacer el cobro automático de ${c.name || tel}: ${e.message}. Conviene revisarlo antes de su corte de mañana.`);
-      }
-    }
-  }
-  return _resultado(hechos);
-}
-
-/*
- * ¿YA QUEDÓ? Un reporte de falla que nadie cierra.
- *
- * En el panel, 31 de 33 reportes seguían "abiertos" aunque el técnico ya
- * había ido: nadie los cierra. A los tres días el bot le pregunta al cliente
- * si ya quedó, con dos botones. "Sí" cierra el reporte solo; "sigue igual" lo
- * vuelve a subir al asesor con la marca de que ya pasaron tres días.
- */
-const TICKET_DIAS_PREGUNTA = Math.max(1, Number(process.env.TICKET_DIAS_PREGUNTA) || 3);
-async function preguntarSiYaQuedo(force = false) {
-  const hechos = { preguntados: 0 };
-  const hora = Number(new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: 'numeric', hour12: false }).format(new Date()));
-  if (!force && (hora < 10 || hora >= 20)) return hechos;
-  const limite = Date.now() - TICKET_DIAS_PREGUNTA * 24 * 3600 * 1000;
-  for (const t of tickets.values()) {
-    if (!t || t.estado === 'resuelto' || t.preguntadoEn) continue;
-    if (new Date(t.createdAt).getTime() > limite) continue;
-    t.preguntadoEn = new Date().toISOString(); schedulePersist();
-    try {
-      // Va por plantilla (fuera de la ventana de 24 h no llega el texto libre),
-      // y la plantilla no trae botones propios: se contesta con una palabra.
-      await avisarPorIniciativa(t.chatId,
-        `🔧 Hola. Hace unos días reportaste: "${String(t.problema || '').slice(0, 80)}" (folio ${t.folio}). ¿Ya quedó tu servicio? Responde *SÍ* si ya quedó, o *NO* si sigue igual.`);
-      hechos.preguntados++;
-    } catch (e) { console.warn('[tickets] no se pudo preguntar por', t.folio, e.message); }
-  }
-  return hechos;
-}
-
 async function sweepCorteReminders(force = false) {
   try {
     if (!CORTE_REMINDER_ENABLED && !force) return null;
@@ -4350,70 +3528,18 @@ async function sweepCorteReminders(force = false) {
     // Map vivo se cortaría en silencio y media lista se quedaría sin aviso.
     // Aquí mismo se saca de la lista a quien YA PAGÓ: ese no debe recibir nada.
     const candidatos = [];
-    const enRevision = [];
-    let alCorriente = 0, yaPagaron = 0, conProrroga = 0, conAutomatico = 0;
-    /*
-     * Teléfonos con varios contratos. El padrón trae UN registro por teléfono,
-     * así que el otro contrato nunca recibiría su aviso. A los que ya se sabe
-     * que tienen varios (una CLABE por contrato o el automático de uno en
-     * particular) se les mira contrato por contrato en Wisphub; al resto no,
-     * para no pegarle a Wisphub por todo el padrón cada mañana.
-     */
-    const conVarios = new Set();
-    for (const [clave, reg] of stripeClientes) {
-      const { tel, servicioId } = stripeLeon.partirClave(clave);
-      if (servicioId || (reg && reg.autoServicioId)) conVarios.add(tel);
-    }
-    const porContrato = [];   // [phone, c(etiquetado), fc, autoFallo, servicio]
-    for (const tel of conVarios) {
-      const c0 = wisphubClients.get(tel);
-      if (!c0) continue;
-      let lista = [];
-      try { lista = await serviciosDeLaCuenta(tel); } catch (_) { lista = []; }
-      if (lista.length <= 1) { conVarios.delete(tel); continue; }
-      for (const x of lista) {
-        if (!x.fechaCorte || x.fechaCorte !== manana) continue;
-        let debe = /suspend|cort/i.test(String(x.estado || ''));
-        if (!debe) { try { debe = ((await wisphubReactivar.deudaDelCliente(x.usuario)).total || 0) > 0; } catch (_) { debe = clienteDebe(c0); } }
-        if (!debe) { alCorriente++; continue; }
-        if (pagoRecienteDe(tel, x.fechaCorte, x.id)) { yaPagaron++; continue; }
-        if (comprobanteEnRevisionDe(tel)) { enRevision.push(`${c0.name || tel} (${x.etiqueta})`); continue; }
-        if (prorrogaVigente(tel)) { conProrroga++; continue; }
-        let autoFallo = '';
-        const regA = stripeClientes.get(tel) || {};
-        if (regA.cobroAutomatico && String(regA.autoServicioId || c0.wisphubId || '') === String(x.id)) {
-          const per = ((autoCobros[tel] || {})[x.fechaCorte]) || {};
-          if (per.estado !== 'rechazado' && per.estado !== 'sin-tarjeta') { conAutomatico++; continue; }
-          autoFallo = per.estado;
-        }
-        porContrato.push([tel, { ...c0, plan: x.etiqueta }, x.fechaCorte, autoFallo, x]);
-      }
-    }
+    let alCorriente = 0;
     for (const [phone, c] of wisphubClients.entries()) {
-      if (conVarios.has(phone)) continue;   // ya se miró contrato por contrato
       const fc = parseFechaCorte(c.fechaCorte);
       if (!fc || fc !== manana) continue;
       if (!clienteDebe(c)) { alCorriente++; continue; }
-      if (pagoRecienteDe(phone, fc)) { yaPagaron++; continue; }
-      // Mandó comprobante y nadie lo ha revisado: el aviso lo ofende, y lo que urge es revisarlo hoy.
-      if (comprobanteEnRevisionDe(phone)) { enRevision.push(c.name || phone); continue; }
-      if (prorrogaVigente(phone)) { conProrroga++; continue; }
-      // Con cobro automático, el cobro sale hoy mismo: "mañana te cortamos" sería un susto sin sentido.
-      // Salvo que el cobro de este mes ya se haya intentado y NO haya pasado (tarjeta
-      // rechazada, sin tarjeta): entonces el aviso sí le toca, o se corta sin saber.
-      let autoFallo = '';
-      if ((stripeClientes.get(phone) || {}).cobroAutomatico) {
-        const per = ((autoCobros[phone] || {})[fc]) || {};
-        if (per.estado !== 'rechazado' && per.estado !== 'sin-tarjeta') { conAutomatico++; continue; }
-        autoFallo = per.estado;
-      }
-      candidatos.push([phone, c, fc, autoFallo]);
+      candidatos.push([phone, c, fc]);
     }
 
     let sent = 0, failed = 0, yaEnviados = 0;
-    for (const [phone, c, fc, autoFallo, servicio] of [...candidatos, ...porContrato]) {
+    for (const [phone, c, fc] of candidatos) {
       try {
-        const key = servicio ? `${phone}|${fc}|${servicio.id}` : `${phone}|${fc}`;
+        const key = `${phone}|${fc}`;
         if (corteReminders[key]) { yaEnviados++; continue; }
         const first = String(c.name || '').trim().split(/\s+/)[0] || 'cliente';
         const nombre = first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
@@ -4425,28 +3551,6 @@ async function sweepCorteReminders(force = false) {
         // plantilla que es solo "{plan}" y el cliente no tiene plan), usamos la
         // predeterminada — WhatsApp rechaza un cuerpo de plantilla vacío.
         if (!msgCorte.replace(/\s+/g, ' ').trim()) msgCorte = renderCorteVars(CORTE_MSG_DEFAULT, datos);
-        if (servicio) msgCorte = (msgCorte.trim() + ` (Es tu servicio: ${servicio.etiqueta}.)`).slice(0, 900);
-        /*
-         * A los del piloto se les dice que YA pueden pagar desde el teléfono.
-         *
-         * Sin esto nadie se entera de que la opción existe hasta que escribe
-         * PAGAR por su cuenta, y la mayoría no escribe: paga como siempre o no
-         * paga. El recordatorio de corte es el momento exacto en que tienen el
-         * dinero en la cabeza. Solo a quien de verdad le va a salir la opción;
-         * a los demás no se les promete nada.
-         */
-        const fichaViva = fichasOxxo.get(phone);
-        if (fichaViva && Date.now() - fichaViva.cuando < 4 * 86400000) {
-          msgCorte = (msgCorte.trim() + ' 🏪 Si ya pagaste tu ficha de OXXO, no hagas caso a este aviso: la tienda tarda unas horas en reportarlo y en cuanto llegue se registra solo.').slice(0, 900);
-        }
-        if (autoFallo) {
-          msgCorte = (msgCorte.trim() + (autoFallo === 'sin-tarjeta'
-            ? ' ⚠️ Tu cobro automático de este mes no se hizo porque ya no hay una tarjeta guardada.'
-            : ' ⚠️ Tu cobro automático de este mes no pasó: la tarjeta fue rechazada.')).slice(0, 900);
-        }
-        if (stripeLeon.permitido(phone, TELEFONO_PILOTO_STRIPE)) {
-          msgCorte = (msgCorte.trim() + ' 💳 Ahora también puedes pagar desde tu teléfono, con tarjeta o en OXXO, sin ir a la oficina: responde PAGAR y te digo cómo.').slice(0, 1000);
-        }
         await sendWhatsAppTemplate(phone, msgCorte);
         corteReminders[key] = new Date().toISOString();
         sent++;
@@ -4458,50 +3562,22 @@ async function sweepCorteReminders(force = false) {
         await new Promise(r => setTimeout(r, 300)); // pausa para no saturar la API
       } catch (e) { failed++; }
     }
-    /*
-     * A quien le dimos prórroga no se le manda "mañana te cortamos", pero
-     * tampoco se le deja vencer en silencio: el día antes de que se acabe se
-     * le recuerda, con cómo pagar. Es una prórroga, no un olvido.
-     */
-    let prorrogaVence = 0;
-    for (const [telP, p] of Object.entries(prorrogas)) {
-      try {
-        if (!p || p.hasta !== manana) continue;
-        const c = wisphubClients.get(telP);
-        if (!c || !clienteDebe(c) || pagoRecienteDe(telP)) continue;
-        if ((stripeClientes.get(telP) || {}).cobroAutomatico) continue;   // a ese se le cobra solo un día antes de que venza
-        const key = `${telP}|prorroga|${p.hasta}`;
-        if (corteReminders[key]) continue;
-        const first = String(c.name || '').trim().split(/\s+/)[0] || '';
-        const nombre = first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : 'cliente';
-        const pagar = stripeLeon.permitido(telP, TELEFONO_PILOTO_STRIPE)
-          ? ' Responde PAGAR y te digo cómo hacerlo desde tu teléfono (tarjeta, OXXO o transferencia), sin ir a la oficina.'
-          : ' Puedes pagar en la oficina o por transferencia; responde PAGAR y te doy los datos.';
-        await sendWhatsAppTemplate(telP, `Hola ${nombre}, te recordamos que mañana ${bonita} vence la prórroga que te dimos para pagar tu servicio de internet. Si ya pagaste, no hagas caso a este mensaje.${pagar}`);
-        corteReminders[key] = new Date().toISOString();
-        prorrogaVence++;
-        await new Promise(r => setTimeout(r, 300));
-      } catch (e) { failed++; }
-    }
     // Limpieza: registros de hace más de 60 días
     const old = Date.now() - 60 * 24 * 3600 * 1000;
     for (const [k, v] of Object.entries(corteReminders)) {
       if (new Date(v).getTime() < old) delete corteReminders[k];
     }
     schedulePersist();
-    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente, ${yaPagaron} porque ya pagaron por el bot, ${conProrroga} con prórroga (${prorrogaVence} avisados de que mañana vence), ${conAutomatico} con cobro automático`);
+    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente`);
     // Que el filtro se coma a TODOS es señal de que el criterio "debe" no está leyendo lo
     // que creemos (ojo: en el criterio de finanzas "No Pagado" CONTIENE "pagad", así que
     // cuenta como al corriente; si Wisphub usa ese texto, el filtro se apoya solo en el
     // saldo). Falla hacia "no mandar", que es lo seguro, pero en silencio nadie se
     // enteraría hasta que un cliente reclamara que lo cortaron sin avisar.
-    if (!candidatos.length && !porContrato.length && alCorriente) {
+    if (!candidatos.length && alCorriente) {
       alertAdmin('corte-filtro', `Hoy NINGÚN cliente pasó el filtro de deuda: los ${alCorriente} con corte el ${manana} salieron todos "al corriente". Revisa saldo y estado de facturas en el panel antes de dar ese cero por bueno.`);
     }
-    if (enRevision.length) {
-      alertAdmin('corte-en-revision', `📄 ${enRevision.length} cliente(s) con corte mañana mandaron comprobante y siguen SIN REVISAR: ${enRevision.slice(0, 8).join(', ')}${enRevision.length > 8 ? '…' : ''}. No se les mandó aviso de corte; revísalos hoy en el panel (Comprobantes por revisar) para que no se corten con el pago hecho.`);
-    }
-    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico, candidatos: candidatos.length + porContrato.length, porContrato: porContrato.length, forzada: !!force });
+    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, candidatos: candidatos.length, forzada: !!force });
     // Si AYER no quedó constancia, hubo gente que cortó sin recibir su aviso. Se avisa
     // SOLO el día siguiente al hueco (no los 7 días que el hueco sigue apareciendo en la
     // lista), para que la alerta signifique algo y no se vuelva ruido que nadie lee.
@@ -4509,7 +3585,7 @@ async function sweepCorteReminders(force = false) {
     if (huecos[0] === mexicoDateStr(new Date(Date.now() - 86400000))) {
       alertAdmin('corte-hueco', `Sin avisos de corte el/los día(s): ${huecos.join(', ')}. Revisa el despertador de GitHub Actions (parece que Render se durmió).`);
     }
-    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, enRevision: enRevision.length, conProrroga, prorrogaVence, conAutomatico, porContrato: porContrato.length };
+    return { manana, sent, failed, yaEnviados, alCorriente };
   } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 
@@ -4934,42 +4010,6 @@ async function startReportFlow(chatId, text, sendMsg) {
   }
 }
 
-// Comprobantes de titulares con varios contratos: se pregunta para cuál es y
-// la respuesta se anota en el caso, para que la oficina no lo aplique al otro.
-const pendingServicioComprobante = new Map();   // chatId -> { servicios, telTitular, cuando }
-async function preguntarServicioDelComprobante(chatId, titular, sendMsg) {
-  try {
-    const coinc = titular ? coincidenciasDeTitular(titular) : [];
-    const telTitular = coinc.length === 1 ? coinc[0].tel : normalizePhone(chatId);
-    const varios = await serviciosDeLaCuenta(telTitular);
-    if (varios.length <= 1) return false;
-    pendingServicioComprobante.set(String(chatId), { servicios: varios.slice(0, 3), telTitular, cuando: Date.now() });
-    await sendMsg(chatId,
-      `Vi que esa cuenta tiene *${varios.length} servicios*. ¿Para cuál es este pago? 👇`,
-      [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'comp_serv_' + i, title: (/suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
-    return true;
-  } catch (e) { console.warn('[comprobante] no se pudo preguntar el servicio:', e.message); return false; }
-}
-
-/*
- * Fichas de OXXO generadas y todavía sin reportar. La tienda tarda horas (a
- * veces un día) en avisar: si en medio corre el aviso de corte, el que ya
- * pagó en caja no debe recibir "mañana te cortamos" a secas.
- */
-const fichasOxxo = new Map();   // telefono (cuenta) -> { cuando, sesionId }
-
-// El último link o ficha que se le mandó a cada quien, por si "no me abre".
-const ultimoLinkPago = new Map();   // chatId -> { url, forma, cuando, reintento }
-
-// A quién se le acaba de ofrecer el cobro automático ("¿Lo activamos?"): un
-// "sí" o "no" escritos en la media hora siguiente son la respuesta a eso.
-const autoOfrecido = new Map();   // chatId -> ts
-
-// Frases que NO son la respuesta a "¿cuál vas a pagar?" aunque lleguen en ese paso.
-function _pideDatosPagoTemprano(pt) {
-  return /^(pagar|menu|men[uú]|hola|buen|salir|cancelar|otro|a nombre de)/.test(String(pt || ''));
-}
-
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
     // Anti-flood: si UN número manda demasiados mensajes en poco tiempo, ignoramos el
@@ -4986,37 +4026,6 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const _emergencyNow = !_isBtn && isEmergency(text);
 
     // ===== Botones del recordatorio de corte (horario en oficina / datos de pago) =====
-    // Respuesta a "¿ya quedó tu servicio?" de un reporte de falla.
-    let _tkResp = _pt.match(/^tk_(si|no)_(tk[a-z0-9]+)$/);
-    if (!_tkResp) {
-      // Un "sí" o "no" pelón, si hay un reporte suyo con la pregunta hecha y sin contestar.
-      const esSi = /^(s[ií]|ya qued[oó]|ya|listo|ya funciona|ya sirve)[\s.!]*$/.test(_pt);
-      const esNo = /^(no|sigue igual|todav[ií]a no|a[uú]n no|no sirve|sigue sin)[\s.!]*$/.test(_pt);
-      if (esSi || esNo) {
-        // Solo cuenta como respuesta a la pregunta si la pregunta fue hace menos de 2 días:
-        // un "sí" suelto una semana después es de otra conversación.
-        const hace2d = Date.now() - 2 * 24 * 3600 * 1000;
-        const t = [...tickets.values()].filter((x) => String(x.chatId) === String(chatId) && x.preguntadoEn && !x.contestadoEn && x.estado !== 'resuelto' && new Date(x.preguntadoEn).getTime() >= hace2d)
-          .sort((a, b) => new Date(b.preguntadoEn) - new Date(a.preguntadoEn))[0];
-        if (t) _tkResp = [null, esSi ? 'si' : 'no', t.id];
-      }
-    }
-    if (_tkResp) {
-      const t = tickets.get(_tkResp[2]);
-      if (!t || String(t.chatId) !== String(chatId)) { await sendMsg(chatId, 'Ese reporte ya no está. Si sigues con la falla, escríbeme qué pasa y levanto uno nuevo.'); return; }
-      t.contestadoEn = new Date().toISOString();
-      t.updatedAt = new Date().toISOString();
-      if (_tkResp[1] === 'si') {
-        t.estado = 'resuelto'; t.cerradoPor = 'cliente'; schedulePersist();
-        await sendMsg(chatId, `¡Qué bueno! Cierro tu reporte ${t.folio}. Si vuelve a fallar, escríbeme y lo abrimos de nuevo. 🙌`);
-      } else {
-        t.estado = 'abierto'; t.sigueIgual = (t.sigueIgual || 0) + 1; schedulePersist();
-        await sendMsg(chatId, `Lo siento. Le aviso al asesor que tu reporte ${t.folio} sigue sin resolverse para que lo atiendan con prioridad. 🙏`);
-        alertAdmin('ticket-sigue', `⚠️ El reporte ${t.folio} de ${t.name || chatId} (${String(t.problema || '').slice(0, 60)}) sigue SIN resolverse después de ${TICKET_DIAS_PREGUNTA} días: el cliente lo confirmó.`);
-      }
-      return;
-    }
-
     if (_pt === 'pago_horario') {
       await sendMsg(chatId, buildBusinessHoursMessage() + '\n\n🏢 En oficina puedes pagar en *efectivo* o con *tarjeta* (presencial). ¡Te esperamos!');
       return;
@@ -5029,129 +4038,60 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
     // MAQUETA: pagar con tarjeta/OXXO por Stripe, sin mandar comprobante. Repite
     // el candado del número piloto por si alguien manda el id del botón a mano.
-    /*
-     * ── TARJETA U OXXO: PRIMERO CUÁL, DESPUÉS EL LINK ───────────────────────
-     *
-     * Antes este botón entregaba un solo link donde el cliente elegía adentro
-     * de Stripe. Ya no se puede: OXXO cuesta más que la tarjeta y cada uno
-     * tiene su tarifa, así que si eligiera adentro le habríamos cobrado el
-     * cargo de la otra forma. Se le pregunta aquí, con los dos precios a la
-     * vista, y el link ya sale amarrado a lo que escogió.
-     */
     if (_pt === 'pago_tarjeta') {
+      // Se repite el candado por si alguien manda el id del botón a mano: el
+      // menú es una sugerencia, esto es la puerta.
       if (!stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
         await sendMsg(chatId, 'Esa opción todavía no está disponible para tu cuenta. Usa depósito/transferencia y manda tu comprobante como de costumbre. 🙌');
         return;
       }
       try {
-        if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'pago_tarjeta')) return;
-        const ajena = cuentaAjena(chatId);
-        const servicio = servicioEnSesion(chatId);
-        const cobro = await montoACobrar(chatId, ajena, servicio);
-        if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
+        const c = wisphubClients.get(normalizePhone(chatId)) || {};
 
-        const t = stripeLeon.calcularCargo(cobro.monto, 'tarjeta');
-        const o = stripeLeon.calcularCargo(cobro.monto, 'oxxo');
-        const deQuien = ajena
-          ? `La mensualidad de *${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* es de`
-          : 'Tu mensualidad es de';
-        await sendMsg(chatId,
-          `${deQuien} *$${cobro.monto.toFixed(2)}*${cobro.deTexto}. ¿Cómo prefieres pagarla?\n\n`
-          + `💳 *Con tarjeta* — total $${(t.totalCentavos / 100).toFixed(2)}\n`
-          + `   (cargo por pagar en línea: $${(t.cargoCentavos / 100).toFixed(2)})\n\n`
-          + `🏪 *En efectivo en OXXO* — total $${(o.totalCentavos / 100).toFixed(2)}\n`
-          + `   (cargo por pagar en línea: $${(o.cargoCentavos / 100).toFixed(2)})\n\n`
-          + `Cuesta un poco más en OXXO porque la tienda cobra por recibir el efectivo.`
-          + (mesesEnSesion(chatId) > 1 ? ' Si solo quieres pagar un mes, escribe *1 mes*.' : ''),
-          [], { buttons: [
-            { id: 'pago_con_tarjeta', title: '💳 Con tarjeta' },
-            { id: 'pago_con_oxxo', title: '🏪 Efectivo OXXO' },
-          ] });
-      } catch (e) {
-        console.error('[stripe-leon] cotizando tarjeta/OXXO:', e.message);
-        await sendMsg(chatId, 'No pude consultar tu cuenta ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
-      }
-      return;
-    }
-
-    if (_pt === 'pago_con_tarjeta' || _pt === 'pago_con_oxxo') {
-      if (!stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-        await sendMsg(chatId, 'Esa opción todavía no está disponible para tu cuenta. Usa depósito/transferencia y manda tu comprobante como de costumbre. 🙌');
-        return;
-      }
-      const forma = _pt === 'pago_con_oxxo' ? 'oxxo' : 'tarjeta';
-      try {
-        if (await preguntarContratoSiHayVarios(chatId, sendMsg, _pt)) return;
         /*
-         * ¿Para quién es el pago? Para quien escribe, salvo que antes haya
-         * dicho que va a pagar la cuenta de alguien más. En ese caso el link
-         * lleva la cuenta del otro y quien escribe solo pone la tarjeta: al
-         * confirmarse, se reactiva el servicio del dueño y se les avisa a los
-         * dos.
+         * El monto sale de las FACTURAS PENDIENTES, no del campo `saldo`.
+         *
+         * `saldo` parece lo obvio y no lo es: en la instalación de León Telecom
+         * viene en 0.00 para 286 de cada 300 clientes, y negativo (saldo a
+         * favor) para otros 11. Cobrando por ahí, el botón le respondía "no veo
+         * saldo pendiente" a casi todo el mundo y la tarjeta no servía para
+         * nadie.
+         *
+         * La deuda de verdad es la suma de `total` de las facturas en estado
+         * Pendiente. Si Wisphub no contesta, se cae al plan del cliente antes
+         * que dejarlo sin poder pagar.
          */
-        const paraOtro = cuentaAjena(chatId);
-        const telCuenta = paraOtro || normalizePhone(chatId);
-        const c = wisphubClients.get(telCuenta) || {};
-        const servicio = servicioEnSesion(chatId);
-        const cobro = await montoACobrar(chatId, telCuenta, servicio);
-        if (!cobro.ok) { await sendMsg(chatId, cobro.mensaje); return; }
+        let monto = 0;
+        let deTexto = '';
+        try {
+          const d = await wisphubReactivar.deudaDelCliente(c.usuario || '');
+          monto = d.total;
+          deTexto = d.facturas.length > 1 ? ` (${d.facturas.length} mensualidades)` : '';
+        } catch (e) {
+          console.warn('[stripe-leon] no se pudo leer la deuda de', normalizePhone(chatId), '·', e.message);
+        }
+        if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;   // respaldo: su plan
 
+        if (monto <= 0) {
+          await sendMsg(chatId, 'No veo un saldo pendiente en tu cuenta ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏');
+          return;
+        }
         const pago = await stripeLeon.generarLinkPago({
-          telefono: telCuenta, monto: cobro.monto, nombre: c.name,
-          urlBase: SERVER_BASE_URL, forma,
-          pagadoPor: paraOtro ? normalizePhone(chatId) : undefined,
-          // Con esto el webhook abona y reactiva ESE contrato, sin adivinar.
-          servicioId: servicio ? servicio.servicioId : undefined,
-          meses: mesesEnSesion(chatId),
-          cubreHasta: cobro.cubreHasta || undefined,
+          telefono: normalizePhone(chatId), monto, nombre: c.name, urlBase: SERVER_BASE_URL,
         });
-        if (paraOtro) clearSession(chatId);
-        ultimoLinkPago.set(String(chatId), { url: pago.url, forma: _pt, cuando: Date.now() });
-        if (forma === 'oxxo') fichasOxxo.set(telCuenta, { cuando: Date.now(), sesionId: pago.sesionId || '' });
-
-        // Cuando paga por otro, el servicio que se reactiva no es el suyo.
-        const suServicio = paraOtro ? `el servicio de *${c.name || telCuenta}*` : 'tu servicio';
-        const cabeza = forma === 'oxxo'
-          ? (paraOtro ? '🏪 Aquí sale la ficha para pagar en OXXO:' : '🏪 Aquí sale tu ficha para pagar en OXXO:')
-          : '💳 Aquí puedes pagar con tu tarjeta, sin salir de tu casa:';
-        // Si el corte es hoy o mañana (o ya está suspendido), OXXO puede llegar tarde: que lo sepa antes de ir a la tienda.
-        const corteCuenta = parseFechaCorte((servicio && servicio.fechaCorte) || c.fechaCorte);
-        const urge = /suspend|cort/i.test(String((servicio && servicio.estado) || c.status || '')) || (corteCuenta && corteCuenta <= fechaMasDias(1));
-        const cola = forma === 'oxxo'
-          ? '\n\nAbre el link y te da la ficha con el código de barras. Llévala a cualquier OXXO y págala en caja.\n\n'
-            + '⏱️ Tienes 30 minutos para abrir el link, pero la *ficha te dura varios días*.\n\n'
-            + `Cuando la tienda reporte el pago te avisamos por aquí y ${suServicio} se reactiva solo. Puede tardar unas horas. *No mandes comprobante*, nosotros lo vemos.`
-            + (urge ? `\n\n⚠️ Ojo: OXXO puede tardar hasta un día en reportar el pago. Si te urge que ${suServicio} quede activo hoy, con *tarjeta* o *transferencia* se reactiva al momento.` : '')
-          : `\n\nEn cuanto se confirme te avisamos por aquí y ${suServicio} se reactiva solo — no hace falta comprobante.\n\n`
-            + '⏱️ Tienes 30 minutos para abrir el link.';
-
         await sendMsg(chatId,
-          `${cabeza}\n\n`
-          + (paraOtro ? `• Cuenta de: *${c.name || telCuenta}*\n` : '')
-          + (servicio && servicio.etiqueta ? `• Servicio: ${servicio.etiqueta}\n` : '')
-          + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${cobro.deTexto}\n`
+          `💳 Aquí puedes pagar en línea, sin salir de tu casa:\n\n`
+          + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${deTexto}\n`
           + `• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n`
           + `• *Total: $${pago.total.toFixed(2)}*\n\n`
-          + `${pago.url}`
-          + cola
-          + `\n\n⚠️ No pagues además por otra vía: se te cobraría dos veces.\n\n`
-          + `Si prefieres pagar como siempre, por depósito o transferencia directa, sigue siendo gratis: solo mándanos tu comprobante. 🙌`
-          + (forma === 'tarjeta' && !paraOtro && !(stripeClientes.get(telCuenta) || {}).cobroAutomatico ? '\n\n🔁 ¿Quieres que cada mes se cobre solo a tu tarjeta y nunca se corte? Escribe *AUTOMÁTICO*.' : ''));
+          + `${pago.url}\n\n`
+          + `Puedes pagar con *tarjeta* o pedir tu *ficha para OXXO*. En cuanto se confirme te avisamos por aquí y tu servicio se reactiva solo — no hace falta comprobante.\n\n`
+          + `⏱️ Tienes 30 minutos para abrir el link. Si sacas ficha de OXXO, esa sí te dura varios días.\n\n`
+          + `⚠️ Si ya sacaste ficha de OXXO, *no transfieras además a tu CLABE*: se te cobraría dos veces.\n\n`
+          + `Si prefieres pagar como siempre, por depósito o transferencia directa, sigue siendo gratis: solo mándanos tu comprobante. 🙌`);
       } catch (e) {
-        console.error('[stripe-leon] generando link de', forma, ':', e.message);
-        /*
-         * "Intenta en un rato" solo sirve si en un rato va a funcionar. Si lo
-         * que falta es la cuenta de León, el siguiente intento falla igual y el
-         * cliente se estrella dos veces. Ahí se le manda directo a la vía que
-         * sí funciona, sin prometerle nada.
-         */
-        const esDeLaCuenta = /cuenta|aprobada/i.test(e.message || '');
-        if (esDeLaCuenta) {
-          console.error('[stripe-leon] ¡LA CUENTA DE LEÓN NO ESTÁ LISTA! Se le ofreció pagar en línea a un cliente y no se pudo.');
-          await sendMsg(chatId, 'El pago en línea no está disponible en este momento. Paga como siempre, por depósito o transferencia, y mándanos tu comprobante. 🙏');
-        } else {
-          await sendMsg(chatId, 'No pude generar el link de pago ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
-        }
+        console.error('[stripe-leon] generando link:', e.message);
+        await sendMsg(chatId, 'No pude generar el link de pago ahorita. Intenta de nuevo en un rato, o paga como siempre por depósito/transferencia. 🙏');
       }
       return;
     }
@@ -5183,12 +4123,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       try {
-        // La CLABE es de la cuenta que se está pagando (la propia o la de otro)
-        // y, si esa cuenta tiene varios contratos, del contrato elegido.
-        const ajenaClabe = cuentaAjena(chatId);
-        const tel = ajenaClabe || normalizePhone(chatId);
+        const tel = normalizePhone(chatId);
         const c = wisphubClients.get(tel);
-        const servicioClabe = servicioEnSesion(chatId);
 
         /*
          * Solo a clientes de verdad.
@@ -5210,65 +4146,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
           return;
         }
 
-        if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'pago_clabe')) return;
-
-        const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name, servicioId: servicioClabe ? servicioClabe.servicioId : undefined });
-
-        /*
-         * DECIRLE CUÁNTO TRANSFERIR, con el cargo ya sumado.
-         *
-         * Esto no es un detalle de redacción, es de dinero. La comisión sale
-         * del EXCEDENTE sobre lo que el cliente debía: si transfiere justo su
-         * mensualidad, el excedente es cero y no se cobra nada. Y una
-         * transferencia SPEI le cuesta $8.12 a la plataforma, comprobado
-         * contra la API de Stripe. O sea que cada cliente que deposite justo su
-         * plan —que es lo que iba a hacer todo el mundo, porque el mensaje
-         * anterior decía literalmente "transfiere el monto de tu plan"— deja a
-         * OBEX $8.12 abajo. Con el padrón entero eso son más de once mil pesos
-         * al mes de pérdida, en silencio.
-         *
-         * El monto sale de las facturas pendientes, igual que en el botón de
-         * tarjeta. Si Wisphub no contesta se cae al precio de su plan, y si
-         * tampoco hay, se dice sin cifras antes que decir una equivocada.
-         */
-        let deuda = 0;
-        let cuantas = 0;
-        try {
-          // La deuda del contrato elegido, no la del primero que aparezca.
-          const d = await wisphubReactivar.deudaDelCliente((servicioClabe && servicioClabe.usuario) || c.usuario || '');
-          deuda = d.total;
-          cuantas = d.facturas.length;
-        } catch (e) {
-          console.warn('[stripe-leon] sin deuda para la CLABE de', tel, '·', e.message);
-        }
-        if (deuda <= 0) deuda = parseFloat(c.precioPlan) || 0;
-        // Con meses adelantados en la sesión, la transferencia también los lleva.
-        const mesesClabe = mesesEnSesion(chatId);
-        if (mesesClabe > 1 && deuda > 0) { const precioC = parseFloat(c.precioPlan) || deuda; deuda = +(deuda + (mesesClabe - 1) * precioC).toFixed(2); }
-        const cargo = deuda > 0 ? stripeLeon.calcularCargo(deuda, 'clabe') : null;
-
-        const etiquetaMonto = mesesClabe > 1
-          ? (ajenaClabe ? `Sus ${mesesClabe} meses` : `Tus ${mesesClabe} meses`)
-          : cuantas > 1 ? (ajenaClabe ? `Sus ${cuantas} mensualidades` : `Tus ${cuantas} mensualidades`) : (ajenaClabe ? 'Su mensualidad' : 'Tu mensualidad');
-        const bloqueMonto = cargo
-          ? `\n💵 *Transfiere: $${(cargo.totalCentavos / 100).toFixed(2)}*\n`
-            + `   • ${etiquetaMonto}: $${(cargo.baseCentavos / 100).toFixed(2)}\n`
-            + `   • Cargo por pagar en línea: $${(cargo.cargoCentavos / 100).toFixed(2)}\n`
-          : '\n💵 Transfiere el monto de tu recibo más el cargo por pagar en línea.\n';
-
+        const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name });
         await sendMsg(chatId,
-          (ajenaClabe
-            ? `🏦 Esta es la cuenta para pagar el internet de *${c.name}*${servicioClabe && servicioClabe.etiqueta ? ` (${servicioClabe.etiqueta})` : ''}:\n\n`
-            : `🏦 Esta es *tu cuenta personal* para pagar tu internet${servicioClabe && servicioClabe.etiqueta ? ` (${servicioClabe.etiqueta})` : ''}:\n\n`)
+          `🏦 Esta es *tu cuenta personal* para pagar tu internet:\n\n`
           + `*CLABE:* ${datos.clabe}\n`
           + (datos.banco ? `*Banco:* ${datos.banco}\n` : '')
           + (datos.beneficiario ? `*A nombre de:* ${datos.beneficiario}\n` : '')
-          + bloqueMonto
-          + (ajenaClabe
-            ? `\nEsta CLABE es *de esa cuenta* y no cambia nunca: lo que caiga aquí se le abona a *${c.name}*, lo mandes tú o quien sea. Lo único que cambia es el monto, según lo que deba ese mes.\n\n`
-              + `Cuando transfieras, el pago se registra solo y *su* servicio se reactiva — *no hace falta que mandes comprobante*.\n\n`
-            : `\nGuárdala en tu banco: *la CLABE es tuya y no cambia nunca*. Lo único que cambia es el monto, según lo que debas ese mes.\n\n`
-              + `Cuando transfieras, tu pago se registra solo y tu servicio se reactiva — *no hace falta que mandes comprobante*.\n\n`)
+          + `\nGuárdala en tu banco: *es tuya y no cambia nunca*. Cada mes transfiere ahí el monto de tu plan y tu pago se registra solo — no hace falta que mandes comprobante.\n\n`
           + `Si transfieres desde tu app del banco, dala de alta una vez como cuenta frecuente y ya.\n\n`
           + `Si vas a ventanilla y te preguntan a nombre de quién va, enséñales esta pantalla: la cuenta la administra el banco que procesa nuestros pagos. 🙌`);
       } catch (e) {
@@ -5277,500 +4161,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
       return;
     }
-    /*
-     * ═══════════ PAGAR LA CUENTA DE ALGUIEN MÁS ═══════════
-     *
-     * Aquí la gente paga por su mamá, por su suegra, por el vecino que no tiene
-     * WhatsApp. Antes el cobro iba amarrado al teléfono de quien escribe, así
-     * que eso no se podía: la persona pagaba SU cuenta sin querer, o se daba
-     * por vencida y se iba a la oficina.
-     *
-     * El flujo: escribe OTRO, dice de quién (teléfono o nombre como está en el
-     * contrato), confirma, y de ahí sigue el cobro normal pero con la cuenta
-     * del otro. Al confirmarse el pago, se reactiva el servicio del dueño y se
-     * les avisa a los dos.
-     */
-    /*
-     * Lo que dijo hace media hora ya no cuenta. Sin esto, quien dijo OTRO un
-     * martes y se distrajo pagaría la cuenta ajena el jueves, cuando vuelva a
-     * escribir PAGAR para la suya.
-     */
-    const _ses = sesionDePagoAjeno(chatId);
-    // Eligió cuál de sus servicios paga: se guarda y se sigue por donde iba.
-    // "¿Para cuál es este pago?" (comprobante de un titular con varios contratos): botón o texto.
-    const _psc = pendingServicioComprobante.get(String(chatId));
-    if (_psc && Date.now() - _psc.cuando < 30 * 60000 && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && !_emergencyNow) {
-      let idx = -1;
-      const mBtn = _pt.match(/^comp_serv_(\d)$/);
-      if (mBtn) idx = Number(mBtn[1]);
-      else {
-        const qa = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const q = qa(_pt).replace(/[¡!¿?.,]/g, ' ').replace(/\b(el|la|los|las|de|del|que|es|mi|para|ese|esa|este|esta|uno|una|servicio|pago)\b/g, ' ').trim();
-        if (q.length >= 3) { const hits = _psc.servicios.map((x, i) => (qa(x.etiqueta).includes(q) ? i : -1)).filter((i) => i >= 0); if (hits.length === 1) idx = hits[0]; }
-      }
-      if (idx >= 0 && _psc.servicios[idx]) {
-        const el = _psc.servicios[idx];
-        pendingServicioComprobante.delete(String(chatId));
-        const caso = [...caseLog].reverse().find((c) => c.clientId === normalizePhone(chatId) && c.type === 'pago' && c.status === 'pendiente');
-        if (caso) { caso.resumen = String(caso.resumen || '') + ' · 🏠 Servicio: ' + el.etiqueta; caso.servicioId = el.id; schedulePersist(); }
-        await sendMsg(chatId, `Listo, anoté que es para *${el.etiqueta}*. 🙌`);
-        return;
-      }
-      if (mBtn) { pendingServicioComprobante.delete(String(chatId)); await sendMsg(chatId, 'Esa opción ya no está; el asesor lo revisará con tu comprobante. 🙌'); return; }
-    }
-    /*
-     * "¿Cuál vas a pagar?" también se contesta escribiendo: "el local", "la
-     * casa", "el de Juárez", "el suspendido", "el primero", "los dos" no (uno
-     * a la vez). Se busca la palabra en la etiqueta del contrato; si solo uno
-     * coincide, es ese.
-     */
-    let _ptServicio = _pt;
-    if (_ses.state === 'pago_servicio_elegir' && !_isBtn && !/^pago_servicio_\d$/.test(_pt)) {
-      const lista = _ses.data.servicios || [];
-      const quitarAcentos = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const q = quitarAcentos(_pt).replace(/[¡!¿?.,]/g, ' ').replace(/\b(el|la|los|las|de|del|que|es|mi|quiero|pagar|pago|ese|esa|este|esta|uno|una)\b/g, ' ').trim();
-      let idx = -1;
-      const ordinal = q.match(/^(primer[oa]?|1|segund[oa]?|2|tercer[oa]?|3)$/);
-      if (ordinal) idx = /^(primer|1)/.test(ordinal[1]) ? 0 : /^(segund|2)/.test(ordinal[1]) ? 1 : 2;
-      else if (/^(suspendid[oa]|cortad[oa]|sin servicio|debe|deb[oa])$/.test(q)) {
-        const susp = lista.map((x, i) => (/suspend|cort/i.test(x.estado) ? i : -1)).filter((i) => i >= 0);
-        if (susp.length === 1) idx = susp[0];
-      } else if (q.length >= 3) {
-        const hits = lista.map((x, i) => (quitarAcentos(x.etiqueta).includes(q) ? i : -1)).filter((i) => i >= 0);
-        if (hits.length === 1) idx = hits[0];
-      }
-      if (idx >= 0 && lista[idx]) _ptServicio = 'pago_servicio_' + idx;
-      else if (q.length >= 3 && !/^(men[uú]|salir|cancelar|volver)$/.test(q) && !_pideDatosPagoTemprano(_pt)) {
-        await sendMsg(chatId, 'No supe cuál de los dos: toca el botón del servicio que vas a pagar. 👆');
-        return;
-      }
-    }
-    if (_ses.state === 'pago_servicio_elegir' && /^pago_servicio_\d$/.test(_ptServicio)) {
-      const el = (_ses.data.servicios || [])[Number(_ptServicio.slice(-1))];
-      if (!el) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *pagar* para empezar de nuevo.'); return; }
-      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: _ses.data.pagarPara || '', servicioId: el.id, usuario: el.usuario, etiqueta: el.etiqueta, meses: _ses.data.meses || 1, desde: Date.now() } });
-      return handleChatMessage(chatId, _ses.data.siguiente || (_ses.data.viaClabe ? 'pago_clabe' : 'pago_tarjeta'), sendMsg);
-    }
-    // Si acaba de mandar un comprobante y el bot le preguntó a nombre de quién
-    // está, lo que escriba es esa respuesta, no un nombre para buscar.
-    const _conComprobante = pendingImage.has(_pendKey) || pendingDoc.has(_pendKey);
-    // "menú", "salir" o un saludo sacan de CUALQUIER paso de pagar por otro: si
-    // no, lo escrito se buscaría como nombre, o el menú principal se abriría con
-    // la cuenta ajena todavía pegada.
-    if (String(_ses.state || '').startsWith('pago_otro_') && !_isBtn
-        && /^(men[uú]|salir|cancelar|inicio|hola|regresar|volver)[\s.!]*$/.test(_pt)) {
-      clearSession(chatId);
-      await sendMsg(chatId, 'Listo, lo dejamos ahí. Cuando quieras pagar tu cuenta escribe *pagar*; si es la de alguien más, escribe *OTRO*.');
-      return;
-    }
-    if (_ses.state === 'pago_otro_buscar' && !_isBtn && !_emergencyNow && !_conComprobante) {
-      const digitos = text.replace(/\D/g, '');
-      // Sin acentos de los dos lados: "ana perez" tiene que dar con "Ana Pérez".
-      const sinAcentos = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
-      const nombreBuscado = sinAcentos(text);
-      const encontrados = [];
-      for (const [tel, c] of wisphubClients.entries()) {
-        const porTel = digitos.length >= 7 && tel.endsWith(digitos.slice(-10));
-        const porNombre = nombreBuscado.length >= 4 && sinAcentos(c.name).includes(nombreBuscado);
-        if ((porTel || porNombre) && tel !== normalizePhone(chatId)) encontrados.push({ tel, name: c.name || tel });
-        if (encontrados.length >= 4) break;
-      }
-      // Más de tres es demasiado para los botones de WhatsApp: mejor afinar la búsqueda.
-      if (encontrados.length > 3) {
-        await sendMsg(chatId, `Hay varias personas con "${text.trim().slice(0, 40)}". Escríbeme el *nombre con apellidos* completo, o mejor su *número de teléfono*, para dar con la cuenta correcta.`);
-        return;
-      }
-      if (!encontrados.length) {
-        await sendMsg(chatId, 'No encontré una cuenta con eso. Escríbeme el *número de teléfono* que tiene registrado, o el *nombre completo* como aparece en su contrato. Si prefieres salir, escribe *menú*.');
-        return;
-      }
-      setSession(chatId, { state: 'pago_otro_confirmar', data: { candidatos: encontrados, meses: _ses.data.meses || 1, desde: Date.now() } });
-      /*
-       * WhatsApp corta los títulos a 20 letras. Dos "María del Carmen López"
-       * distintas se verían iguales; si chocan, se les pega el final del
-       * teléfono para que quien paga sepa cuál es la suya.
-       */
-      const cortos = encontrados.map((e) => String(e.name).slice(0, 20));
-      const botones = encontrados.map((e, i) => {
-        const repetido = cortos.filter((c) => c === cortos[i]).length > 1;
-        const title = repetido ? `${String(e.name).slice(0, 13)} ·${e.tel.slice(-4)}` : cortos[i];
-        return { id: 'pago_otro_es_' + i, title };
-      });
-      await sendMsg(chatId,
-        encontrados.length === 1
-          ? `¿Es la cuenta de *${encontrados[0].name}*?`
-          : 'Encontré estas cuentas. ¿Cuál es?',
-        [], { buttons: botones });
-      return;
-    }
-    /*
-     * "¿Es la cuenta de Ana Pérez?" se contesta con el botón, pero mucha gente
-     * escribe "sí" (o "no"). Con una sola candidata, "sí" es esa; "no" vuelve a
-     * preguntar de quién es. Con varias, "sí" no dice cuál: se le pide tocar.
-     */
-    let _ptConfirmar = _pt;
-    if (_ses.state === 'pago_otro_confirmar' && !_isBtn) {
-      const cand = _ses.data.candidatos || [];
-      const siLimpio = _pt.replace(/[¡!¿?.,\s]+/g, ' ').trim();
-      if (/^(s[ií]|s[ií] es|s[ií] es esa|s[ií] esa|esa|esa es|esa misma|correcto|as[ií] es|exacto|claro|ella|[eé]l|es ella|es [eé]l|s[ií] ella|s[ií] [eé]l)$/.test(siLimpio)) {
-        if (cand.length === 1) _ptConfirmar = 'pago_otro_es_0';
-        else { await sendMsg(chatId, 'Son varias con ese nombre: toca el botón de la que es. 👆'); return; }
-      } else if (/^(no|nel|nop|otra|otro|esa no)\b/.test(siLimpio) && siLimpio.length <= 60) {
-        // "no", "no es esa", "no, esa no"... y "no, es Ana Pérez Gómez": lo que sobre se busca de una vez.
-        const relleno = new Set(['no', 'nel', 'nop', 'es', 'esa', 'ese', 'ella', 'el', 'él', 'de', 'del', 'la', 'otra', 'otro', 'sino', 'mejor']);
-        const palabras = siLimpio.split(' ');
-        while (palabras.length && relleno.has(palabras[0])) palabras.shift();
-        const resto = palabras.join(' ').trim();
-        setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now(), meses: _ses.data.meses || 1 } });
-        if (resto.length >= 4) return handleChatMessage(chatId, resto, sendMsg);
-        await sendMsg(chatId, 'Va. ¿De quién es la cuenta? Escríbeme el *nombre completo* o el *teléfono* como está en el contrato.');
-        return;
-      }
-    }
-    if (_ses.state === 'pago_otro_confirmar' && /^pago_otro_es_\d$/.test(_ptConfirmar)) {
-      const elegido = (_ses.data.candidatos || [])[Number(_ptConfirmar.slice(-1))];
-      if (!elegido) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *OTRO* para buscar de nuevo.'); return; }
-      // Se deja la cuenta elegida en la sesión: el cobro de tarjeta/OXXO la lee.
-      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, meses: _ses.data.meses || 1, desde: Date.now() } });
-      let cuanto = '';
-      try {
-        // Con varios contratos se pregunta CUÁL de una vez (con lo que debe cada uno); al elegir, sigue el menú de pago.
-        const contratos = await serviciosDeLaCuenta(elegido.tel);
-        if (contratos.length > 1) {
-          await sendMsg(chatId, `Perfecto, vas a pagar la cuenta de *${elegido.name}*.`);
-          if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'pagar')) return;
-        } else {
-          // Si esa cuenta ya pagó este mes, que quien va a pagar lo sepa antes de pagar dos veces.
-          const vistoAjena = mesesEnSesion(chatId) <= 1 ? pagoRecienteDe(elegido.tel) : null;
-          const cobro = await montoACobrar(chatId, elegido.tel);
-          if (vistoAjena) cuanto = ` ✅ Ojo: *${elegido.name}* ya tiene registrado el pago de este mes (${canalTexto(vistoAjena.canal)}). Si quieres adelantarle el siguiente${cobro.ok ? ` (*$${cobro.monto.toFixed(2)}*)` : ''}, elige cómo; si no, no hace falta pagar nada.`;
-          else if (cobro.ok) cuanto = ` Su mensualidad es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`;
-        }
-      } catch (_) { /* sin monto se sigue igual */ }
-      await sendMsg(chatId,
-        `Perfecto, vas a pagar la cuenta de *${elegido.name}*.${cuanto} ¿Cómo quieres pagar? Toca una opción 👇\n\n`
-        + '🏦 Transferencia: te doy la CLABE de *su* cuenta; lo que caiga ahí se le abona a ella.\n💳 Tarjeta: pagas desde tu teléfono.\n🏪 OXXO: te doy una ficha para pagar en caja.',
-        [], { buttons: [
-          { id: 'pago_clabe', title: '🏦 Transferencia' },
-          { id: 'pago_con_tarjeta', title: '💳 Tarjeta' },
-          { id: 'pago_con_oxxo', title: '🏪 OXXO (efectivo)' },
-        ] });
-      return;
-    }
-    /*
-     * "otro" solo abre este flujo cuando no está a media conversación de otra
-     * cosa: en el paso de elegir plan o de dar una ubicación, "otro" es una
-     * respuesta a ESA pregunta y no hay que robársela.
-     */
-    // El menú principal no es "otra cosa": desde ahí OTRO tiene que funcionar.
-    const _enOtraCosa = !!_ses.state && !String(_ses.state).startsWith('pago_otro_') && _ses.state !== 'awaiting_menu_choice';
-    /*
-     * "Pago de internet a nombre de Ana Lilia Hernández": así escribe la gente
-     * de verdad (106 de 169 pagos recientes vienen con "a nombre de"). No hay
-     * que enseñarles a escribir OTRO: se toma el nombre y se busca de una vez.
-     */
-    const _aNombreDe = (text.match(/a nombre de\s+(?:la\s+se[ñn]ora?\s+|el\s+se[ñn]or\s+|don\s+|do[ñn]a\s+)?([^\n,.;]{4,60})/i) || [])[1];
-    if (_aNombreDe && !_enOtraCosa && !_conComprobante && !_isBtn
-        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      // "3 meses a nombre de mi mamá": los meses viajan con la búsqueda hasta el cobro.
-      const _mesesAjenos = (_pt.match(/(\d{1,2}|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s*meses/) || [])[1];
-      const _palabrasM = { dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12 };
-      const _nMeses = _mesesAjenos ? Math.min(12, Math.max(1, _palabrasM[_mesesAjenos] || Number(_mesesAjenos) || 1)) : 1;
-      setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now(), ...(_nMeses > 1 ? { meses: _nMeses } : {}) } });
-      // "a nombre de mi mamá Ana Pérez": el parentesco sobra para buscar.
-      const nombreLimpio = _aNombreDe.trim().replace(/^(mi|la|el|de mi|de la|del)\s+(mam[aá]|pap[aá]|esposa?|hij[oa]|herman[oa]|suegr[ao]|abuel[oa]|t[ií][ao]|vecin[oa]|se[ñn]ora?|patr[oó]n[a]?|jef[ea])\s+/i, '').trim();
-      return handleChatMessage(chatId, nombreLimpio || _aNombreDe.trim(), sendMsg);
-    }
-    /*
-     * "3 meses", "pagar 6 meses", "adelantar dos meses": se guarda cuántos y
-     * se cotiza de una vez con el total. Solo en el piloto.
-     */
-    // También como lo escriben de verdad: "¿puedo pagar dos meses de internet?", "quisiera adelantar 3 meses".
-    const _mesesTxt = _pt.replace(/^[¿¡\s]+|[?!.\s]+$/g, '').match(/^(?:hola[,.!\s]*)?(?:(?:quiero|quisiera|puedo|podr[ií]a|me gustar[ií]a|voy a|deseo|se puede|si puedo|cu[aá]nto(?: es| sale| ser[ií]a| cuesta)?(?: por| si pago| de)?)\s+)?(?:pagar(?:le|te)?|adelantar|abonar|pago|adelanto|cubrir)?\s*(?:de\s+|los\s+|por\s+)?(\d{1,2}|un|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s*mes(es)?(\s+(adelantad|por adelantado|de jal[oó]n|juntos|seguidos|de una vez|de internet|de servicio|de mi (internet|servicio|plan)).*)?$/);
-    if (_mesesTxt && !_enOtraCosa && !_conComprobante
-        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      const palabras = { dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12 };
-      const meses = Math.min(12, Math.max(1, palabras[_mesesTxt[1]] || Number(_mesesTxt[1]) || 1));
-      const previa = sesionDePagoAjeno(chatId);
-      const data = previa.state === 'pago_otro_listo' ? { ...previa.data } : {};
-      setSession(chatId, { state: 'pago_otro_listo', data: { ...data, pagarPara: data.pagarPara || '', meses, desde: Date.now() } });
-      if (meses === 1) return handleChatMessage(chatId, 'pagar', sendMsg);
-      return handleChatMessage(chatId, 'pago_tarjeta', sendMsg);
-    }
-    /*
-     * ── COBRO AUTOMÁTICO: ACTIVAR Y CANCELAR ──────────────────────────────
-     * Se pide con una palabra, se explica en dos líneas y se confirma con un
-     * botón. Cancelar es igual de fácil: nadie debe sentirse atrapado.
-     */
-    // "¿Lo activamos?" contestado con palabras: "sí", "dale", "va" activan; "no", "ahora no" no.
-    const _ofrecidoHace = autoOfrecido.get(String(chatId)) || 0;
-    if (_ofrecidoHace && Date.now() - _ofrecidoHace < 30 * 60000 && !_isBtn && !_enOtraCosa && !_conComprobante) {
-      const t = _pt.replace(/[¡!¿?.,\s]+/g, ' ').trim();
-      if (/^(s[ií]|s[ií] (claro|dale|va|por favor|porfa|act[ií]valo|quiero|cada mes|est[aá] bien)|dale|va|claro|ok|okey|de acuerdo|act[ií]valo|act[ií]var|activar|que s[ií]|s[ií] s[ií]|est[aá] bien|adelante)$/.test(t)) {
-        autoOfrecido.delete(String(chatId));
-        return handleChatMessage(chatId, 'auto_si', sendMsg);
-      }
-      if (/^(no|ahora no|no gracias|nel|luego|despu[eé]s|no por ahora|mejor no|todav[ií]a no|a[uú]n no|no quiero|no por el momento)( gracias| por ahora| por el momento| mejor)?$/.test(t)) {
-        autoOfrecido.delete(String(chatId));
-        await sendMsg(chatId, 'Va, sin problema. Cuando quieras activarlo, escribe *AUTOMÁTICO*. 🙌');
-        return;
-      }
-    }
-    // Como lo dice la gente: "ya no quiero el cobro automático", "quítame lo automático", "cancela mi suscripción".
-    const _cancelaAuto = /^(?:hola[,.!\s]*)?(?:por favor\s+)?(cancelar|cancela|cancelen|cancelame|cancélame|quitar|quita|quiten|quitame|quítame|desactivar|desactiva|desactiven|ya no quiero|ya no|no quiero|dar de baja|den de baja|baja|suspender|suspende)\s+(?:el\s+|la\s+|lo\s+|mi\s+|del\s+|de\s+)?(?:cobro\s+|pago\s+|cargo\s+)?(?:autom[aá]tic[oa]|suscripci[oó]n|domiciliaci[oó]n)/.test(_pt.replace(/[¿¡?!.]+$/g, ''));
-    if ((_cancelaAuto || _pt === 'auto_no') && !_enOtraCosa) {
-      const tel = normalizePhone(chatId);
-      const reg = stripeClientes.get(tel);
-      if (reg && reg.cobroAutomatico) {
-        stripeClientes.set(tel, { ...reg, cobroAutomatico: false, autoCanceladoEn: new Date().toISOString() });
-        schedulePersist();
-        await sendMsg(chatId, 'Listo, quité el cobro automático: ya no se va a cobrar nada a tu tarjeta por su cuenta. Cada mes escribe *pagar* y eliges cómo. 🙌');
-      } else {
-        await sendMsg(chatId, 'No tienes cobro automático activo, así que no hay nada que quitar. Si quieres activarlo, escribe *AUTOMÁTICO*.');
-      }
-      return;
-    }
-    if ((/^(autom[aá]tico|cobro autom[aá]tico|activar (el )?(cobro )?autom[aá]tico|suscripci[oó]n|domiciliar|domiciliaci[oó]n|pago autom[aá]tico)[\s.!]*$/.test(_pt) || _pt === 'auto_si')
-        && !_enOtraCosa && !_conComprobante
-        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      const tel = normalizePhone(chatId);
-      const c = wisphubClients.get(tel) || {};
-      if (_pt !== 'auto_si') {
-        const reg = stripeClientes.get(tel);
-        if (reg && reg.cobroAutomatico) {
-          await sendMsg(chatId, 'Ya tienes el cobro automático activo: un día antes de tu fecha de pago se cobra a tu tarjeta guardada, y te aviso el día anterior. Para quitarlo, escribe *CANCELAR AUTOMÁTICO*.');
-          return;
-        }
-        await sendMsg(chatId,
-          '🔁 *Cobro automático cada mes*\n\n'
-          + 'Pagas una vez con tu tarjeta y queda guardada. De ahí en adelante:\n'
-          + '• Dos días antes de tu fecha de pago te aviso cuánto se va a cobrar.\n'
-          + '• Un día antes se cobra solo, y tu servicio nunca se corta.\n'
-          + '• Lo quitas cuando quieras escribiendo *CANCELAR AUTOMÁTICO*.\n\n'
-          + '¿Lo activamos?',
-          [], { buttons: [{ id: 'auto_si', title: '✅ Sí, cada mes' }, { id: 'auto_no', title: '❌ Ahora no' }] });
-        autoOfrecido.set(String(chatId), Date.now());
-        return;
-      }
-      autoOfrecido.delete(String(chatId));
-      try {
-        if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'auto_si')) return;
-        const servicio = servicioEnSesion(chatId);
-        const cobro = await montoACobrar(chatId, '', servicio);
-        // Hace falta un cliente de Stripe al cual pegarle la tarjeta: el mismo de su CLABE.
-        const datos = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: c.name, servicioId: servicio ? servicio.servicioId : undefined });
-        const monto = cobro.ok ? cobro.monto : (parseFloat(c.precioPlan) || 0);
-        if (monto <= 0) { await sendMsg(chatId, 'No veo un saldo ni un plan en tu cuenta para activar el cobro. Escríbele a un asesor. 🙏'); return; }
-        const pago = await stripeLeon.generarLinkPago({
-          telefono: tel, monto, nombre: c.name, urlBase: SERVER_BASE_URL, forma: 'tarjeta',
-          guardarTarjeta: true, clienteId: datos.clienteId,
-          servicioId: servicio ? servicio.servicioId : undefined,
-          cubreHasta: (cobro.ok && cobro.cubreHasta) || undefined,
-        });
-        await sendMsg(chatId,
-          '💳 Paga esta vez con tu tarjeta y queda guardada para los meses que vienen:\n\n'
-          + `• Mensualidad: $${pago.mensualidad.toFixed(2)}${cobro.ok ? cobro.deTexto : ''}\n`
-          + `• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n`
-          + `• *Total: $${pago.total.toFixed(2)}*\n\n`
-          + `${pago.url}\n\n`
-          + 'En cuanto se confirme, el cobro automático queda activo. ⏱️ Tienes 30 minutos para abrir el link.');
-        ultimoLinkPago.set(String(chatId), { url: pago.url, forma: 'auto_si', cuando: Date.now() });
-      } catch (e) {
-        console.error('[auto] activar:', e.message);
-        await sendMsg(chatId, /cuenta|aprobada/i.test(e.message || '') ? 'El pago en línea no está disponible en este momento. Paga como siempre y mándanos tu comprobante. 🙏' : 'No pude preparar el cobro automático ahorita. Intenta de nuevo en un rato. 🙏');
-      }
-      return;
-    }
-    /*
-     * "¿Cuándo es mi corte?" es de las preguntas más comunes y el aviso de
-     * lanzamiento prometió contestarla. Se contesta con el dato de Wisphub, sin
-     * IA de por medio, y con el monto si debe algo.
-     */
-    if (/(cu[aá]ndo|que d[ií]a|qu[eé] d[ií]a|fecha)\s.*(corte|vence|pago|pagar)|^(mi|fecha de) corte|^corte[\s?]*$|cu[aá]ndo me (cortan|toca pagar)/.test(_pt)
-        && !_enOtraCosa && !_conComprobante && !_isBtn) {
-      const telC = normalizePhone(chatId);
-      const c = wisphubClients.get(telC);
-      if (!c) {
-        await sendMsg(chatId, 'No encuentro un servicio a nombre de este número. Si eres cliente, escríbele a un asesor con tu nombre completo para revisarlo. 🙏');
-        return;
-      }
-      // Con varios contratos, se dice cómo va cada uno.
-      const variosC = await serviciosDeLaCuenta(telC);
-      if (variosC.length > 1) {
-        const { lineas, debeAlgo } = await describirContratos(variosC);
-        await sendMsg(chatId,
-          `Tienes *${variosC.length} servicios* con nosotros:\n` + lineas.join('\n')
-          + (debeAlgo ? '\n\nEscribe *pagar* y te pregunto cuál quieres pagar.' : '\n\nEstás al corriente en los dos. 🙌'));
-        return;
-      }
-      const corte = parseFechaCorte(c.fechaCorte);
-      const bonita = corte ? corte.split('-').reverse().join('/') : '';
-      const suspendido = /suspend|cort/i.test(String(c.status || ''));
-      let monto = '';
-      // Si el bot ya vio su pago (aunque Wisphub siga diciendo que debe), no se le cobra en el mensaje.
-      const vistoC = pagoRecienteDe(telC);
-      if (vistoC) monto = /^adelantado hasta /.test(vistoC.canal) ? ` ✅ Estás pagado hasta el *${vistoC.canal.slice(-10).split('-').reverse().join('/')}*.` : ` ✅ Ya tenemos tu pago de este mes (${canalTexto(vistoC.canal)}).`;
-      else try { const cobro = await montoACobrar(chatId, ''); if (cobro.ok && clienteDebe(c)) monto = ` Tienes pendiente *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`; } catch (_) { /* sin monto */ }
-      const prC = prorrogaVigente(telC);
-      const prTexto = prC ? `\n⏳ Tienes prórroga hasta el *${fechaConDia(prC.hasta)}*: no se te corta antes.` : '';
-      await sendMsg(chatId,
-        (suspendido ? '🔴 Tu servicio está *suspendido*.' : (corte ? `📅 Tu fecha de corte es el *${bonita}*.` : '📅 No tengo tu fecha de corte a la mano.'))
-        + monto + prTexto
-        + (vistoC ? ' Estás al corriente. 🙌' : (suspendido || monto ? '\n\nEscribe *pagar* y te digo cómo, o *cuánto debo* para ver el detalle.' : '\n\nEstás al corriente. 🙌')));
-      return;
-    }
-    /*
-     * "Para que me reconecten", "ya pagué y sigo sin servicio", "aún no tengo
-     * servicio": frases reales. Si el bot ya vio el pago y Wisphub lo tiene
-     * suspendido, se manda reactivar de una vez (con el contrato correcto) y
-     * se avisa a la oficina; si está activo, es cosa del módem; si no hay
-     * pago a la vista, se le pide el comprobante.
-     */
-    if (/(reconect|reconex|restable|reactiv)|(ya pagu[eé]|ya deposit[eé]|ya transfer[ií]).{0,40}(sin (servicio|internet|se[ñn]al)|no (tengo|hay|me han)|sigo|todav[ií]a|a[uú]n)|(a[uú]n|todav[ií]a) no (tengo|hay) (servicio|internet|se[ñn]al)|sigo sin (servicio|internet)/.test(_pt)
-        && !_enOtraCosa && !_conComprobante && !_isBtn && !_emergencyNow) {
-      const telR = normalizePhone(chatId);
-      const cR = wisphubClients.get(telR);
-      if (cR) {
-        const visto = pagoRecienteDe(telR);
-        const enRev = comprobanteEnRevisionDe(telR);
-        const suspendido = /suspend|cort/i.test(String(cR.status || ''));
-        if (visto && suspendido) {
-          // El pago ya está y sigue cortado: se reactiva ya, sin esperar a nadie.
-          let ok = false;
-          try {
-            const varios = await serviciosDeLaCuenta(telR);
-            const objetivo = varios.length === 1 ? varios[0] : (varios.find((x) => /suspend|cort/i.test(x.estado)) || null);
-            const idSvc = (objetivo && objetivo.id) || cR.wisphubId;
-            if (idSvc) { await wisphubReactivar.reactivarServicio(idSvc); ok = true; }
-          } catch (e) { console.warn('[reconexion] no se pudo reactivar a', telR, '·', e.message); }
-          if (ok) {
-            await sendMsg(chatId, `✅ Tu pago ya está registrado (${canalTexto(visto.canal)}) y acabo de mandar reactivar tu servicio. En unos minutos reinicia tu módem (desconéctalo 10 segundos) y ya debe navegar. Si en media hora sigue igual, escríbeme *no tengo internet* y levanto el reporte. 🙌`);
-          } else {
-            await notifyAgentRequest(chatId, ['🔌 PAGÓ Y SIGUE SIN SERVICIO', `Cliente: ${cR.name || telR}`, `Pago visto: ${canalTexto(visto.canal)}`, 'Wisphub lo tiene suspendido y no se pudo reactivar desde aquí: revísalo.'].join('\n'), '').catch(() => false);
-            await sendMsg(chatId, `Tu pago ya está registrado (${canalTexto(visto.canal)}), pero tu servicio sigue marcado como suspendido. Ya le pasé el caso a la oficina para que te reconecten en un momento. 🙏`);
-          }
-          return;
-        }
-        if (visto && !suspendido) {
-          await sendMsg(chatId, `Tu pago ya está registrado (${canalTexto(visto.canal)}) y tu servicio aparece *activo*. Reinicia tu módem: desconéctalo 10 segundos y vuelve a conectarlo. Si sigue sin navegar, escríbeme *no tengo internet* y levanto el reporte. 🙌`);
-          return;
-        }
-        if (enRev) {
-          await sendMsg(chatId, '📄 Tu comprobante ya lo tiene la oficina y lo está revisando; en cuanto lo den por bueno tu servicio se reactiva solo y te aviso por aquí. 🙏');
-          return;
-        }
-        if (suspendido) {
-          await sendMsg(chatId, `Tu servicio está *suspendido* y no veo un pago registrado. Si ya pagaste, *mándame la foto o el PDF de tu comprobante* y en cuanto la oficina lo dé por bueno tu servicio se reactiva solo. Si prefieres, escribe *pagar* y te digo cómo pagar desde tu teléfono${stripeLeon.permitido(telR, TELEFONO_PILOTO_STRIPE) ? ' (con tarjeta se reactiva al momento)' : ''}. 🙌`);
-          return;
-        }
-      }
-    }
-    /*
-     * "Ya pagué" / "ya deposité" sin comprobante. Es de lo más común en las
-     * conversaciones reales ("Sea depositado 440", "el pago se hizo el 14").
-     * Si el bot ya vio ese pago, se lo confirma; si no, le pide la foto del
-     * comprobante en vez de dejarlo esperando una respuesta que no llega.
-     */
-    if ((/^(ya (pagu[eé]|deposit[eé]|transfer[ií]|hice el pago|realic[eé] el pago|se pag[oó])|(se|sea|le|ya se|ya le) ?(deposit|transfir|transfer|hizo el pago|realiz[oó] el pago)|(el )?pago (ya )?(se hizo|est[aá] hecho|fue realizado)|deposit[eé] (los|el|\$)|transfer[ií] (los|el|\$))/.test(_pt)
-         // "¿Ya quedó registrado mi pago?", "si fue registrado ya el pago", "ya se reflejó"
-         || /(registr|aplic|reflej|recib)\w*\s.{0,25}pago|pago\s.{0,30}(registr|aplic|reflej|recib)|ya (lleg|entr)[oó] (mi|el) pago/.test(_pt)
-         // "buen día, envío pago de internet", "le mando el comprobante", "aquí está mi pago" (el archivo viene aparte)
-         || /(env[ií]o|envio|le env[ií]o|te env[ií]o|mando|le mando|te mando|adjunto|aqu[ií] (est[aá]|va|le va|te va)|ah[ií] (va|est[aá]))\s+(el |mi |su |la |los |las )?(pago|comprobante|ficha|recibo|captura|transferencia|dep[oó]sito|voucher)|^(pago|comprobante) (de|del) (internet|servicio|mes)/.test(_pt))
-        && !_enOtraCosa && !_conComprobante && !_isBtn) {
-      const telP = normalizePhone(chatId);
-      const visto = pagoRecienteDe(telP);
-      // Un comprobante que ya mandó y la oficina todavía no revisa: no se le vuelve a pedir.
-      const enRevision = comprobanteEnRevisionDe(telP);
-      const porOtro = visto ? null : pagoHechoPor(telP);
-      if (visto) {
-        await sendMsg(chatId, `✅ Sí, tu pago ya está registrado (${canalTexto(visto.canal)}). No hace falta que mandes nada más. 🙌`);
-      } else if (porOtro) {
-        const nombreT = (wisphubClients.get(porOtro.titular) || {}).name || 'esa cuenta';
-        await sendMsg(chatId, `✅ Sí, el pago que hiciste para *${nombreT}* ya está registrado (${canalTexto(porOtro.canal)}). No hace falta que mandes nada más. 🙌`);
-      } else if (enRevision) {
-        await sendMsg(chatId, '📄 Ya tenemos tu comprobante y la oficina lo está revisando. En cuanto lo den por bueno te aviso por aquí (y si estabas suspendido, se reactiva solo); no hace falta que lo vuelvas a mandar. 🙌');
-      } else if (/(env[ií]o|envio|mando|adjunto|aqu[ií]|ah[ií])/.test(_pt)) {
-        // Avisa que lo manda: el archivo llega aparte, y con él el bot pregunta a nombre de quién.
-        await sendMsg(chatId, '👍 Perfecto. En cuanto llegue la *foto o el PDF* del comprobante lo mando a revisar y te confirmo por aquí. Si el servicio está a nombre de otra persona, escríbeme su nombre completo.');
-      } else {
-        await sendMsg(chatId, '👍 Gracias. Para registrarlo, *mándame la foto o el PDF de tu comprobante* aquí mismo y te confirmo en cuanto la oficina lo revise. Si pagaste por el bot (tarjeta, OXXO o tu CLABE), no hace falta: se registra solo.');
-      }
-      return;
-    }
-    /*
-     * "Pago del señor Félix Ramos", "pago de servicio de Víctor Caballero":
-     * también así avisan que pagan por otro. Aquí solo se toma como pago por
-     * otro si el nombre existe en el padrón; si no, sigue el flujo normal.
-     */
-    const _pagoDe = (text.match(/^(?:buen(?:[oa]s?)?\s+(?:d[ií]as?|tardes|noches)[,.]?\s*)?(?:pago|pagar|abono)\s+(?:de|del|para)\s+(?:(?:el\s+)?servicio\s+(?:de|del)\s+|internet\s+(?:de|del)\s+)?(?:(?:el|la)\s+)?(?:se[ñn]ora?|don|do[ñn]a|sr\.?|sra\.?)?\s*([^\n,.;]{6,60})$/i) || [])[1];
-    if (_pagoDe && !_aNombreDe && !_enOtraCosa && !_conComprobante && !_isBtn
-        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      const norm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
-      const q = norm(_pagoDe);
-      const hay = q.length >= 6 && [...wisphubClients.entries()].some(([tel, c]) => tel !== normalizePhone(chatId) && norm(c.name).includes(q));
-      if (hay) {
-        setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
-        return handleChatMessage(chatId, _pagoDe.trim(), sendMsg);
-      }
-    }
-    if (/^(oficina|en la oficina|pagar en oficina|otras formas)[\s.!]*$/.test(_pt) && !_enOtraCosa) {
-      return handleChatMessage(chatId, 'pago_otras', sendMsg);
-    }
-    if (/^(otro|pagar otro|pagar por otro|pagar (el|la) de|es de otra persona|de otra persona|de alguien m[aá]s)/.test(_pt)
-        && !_enOtraCosa && !_conComprobante
-        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
-      await sendMsg(chatId, '¿De quién es la cuenta que quieres pagar? Escríbeme su *número de teléfono* o su *nombre completo* como está en el contrato.');
-      return;
-    }
-
     // Intención de pago (o el "PAGAR" que sugiere el recordatorio de corte) → botones.
-    /*
-     * Así piden los datos de pago en las conversaciones reales: "Para pagar en
-     * transferencia?", "Proporcionarme los números de cuenta para depositar",
-     * "me pasan la clabe". Todo eso es "quiero pagar".
-     */
-    const _pideDatosPago = /n[uú]meros? de cuenta|cuenta para (depositar|transferir|pagar)|d[oó]nde (deposito|transfiero|le deposito|hago el pago)|(en|por) transferencia\??$|datos (bancarios|de la cuenta|para (pagar|depositar|transferir))|\bclabe\b|a qu[eé] cuenta/.test(_pt);
-    /*
-     * Quien pide "los números de cuenta", "mi CLABE" o "a qué cuenta deposito"
-     * ya eligió cómo pagar: se le da la CLABE de una vez, sin pasar por el
-     * menú. Si no está en el piloto, el menú de siempre trae los datos.
-     */
-    if (_pideDatosPago && !_enOtraCosa && !_conComprobante && !_isBtn
-        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      return handleChatMessage(chatId, 'pago_clabe', sendMsg);
-    }
-    /*
-     * "No me abre el link", "no carga", "dice que expiró": se le vuelve a mandar
-     * el mismo si es reciente (con cómo abrirlo); si ya venció, se genera otro
-     * de la misma forma. Nadie se queda con un link muerto en la mano.
-     */
-    if (/(no (me |se )?(abre|carga|deja|funciona|sirve|entra)|no (puedo|pude) (abrir|pagar|entrar)|(link|liga|enlace|ficha|p[aá]gina)\s.*(no|error|expir|venc|ca[ií]d|roto|mal)|expir[oó]|venci[oó]|error al pagar|me marca error)/.test(_pt)
-        && !_enOtraCosa && !_conComprobante && !_isBtn && !_emergencyNow) {
-      const u = ultimoLinkPago.get(String(chatId));
-      if (u && Date.now() - u.cuando < 25 * 60000) {
-        await sendMsg(chatId, `Aquí está otra vez tu link:\n\n${u.url}\n\nSi no abre al tocarlo, *mantenlo presionado, cópialo y pégalo* en Chrome o Safari. Si te dice que ya venció, escribe *pagar* y te doy uno nuevo. 🙌`);
-        return;
-      }
-      if (u) {
-        await sendMsg(chatId, 'Ese link ya venció (duran 30 minutos). Te mando uno nuevo: 👇');
-        return handleChatMessage(chatId, u.forma, sendMsg);
-      }
-      // Sin link reciente: no se sabe de qué habla; que elija cómo pagar.
-      if (stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) return handleChatMessage(chatId, 'pagar', sendMsg);
-    }
-    /*
-     * "¿Cómo quieres pagar?" también se contesta escribiendo: "tarjeta", "con
-     * tarjeta", "oxxo", "en oxxo", "transferencia". Sin más vueltas.
-     */
-    const _formaEscrita = _pt.replace(/[¡!¿?.,\s]+/g, ' ').trim().match(/^(?:quiero |prefiero |mejor |pago |pagar |pagarlo |voy a pagar )?(?:con |en |por |la |el )?(tarjeta(?: de (?:cr[eé]dito|d[eé]bito))?|oxxo|transferencia|dep[oó]sito|spei)(?: por favor| porfa| porfavor)?$/);
-    if (_formaEscrita && !_enOtraCosa && !_conComprobante && !_isBtn
-        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      const f = _formaEscrita[1];
-      return handleChatMessage(chatId, /^tarjeta/.test(f) ? 'pago_con_tarjeta' : f === 'oxxo' ? 'pago_con_oxxo' : 'pago_clabe', sendMsg);
-    }
-    if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago|cu[aá]nto (debo|tengo que pagar|es|pago|es mi)|mi saldo|mi adeudo|qu[eé] debo)/.test(_pt)
-        || (_pideDatosPago && !_enOtraCosa && !_conComprobante && !_isBtn)) {
+    if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago)/.test(_pt)) {
       /*
        * WhatsApp solo muestra TRES botones y `sendWhatsAppMessage` corta el
        * resto sin avisar. Por eso el menú se arma completo según el caso en vez
@@ -5783,104 +4175,19 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // El cobro en línea se ofrece según el interruptor COBRO_LINEA_ACTIVO, no
       // por una comparación fija: así se amplía o se apaga desde las variables
       // de entorno, sin tocar código ni volver a desplegar. Vacío = solo el piloto.
-      /*
-       * UN TOQUE POR FORMA DE PAGAR, CON LAS PALABRAS DE LA GENTE.
-       *
-       * Antes: "Mi CLABE fija" (nadie dice así), "Tarjeta u OXXO" (y luego
-       * otra pregunta), "Otras formas". Ahora cada botón es una forma y al
-       * tocarlo sale directo lo que necesita: la CLABE, el link con tarjeta o
-       * la ficha de OXXO, cada uno con su total. La oficina se pide por texto.
-       */
-      const esPiloto = stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE);
-      const botonesPago = esPiloto
+      const botonesPago = stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)
         ? [
-          { id: 'pago_clabe', title: '🏦 Transferencia' },
-          { id: 'pago_con_tarjeta', title: '💳 Tarjeta' },
-          { id: 'pago_con_oxxo', title: '🏪 OXXO (efectivo)' },
+          // La CLABE va primero: es la que de verdad le sirve a quien paga por
+          // transferencia o en ventanilla, que es como paga casi todo el pueblo.
+          { id: 'pago_clabe', title: '🏦 Mi CLABE fija' },
+          { id: 'pago_tarjeta', title: '💳 Tarjeta u OXXO' },
+          { id: 'pago_otras', title: '🏢 Otras formas' },
         ]
         : [
           { id: 'pago_horario', title: '🏢 Horario en oficina' },
           { id: 'pago_datos', title: '💳 Datos de pago' },
         ];
-      let encabezado = '';
-      if (esPiloto) {
-        // Quien tiene cobro automático no necesita hacer nada: que lo sepa antes de pagar dos veces.
-        const regMenu = stripeClientes.get(normalizePhone(chatId)) || {};
-        const vistoMenu = !cuentaAjena(chatId) && mesesEnSesion(chatId) <= 1 ? pagoRecienteDe(normalizePhone(chatId)) : null;
-        if (regMenu.cobroAutomatico && !cuentaAjena(chatId) && !vistoMenu) {
-          const corteMenu = parseFechaCorte((wisphubClients.get(normalizePhone(chatId)) || {}).fechaCorte);
-          // Si el cobro de este periodo ya se intentó y no pasó, "no tienes que hacer nada" sería mentira.
-          const perMenu = corteMenu ? (((autoCobros[normalizePhone(chatId)] || {})[corteMenu]) || {}) : {};
-          if (perMenu.estado === 'rechazado' || perMenu.estado === 'sin-tarjeta') {
-            encabezado = (perMenu.estado === 'sin-tarjeta'
-              ? '⚠️ Este mes tu *cobro automático* no se hizo: ya no hay una tarjeta guardada.'
-              : '⚠️ Este mes tu *cobro automático* no pasó: la tarjeta fue rechazada.')
-              + ' Paga ahora de otra forma para que no se corte tu servicio (si pagas con tarjeta, esa queda guardada para el mes que viene).\n\n';
-          } else {
-            encabezado = '🔁 Tienes *cobro automático*: '
-              + (corteMenu ? `se cobra solo a tu tarjeta un día antes del ${corteMenu.split('-').reverse().join('/')}` : 'se cobra solo a tu tarjeta un día antes de tu fecha de pago')
-              + '. No tienes que hacer nada.\n\nSi de todos modos quieres pagar ahora, elige cómo (y ese mes ya no se te cobra en automático).\n\n';
-          }
-        }
-        // Y quien ya pagó este mes también debe saberlo antes de pagar dos veces
-        // (salvo que venga a adelantar meses a propósito).
-        if (vistoMenu) {
-          encabezado += (/^adelantado hasta /.test(vistoMenu.canal)
-            ? `✅ Ya estás pagado hasta el *${vistoMenu.canal.slice(-10).split('-').reverse().join('/')}*.`
-            : `✅ Ya tenemos tu pago de este mes (${canalTexto(vistoMenu.canal)}).`)
-            + ' No tienes que pagar nada ahora.'
-            + (regMenu.cobroAutomatico ? ' Y como tienes *cobro automático*, el siguiente se cobra solo.' : '')
-            + '\n\nSi quieres adelantar el siguiente, elige cómo.\n\n';
-        }
-        // Con prórroga vigente, que sepa hasta cuándo tiene antes de elegir cómo pagar.
-        const prMenu = !cuentaAjena(chatId) ? prorrogaVigente(normalizePhone(chatId)) : null;
-        if (prMenu && !vistoMenu) {
-          encabezado += `⏳ Tienes prórroga hasta el *${fechaConDia(prMenu.hasta)}*: no se te corta antes de esa fecha, y puedes pagar cuando quieras.\n\n`;
-        }
-        // Si se sabe cuánto debe, se le dice ANTES de preguntar cómo: es la
-        // primera duda de cualquiera ("¿cuánto es?").
-        try {
-          const ajenaMenu = cuentaAjena(chatId);
-          const servicioMenu = servicioEnSesion(chatId);
-          const varios = ajenaMenu || servicioMenu ? [] : await serviciosDeLaCuenta(normalizePhone(chatId));
-          // Con dos contratos se pregunta CUÁL antes que CÓMO: primero qué se paga, luego con qué.
-          if (varios.length > 1 && await preguntarContratoSiHayVarios(chatId, sendMsg, 'pagar')) return;
-          if (varios.length <= 1) {
-            const cobro = await montoACobrar(chatId, ajenaMenu, servicioMenu);
-            if (cobro.ok) encabezado += `${ajenaMenu ? `La mensualidad de *${(wisphubClients.get(ajenaMenu) || {}).name || 'esa cuenta'}*` : 'Tu mensualidad'} es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`
-              // Con meses adelantados en la sesión, que sepa cómo volver a uno solo.
-              + (mesesEnSesion(chatId) > 1 ? ' Si solo quieres pagar un mes, escribe *1 mes*.' : '') + '\n\n';
-          }
-        } catch (_) { /* sin monto, el menú sale igual */ }
-      }
-      await sendMsg(chatId,
-        encabezado + '¿Cómo quieres pagar? Toca una opción 👇'
-        + (esPiloto
-          ? '\n\n🏦 Transferencia: te doy una CLABE que es solo tuya.\n💳 Tarjeta: pagas desde tu teléfono.\n🏪 OXXO: te doy una ficha para pagar en caja.'
-            + '\n\nSi vas a pagar la cuenta de *alguien más*, escríbeme *a nombre de quién* está. Si quieres adelantar varios meses, escribe cuántos (por ejemplo *3 meses*). Si prefieres pagar en la oficina, escribe *oficina*.'
-          : ''),
-        [], { buttons: botonesPago });
-      return;
-    }
-
-    // ===== Reclamo de cobro ("cancelé y me están cobrando", "me cobraron doble") → asesor =====
-    // Es dinero y es queja: no se contesta con menú ni con IA, se pasa a una persona con el contexto.
-    if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey)
-        && /(me (est[aá]n|siguen|est[aá]s|sigues) cobrando|cobro indebido|me cobraron (de m[aá]s|doble|dos veces|otra vez)|me cobr[oó] (doble|dos veces|de m[aá]s)|cargo (que no (hice|reconozco)|indebido|doble)|no reconozco (el|ese|un) (cargo|cobro)|pagu[eé] dos veces|pago doble|me descontaron (doble|dos veces)|cancel[eé].{0,30}(cobr|cargo))/.test(_pt)) {
-      addMessageToHistory(chatId, 'user', text);
-      const _nom = nameOf(getProfile(chatId));
-      const _tel = normalizePhone(chatId);
-      const _visto = pagoRecienteDe(_tel);
-      const _reg = stripeClientes.get(_tel) || {};
-      const _notif = await notifyAgentRequest(chatId, [
-        '💸 RECLAMO DE COBRO',
-        _nom ? `Cliente: ${_nom}` : '',
-        `Mensaje: ${text}`,
-        _visto ? `Último pago visto por el bot: ${canalTexto(_visto.canal)} (${new Date(_visto.cuando).toLocaleDateString('es-MX')})` : 'Sin pagos recientes vistos por el bot.',
-        _reg.cobroAutomatico ? 'Tiene COBRO AUTOMÁTICO activo (si pide quitarlo: que escriba CANCELAR AUTOMÁTICO).' : '',
-      ].filter(Boolean).join('\n'), '').catch(() => false);
-      await sendMsg(chatId, 'Entiendo, y lo vamos a revisar con cuidado. ' + agentNotifiedMsg(_notif, _nom, 'asesor')
-        + (_reg.cobroAutomatico ? '\n\nSi lo que quieres es que ya no se cobre a tu tarjeta cada mes, escribe *CANCELAR AUTOMÁTICO* y queda quitado al instante.' : ''));
+      await sendMsg(chatId, '💳 ¿Cómo quieres pagar? Elige una opción:', [], { buttons: botonesPago });
       return;
     }
 
@@ -5890,36 +4197,15 @@ async function handleChatMessage(chatId, text, sendMsg) {
     // el mensaje al horario: en horario "te contactará en breve", fuera de horario
     // "te contactará <próximo horario>" (sin dar número). El caso queda registrado
     // para el resumen matutino si es fuera de horario.
-    if (_pt === 'prorroga_ya') { await sendMsg(chatId, '👍 Perfecto. Tu servicio sigue activo; si necesitas algo más, aquí estoy.'); return; }
-    if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && (isProrrogaRequest(text) || _pt === 'prorroga_proximo')) {
+    if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && isProrrogaRequest(text)) {
       addMessageToHistory(chatId, 'user', text);
       const _nom = nameOf(getProfile(chatId));
-      // Si ya tiene una prórroga, se le recuerda hasta cuándo; no se abre otro caso.
-      const _prV = prorrogaVigente(normalizePhone(chatId));
-      if (_prV) {
-        await sendMsg(chatId, `⏳ Ya tienes una prórroga hasta el *${fechaConDia(_prV.hasta)}*: no se te corta antes de esa fecha. Si necesitas más días, escribe *asesor* y lo revisa una persona.`);
-        return;
-      }
-      // Si el bot ya le vio el pago de este periodo, no hay nada que pedir: se le dice, y solo
-      // si es para el siguiente pago se le pasa al jefe (con esa nota), sin molestarlo en vano.
-      const _pgV = pagoRecienteDe(normalizePhone(chatId));
-      if (_pgV && !/^prorroga_(proximo|ya)$/.test(_pt)) {
-        const cuandoTxt = new Date(_pgV.cuando).toLocaleDateString('es-MX', { timeZone: BUSINESS_TZ });
-        await sendMsg(chatId, `✅ Ya tenemos tu pago del *${cuandoTxt}* (${canalTexto(_pgV.canal)}), así que este mes no necesitas prórroga: tu servicio sigue. ¿O lo pides para el *siguiente* pago?`,
-          [], { buttons: [{ id: 'prorroga_ya', title: '👍 No, ya quedó' }, { id: 'prorroga_proximo', title: '📅 Es para el próximo' }] });
-        return;
-      }
-      // Si ya la pidió hace poco y nadie ha contestado, no se manda dos veces.
-      const _ped = prorrogasPedidas[normalizePhone(chatId)];
-      if (_ped && Date.now() - _ped.cuando < 24 * 3600 * 1000) {
-        await sendMsg(chatId, '📅 Tu solicitud de prórroga ya está con la oficina; en cuanto la respondan te aviso por aquí. Si mientras puedes pagar, escribe *pagar*.');
-        return;
-      }
-      const _fue = await pedirProrrogaAQuienDecide(chatId, _nom, _pt === 'prorroga_proximo' ? 'Pide tiempo para el SIGUIENTE pago (el de este periodo ya lo tiene visto el bot)' : text).catch(() => false);
-      const _who = (_nom && looksLikeName(_nom)) ? `${_nom}, ` : '';
-      await sendMsg(chatId, _fue
-        ? `📅 ${_who}ya pasé tu solicitud a la oficina. ${isWithinBusinessHours() ? 'En cuanto la revisen' : `La revisan ${describeNextOpening()} y en cuanto respondan`} te aviso por aquí hasta qué día tienes. Si mientras puedes pagar, escribe *pagar*.`
-        : agentNotifiedMsg(false, _nom, 'asesor'));
+      const _notif = await notifyAgentRequest(chatId, [
+        '📅 SOLICITUD DE PRÓRROGA / PLAZO DE PAGO',
+        _nom ? `Cliente: ${_nom}` : '',
+        `Mensaje: ${text}`
+      ].filter(Boolean).join('\n'), '').catch(() => false);
+      await sendMsg(chatId, agentNotifiedMsg(_notif, _nom, 'asesor'));
       return;
     }
 
@@ -5956,14 +4242,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       // Lo que escribió es a nombre de quién está el servicio que paga.
-      const titular = limpiarTitular(text).slice(0, 120);
+      const titular = String(text || '').trim().slice(0, 120);
       await notifyAgentWithImage(chatId, _pdoc.userName, '💳 COMPROBANTE (PDF) del cliente',
-        ['Archivo: ' + _pdoc.fname, '👤 Servicio a nombre de: ' + (titular || 'no especificado'), ...(titular ? [lineaCoincidencias(titular, normalizePhone(chatId))] : [])],
+        ['Archivo: ' + _pdoc.fname, '👤 Servicio a nombre de: ' + (titular || 'no especificado')],
         '', { docUrl: _pdoc.docUrl, docName: _pdoc.fname, caseType: 'pago' });
       pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pdoc.userName, type: 'pago', stage: 0 });
       if (typeof schedulePersist === 'function') schedulePersist();
-      await sendMsg(chatId, '✅ ¡Gracias! Tu comprobante ya está con la oficina. En cuanto lo den por bueno te aviso por aquí y, si tu servicio estaba suspendido, se reactiva solo. 🙌');
-      await preguntarServicioDelComprobante(chatId, titular, sendMsg);
+      await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
       return;
     }
 
@@ -5985,7 +4270,6 @@ async function handleChatMessage(chatId, text, sendMsg) {
         }
         pendingAgentRequests.set(_pendKey, { since: new Date(), name: _pend.userName, type: 'pago', stage: 0 });
         if (typeof schedulePersist === 'function') schedulePersist();
-        setTimeout(() => { preguntarServicioDelComprobante(chatId, _pend.titular || '', sendMsg).catch(() => {}); }, 800);
       };
       // Pide (OBLIGATORIO) el nombre del titular del servicio antes de mandar el
       // comprobante al asesor — salvo que el cliente ya lo haya dicho por texto.
@@ -5993,7 +4277,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         if (_pend.titular) {   // ya lo dijo ("a nombre de X"): no preguntamos doble
           pendingImage.delete(_pendKey);
           await enviarComprobante(lines, headline);
-          await sendMsg(chatId, '✅ ¡Gracias! Tu comprobante ya está con la oficina. En cuanto lo den por bueno te aviso por aquí y, si tu servicio estaba suspendido, se reactiva solo. 🙌');
+          await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
           return;
         }
         _pend.stage = 'titular';
@@ -6046,12 +4330,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // ===== Etapa TITULAR: el cliente responde a nombre de quién está el servicio =====
       if (_pend.stage === 'titular') {
         if (_isBtn) { await sendMsg(chatId, '👤 Solo me falta el *nombre del titular* del servicio. Escríbemelo por favor 🙏'); return; }
-        const titular = limpiarTitular(text).slice(0, 120);
+        const titular = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 120);
         if (titular.length < 3) { await sendMsg(chatId, '👤 ¿Me escribes el *nombre completo del titular* del servicio, por favor?'); return; }
         pendingImage.delete(_pendKey);
-        const lines = [...(_pend.lineasListas || []), '🧾 Servicio a nombre de: ' + titular, lineaCoincidencias(titular, normalizePhone(chatId))];
+        const lines = [...(_pend.lineasListas || []), '🧾 Servicio a nombre de: ' + titular];
         await enviarComprobante(lines, _pend.headlinePend || '💳 COMPROBANTE DE PAGO');
-        await sendMsg(chatId, '✅ ¡Gracias! Tu comprobante ya está con la oficina. En cuanto lo den por bueno te aviso por aquí y, si tu servicio estaba suspendido, se reactiva solo. 🙌');
+        await sendMsg(chatId, '✅ ¡Gracias! Envié tu comprobante a un asesor. Se pondrá en contacto contigo para confirmar tu pago. 🙌');
         return;
       }
       // Regex estrictos: solo respuestas cortas/explícitas disparan sí/no (evita que
@@ -6264,23 +4548,6 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       if (choice === 6) { clearSession(chatId); await sendMsg(chatId, buildProductListText()); return; }
-      /*
-       * "No tengo internet" escrito en vez de tocar "3" es lo más normal del
-       * mundo. Antes eso se le mandaba a la IA, y si la IA no contestaba el
-       * cliente veía el menú otra vez, y otra, y otra. Lo obvio se atiende
-       * aquí sin IA: una falla abre el reporte y "quiero un asesor" lo pide.
-       */
-      const intencionMenu = detectNewIntent(text);
-      if (intencionMenu === 'support') {
-        if (isTechnicalIssue(text)) await startReportFlow(chatId, text, sendMsg);
-        else { setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt()); }
-        return;
-      }
-      if (intencionMenu === 'agent') {
-        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
-        await sendMsg(chatId, '¿Cuál es tu nombre?');
-        return;
-      }
       // Nothing matched — let AI handle it (same logic as default handler)
       const aiResult2 = await callMainAI(chatId, text);
       if (!aiResult2) { await sendReplyObject(buildFallbackReply(text)); return; }
@@ -6675,11 +4942,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
           `Problema: ${d.problemDescription}`,
           `Ubicación: ${locationLine}`
         ].join('\n'), nbhd?.zone || '').catch(() => {});
-        let folioTk = '';
-        try { folioTk = (createTicket(chatId, d.knownName, d.problemDescription, locationLine) || {}).folio || ''; } catch (_) {}
+        try { createTicket(chatId, d.knownName, d.problemDescription, locationLine); } catch (_) {}
         clearSession(chatId);
-        // El folio va en el mensaje: es lo que el cliente dice cuando llama a preguntar.
-        await sendMsg(chatId, `Listo, ${d.knownName}. Registramos tu reporte en ${locationLine}${folioTk ? ` con folio *${folioTk}*` : ''}. Un técnico te contactará pronto. 🔧`);
+        await sendMsg(chatId, `Listo, ${d.knownName}. Registramos tu reporte en ${locationLine}. Un técnico te contactará pronto. 🔧`);
       } else {
         setSession(chatId, { state: 'awaiting_report_name', data: { ...d, locationLine } });
         await sendMsg(chatId, '¿A qué nombre está el servicio?');
@@ -6910,291 +5175,6 @@ const sinCacheCobro = (_req, res, next) => { res.setHeader('Cache-Control', 'no-
 app.get('/cuenta-cobro', sinCacheCobro, (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'cuenta-cobro.html'), { cacheControl: false }));
 
-/*
- * El estado de la cuenta, SIN sesión.
- *
- * Quien llega a /cuenta-cobro viene del sitio de Stripe, no del panel, y no
- * trae token. Sin esta ruta, esa pantalla no puede saber si quedó y tiene que
- * decirle "listo" a ciegas, que es justo lo que hacía.
- *
- * Solo contesta dos cosas: si esa cuenta ya puede cobrar y qué le falta. No
- * dice el id de la cuenta, ni el banco, ni nada que sirva a un tercero.
- */
-async function revisarCuentaLeon() {
-  if (!stripeLeon.hayLlave() || !stripeLeon.cuentaConectada()) return;
-  try {
-    const est = await stripeLeon.estadoCuenta();
-    if (!est.puedeCobrar) {
-      console.warn('[cobro] la cuenta de León NO puede cobrar ahora mismo. Falta:',
-        (est.faltante || []).join(', ') || 'sin detalle');
-    }
-  } catch (e) {
-    /*
-     * Se distingue "Stripe dice que esa cuenta ya no sirve" de "no se pudo
-     * hablar con Stripe", porque piden lo contrario. Un 4xx significa que la
-     * cuenta se borró o se desconectó y hay que dejar de cobrar contra ella.
-     * Cualquier otra cosa es un tropiezo, y apagar el cobro por un tropiezo de
-     * un minuto es peor que el tropiezo.
-     */
-    if (e.status >= 400 && e.status < 500) {
-      console.error('[cobro] Stripe ya no reconoce la cuenta de León:', e.message);
-      stripeLeon.olvidarCuenta();
-    } else {
-      console.warn('[cobro] no se pudo revisar la cuenta, se deja como estaba:', e.message);
-    }
-  }
-}
-
-/*
- * Prórrogas desde el panel: verlas, darlas y quitarlas. Lo mismo que el
- * asesor hace por WhatsApp con PRORROGA, pero con la lista a la vista.
- */
-/* Comprobantes que esperan revisión, y darlos por buenos desde el panel. */
-app.get('/admin/api/comprobantes', verifyAdminToken, async (_req, res) => {
-  const pendientes = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').slice(0, 100);
-  // Cuántos contratos tiene cada titular: con dos, la oficina debe fijarse a cuál factura va el pago.
-  const contratosDe = new Map();
-  for (const c of pendientes) {
-    const telTitular = (String(c.resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1] || c.clientId;
-    if (contratosDe.has(telTitular) || !wisphubClients.has(telTitular)) continue;
-    try { contratosDe.set(telTitular, (await serviciosDeLaCuenta(telTitular)).map((x) => x.etiqueta)); } catch (_) { contratosDe.set(telTitular, []); }
-  }
-  const lista = pendientes
-    .map((c) => {
-      // El titular al que hay que abonarle: el que coincide en el padrón, o quien escribió.
-      const telTitular = (String(c.resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1] || c.clientId;
-      const w = wisphubClients.get(telTitular) || {};
-      // Lo que urge: el corte del titular es hoy o mañana, ya está suspendido, o su cobro automático está esperando esta revisión.
-      const corteT = parseFechaCorte(w.fechaCorte);
-      const urgencia = /suspend|cort/i.test(String(w.status || '')) ? 'suspendido'
-        : corteT && corteT <= fechaLocalISO() ? 'corte hoy'
-        : corteT && corteT === fechaMasDias(1) ? 'corte mañana' : '';
-      const autoEspera = !!((stripeClientes.get(telTitular) || {}).cobroAutomatico && corteT && (((autoCobros[telTitular] || {})[corteT]) || {}).avisadoRevision && !(((autoCobros[telTitular] || {})[corteT]) || {}).estado);
-      return { id: c.id, ts: c.ts, telefono: c.clientId, nombre: c.name || (wisphubClients.get(c.clientId) || {}).name || '', resumen: String(c.resumen || '').slice(0, 400), imageUrl: c.imageUrl || '', docUrl: c.docUrl || '', fueraDeHorario: !!c.offHours,
-        titular: { telefono: telTitular, nombre: w.name || '', wisphubId: w.wisphubId || null, corte: corteT || '', contratos: contratosDe.get(telTitular) || [] }, urgencia, autoEspera };
-    })
-    // Los urgentes primero; entre iguales, el más viejo arriba.
-    .sort((a, b) => ((b.urgencia || b.autoEspera) ? 1 : 0) - ((a.urgencia || a.autoEspera) ? 1 : 0) || String(a.ts).localeCompare(String(b.ts)));
-  res.json({ comprobantes: lista, total: lista.length, urgentes: lista.filter((x) => x.urgencia || x.autoEspera).length });
-});
-app.post('/admin/api/comprobantes/:id/recibido', verifyAdminToken, requirePermission('clients'), async (req, res) => {
-  const c = caseLog.find((x) => x.id === req.params.id);
-  if (!c) return res.status(404).json({ error: 'Ese comprobante ya no está' });
-  if (c.status !== 'pendiente') return res.json({ ok: true, yaEstaba: true });
-  const rc = await confirmarPagoRecibido(c.clientId, (req.admin && req.admin.username) || 'panel');
-  res.json({ ok: true, ...rc });
-});
-
-app.get('/admin/api/prorrogas', verifyAdminToken, (_req, res) => {
-  const hoy = fechaLocalISO();
-  const lista = Object.entries(prorrogas)
-    .filter(([, p]) => p && p.hasta >= hoy)
-    .map(([tel, p]) => ({ telefono: tel, nombre: (wisphubClients.get(tel) || {}).name || '', ...p,
-      // Quién la dio, con palabras: "asesor …1234" si fue por WhatsApp, el usuario si fue por el panel.
-      porTexto: /^\d{10,13}$/.test(String(p.por || '')) ? `asesor por WhatsApp (…${String(p.por).slice(-4)})` : (p.por || 'panel'),
-      // Cuántos días le quedan, si ya pagó mientras tanto y si ya se le recordó que vence.
-      restan: Math.round((new Date(p.hasta + 'T12:00:00').getTime() - new Date(hoy + 'T12:00:00').getTime()) / 86400000),
-      yaPago: !!pagoRecienteDe(tel),
-      avisado: !!corteReminders[`${tel}|prorroga|${p.hasta}`] }))
-    .sort((a, b) => a.hasta.localeCompare(b.hasta));
-  // Las que el cliente pidió por WhatsApp y nadie ha resuelto todavía.
-  const pendientes = Object.entries(prorrogasPedidas)
-    .filter(([, x]) => x && x.cuando)
-    .map(([tel, x]) => ({ telefono: tel, nombre: x.nombre || (wisphubClients.get(tel) || {}).name || '', cuando: new Date(x.cuando).toISOString(), texto: x.texto || '', dias: x.dias || 0 }))
-    .sort((a, b) => b.cuando.localeCompare(a.cuando));
-  res.json({ prorrogas: lista, total: lista.length, pendientes, quienDecide: PRORROGA_WHATSAPP_NUMBER ? PRORROGA_WHATSAPP_NUMBER.replace(/^52/, '') : '' });
-});
-app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'), async (req, res) => {
-  const tel = normalizePhone(String((req.body || {}).telefono || ''));
-  const dias = Number((req.body || {}).dias || 0);
-  if (!tel || tel.length < 12) return res.status(400).json({ error: 'Falta el teléfono' });
-  if (!(dias >= 1 && dias <= 31)) return res.status(400).json({ error: 'Los días van de 1 a 31' });
-  const p = darProrroga(tel, dias, (req.admin && req.admin.username) || 'panel', (req.body || {}).motivo);
-  cerrarSolicitudProrroga(tel, (req.admin && req.admin.username) || 'panel');
-  // Desde el panel también se le avisa al cliente (salvo que la oficina diga que no).
-  let avisado = false;
-  if (!(req.body || {}).sinAviso) {
-    try { await avisarProrroga(tel, p); avisado = true; } catch (e) { console.warn('[prorroga] no se pudo avisar a', tel, '·', e.message); }
-  }
-  res.json({ ok: true, telefono: tel, avisado, ...p });
-});
-/*
- * EXPORTAR A CSV: prórrogas (vigentes y pedidas), comprobantes y pagos por el bot.
- *
- * La oficina concilia contra Wisphub y contra el banco en Excel; sin esto
- * copiaba a mano de la pantalla. Con BOM para que Excel abra los acentos bien.
- */
-function enviarCsv(res, nombre, columnas, filas) {
-  const celda = (v) => { const t = v == null ? '' : String(v); return /[",\n;]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
-  const cuerpo = [columnas.map(celda).join(','), ...filas.map((f) => columnas.map((c) => celda(f[c])).join(','))].join('\r\n');
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${nombre}-${fechaLocalISO()}.csv"`);
-  res.send('\ufeff' + cuerpo);
-}
-app.get('/admin/api/exportar/prorrogas.csv', verifyAdminToken, (_req, res) => {
-  const hoy = fechaLocalISO();
-  const filas = [];
-  for (const [tel, p] of Object.entries(prorrogas)) {
-    if (!p || !p.hasta) continue;
-    filas.push({ tipo: p.hasta >= hoy ? 'vigente' : 'vencida', telefono: tel.replace(/^52/, ''), nombre: (wisphubClients.get(tel) || {}).name || '', hasta: p.hasta, dias: p.dias || '', por: p.por || '', cuando: p.cuando ? String(p.cuando).slice(0, 16).replace('T', ' ') : '', motivo: p.motivo || '', yaPago: pagoRecienteDe(tel) ? 'sí' : 'no' });
-  }
-  for (const [tel, x] of Object.entries(prorrogasPedidas)) {
-    if (!x || !x.cuando) continue;
-    filas.push({ tipo: 'pedida sin responder', telefono: tel.replace(/^52/, ''), nombre: x.nombre || (wisphubClients.get(tel) || {}).name || '', hasta: '', dias: x.dias || '', por: '', cuando: new Date(x.cuando).toISOString().slice(0, 16).replace('T', ' '), motivo: x.texto || '', yaPago: pagoRecienteDe(tel) ? 'sí' : 'no' });
-  }
-  filas.sort((a, b) => String(b.cuando).localeCompare(String(a.cuando)));
-  enviarCsv(res, 'prorrogas', ['tipo', 'telefono', 'nombre', 'hasta', 'dias', 'por', 'cuando', 'motivo', 'yaPago'], filas);
-});
-app.get('/admin/api/exportar/comprobantes.csv', verifyAdminToken, (_req, res) => {
-  const filas = caseLog.filter((c) => c && c.type === 'pago').map((c) => ({
-    fecha: String(c.ts || '').slice(0, 16).replace('T', ' '), telefono: String(c.clientId || '').replace(/^52/, ''), nombre: c.name || '', estado: c.status || '',
-    servicio: c.servicioId || '', cubreHasta: c.cubreHasta || '', porAgente: c.porAgente || '', resumen: c.resumen || '', archivo: c.imageUrl || c.docUrl || '' }));
-  enviarCsv(res, 'comprobantes', ['fecha', 'telefono', 'nombre', 'estado', 'servicio', 'cubreHasta', 'porAgente', 'resumen', 'archivo'], filas);
-});
-app.get('/admin/api/exportar/pagos.csv', verifyAdminToken, (_req, res) => {
-  const filas = [];
-  for (const [tel, lista] of stripePagosRecientes) {
-    for (const p of lista || []) {
-      if (!p || !p.cuando) continue;
-      filas.push({ fecha: new Date(p.cuando).toISOString().slice(0, 16).replace('T', ' '), telefono: tel.replace(/^52/, ''), nombre: (wisphubClients.get(tel) || {}).name || '', monto: (Number(p.monto) || 0).toFixed(2), via: p.canal || '', pagadoPor: p.pagadoPor ? String(p.pagadoPor).replace(/^52/, '') : '', cubreHasta: p.cubreHasta || '', servicio: p.servicioId || '', referencia: p.ref || '' });
-    }
-  }
-  filas.sort((a, b) => b.fecha.localeCompare(a.fecha));
-  enviarCsv(res, 'pagos-bot', ['fecha', 'telefono', 'nombre', 'monto', 'via', 'pagadoPor', 'cubreHasta', 'servicio', 'referencia'], filas);
-});
-
-// Negar desde el panel una prórroga pedida por WhatsApp: se le avisa al cliente cómo pagar.
-app.post('/admin/api/prorrogas/negar', verifyAdminToken, requirePermission('clients'), async (req, res) => {
-  const tel = normalizePhone(String((req.body || {}).telefono || ''));
-  if (!tel || tel.length < 12) return res.status(400).json({ error: 'Falta el teléfono' });
-  const habia = cerrarSolicitudProrroga(tel, (req.admin && req.admin.username) || 'panel');
-  let avisado = false;
-  try { await avisarPorIniciativa(tel, TEXTO_PRORROGA_NEGADA); avisado = true; } catch (_) { /* queda en el panel */ }
-  res.json({ ok: true, habia, avisado });
-});
-app.delete('/admin/api/prorrogas/:telefono', verifyAdminToken, requirePermission('clients'), async (req, res) => {
-  const tel = normalizePhone(String(req.params.telefono || ''));
-  const habia = !!prorrogas[tel];
-  delete prorrogas[tel];
-  schedulePersist();
-  // Quitarla sin decirle es dejarlo creer que tiene días que ya no tiene.
-  let avisado = false;
-  if (habia && !String(req.query.sinAviso || '') && wisphubClients.has(tel)) {
-    const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte);
-    try {
-      await avisarPorIniciativa(tel, `📅 La oficina retiró la prórroga que tenías. Tu fecha de pago vuelve a ser la de siempre${corte ? ` (*${corte.split('-').reverse().join('/')}*)` : ''}. Si tienes duda, escribe *asesor*; para pagar, escribe *pagar*. 🙏`);
-      avisado = true;
-    } catch (e) { console.warn('[prorroga] no se pudo avisar que se quitó a', tel, '·', e.message); }
-  }
-  res.json({ ok: true, habia, avisado });
-});
-
-app.get('/api/cuenta-cobro/estado', async (_req, res) => {
-  try {
-    if (!stripeLeon.hayLlave() || !stripeLeon.cuentaConectada()) {
-      return res.json({ ok: true, existe: false, puedeCobrar: false, faltante: [] });
-    }
-    const est = await stripeLeon.estadoCuenta();
-    res.json({
-      ok: true, existe: true,
-      puedeCobrar: !!est.puedeCobrar,
-      faltante: (est.faltante || []).slice(0, 6),
-      // Sin plantilla, los avisos que el bot manda por su cuenta (cobro
-      // automático, ¿ya quedó?, pago por otro) no llegan fuera de las 24 h.
-      plantillaAvisos: !!WHATSAPP_AVISO_TEMPLATE,
-    });
-  } catch (e) {
-    console.warn('[cobro] estado público:', e.message);
-    res.json({ ok: false, existe: true, puedeCobrar: false, faltante: [] });
-  }
-});
-
-/*
- * SOLO PARA PRUEBAS (PRUEBAS=1). Envejece la sesión de un chat para comprobar
- * que lo que alguien dijo hace media hora ya no cuenta, sin esperar media hora.
- * En producción esta ruta no existe.
- */
-if (process.env.PRUEBAS === '1') {
-  // Simula que pasó un mes: se olvidan los pagos recientes de un teléfono.
-  app.post('/api/pruebas/envejecer-pagos', (req, res) => {
-    // Hace que los pagos en línea de un cliente parezcan de hace N días (se acumula).
-    const tel = normalizePhone(String((req.body || {}).telefono || ''));
-    const ms = (Number((req.body || {}).dias) || 0) * 86400000;
-    for (const p of stripePagosRecientes.get(tel) || []) p.cuando -= ms;
-    res.json({ ok: true, pagos: (stripePagosRecientes.get(tel) || []).map((p) => ({ canal: p.canal, hace: Math.round((Date.now() - p.cuando) / 86400000) })) });
-  });
-  app.post('/api/pruebas/cubre', (req, res) => {
-    // ¿El último pago de este cliente cubre el corte de hoy/mañana, y el que se pida?
-    const tel = normalizePhone(String((req.body || {}).telefono || ''));
-    const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte) || fechaLocalISO();
-    const svcQ = String((req.body || {}).servicioId || '');
-    res.json({ esteCorte: !!pagoRecienteDe(tel, corte, svcQ), siguienteCorte: !!pagoRecienteDe(tel, String((req.body || {}).corte || ''), svcQ) });
-  });
-  app.post('/api/pruebas/olvidar-pagos', (req, res) => {
-    const tel = normalizePhone(String((req.body || {}).telefono || ''));
-    stripePagosRecientes.delete(tel);
-    for (const c of caseLog) if (c.clientId === tel && c.type === 'pago') c.status = 'viejo';
-    for (const [k, v] of stripeClientes) if (v && stripeLeon.partirClave(k).tel === tel && v.adelantadoHasta) { delete v.adelantadoHasta; delete v.adelantadoMeses; delete v.adelantadoServicio; }
-    res.json({ ok: true });
-  });
-  app.post('/api/pruebas/auto-estado', (req, res) => {
-    // Deja el cobro automático de un cliente en el estado que se pida (p. ej. rechazado).
-    const tel = normalizePhone(String((req.body || {}).telefono || ''));
-    const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte);
-    if (!tel || !corte) return res.status(400).json({ error: 'sin cliente o sin corte' });
-    const log = autoCobros[tel] || (autoCobros[tel] = {});
-    log[corte] = { ...(log[corte] || {}), estado: String((req.body || {}).estado == null ? 'rechazado' : req.body.estado) };
-    res.json({ ok: true, corte });
-  });
-  app.post('/api/pruebas/ya-quedo', async (req, res) => {
-    // Envejece los reportes abiertos y pregunta.
-    const dias = Number((req.body || {}).dias || 4);
-    for (const t of tickets.values()) if (t.estado !== 'resuelto') t.createdAt = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
-    res.json(await preguntarSiYaQuedo(true));
-  });
-  app.post('/api/pruebas/ventana', async (req, res) => {
-  if (process.env.PRUEBAS !== '1') return res.status(404).end();
-  const num = _normAgentNum(String((req.body || {}).numero || ''));
-  const horas = Number((req.body || {}).horas || 0);
-  if (num && horas) { agentLastInbound.set(num, new Date(Date.now() - horas * 3600 * 1000).toISOString()); agentPingSent.delete(num); }
-  const r = await sweepAgentWindow(true);
-  res.json({ ok: true, ...r, ultimo: num ? agentLastInbound.get(num) || null : null, numeros: numerosConVentana() });
-});
-app.post('/api/pruebas/entiende-prorroga', (req, res) => {
-  if (process.env.PRUEBAS !== '1') return res.status(404).end();
-  const frases = Array.isArray((req.body || {}).frases) ? req.body.frases : [];
-  res.json({ resultados: frases.map((f) => ({ frase: String(f), es: isProrrogaRequest(String(f)) })) });
-});
-app.post('/api/pruebas/prorroga-pedida-vieja', (req, res) => {
-  if (process.env.PRUEBAS !== '1') return res.status(404).end();
-  const tel = normalizePhone(String((req.body || {}).telefono || ''));
-  const horas = Number((req.body || {}).horas || 4);
-  if (!prorrogasPedidas[tel]) return res.status(404).json({ error: 'no hay solicitud' });
-  prorrogasPedidas[tel].cuando -= horas * 3600 * 1000;
-  recordarProrrogasSinResponder(true).then((r) => res.json({ ok: true, ...r }));
-});
-app.post('/api/pruebas/resumen-cobranza', async (_req, res) => {
-    res.json(await resumenCobranzaDiario(true));
-  });
-  app.post('/api/pruebas/cobro-automatico', async (_req, res) => {
-    res.json(await barrerCobroAutomatico(true));
-  });
-  app.post('/api/pruebas/envejecer-sesion', (req, res) => {
-    const tel = normalizePhone(String((req.body || {}).telefono || ''));
-    const ms = Number((req.body || {}).ms || 0);
-    // También el último link mandado, para probar "dice que expiró".
-    if ((req.body || {}).link) {
-      const u = ultimoLinkPago.get(tel);
-      if (u) u.cuando = Date.now() - (ms || Number((req.body || {}).minutos || 0) * 60000);
-      return res.json({ ok: !!u });
-    }
-    const ses = getSession(tel);
-    if (!ses.state) return res.json({ ok: false, motivo: 'sin sesión' });
-    setSession(tel, { ...ses, data: { ...(ses.data || {}), desde: Date.now() - ms } });
-    res.json({ ok: true, estado: ses.state });
-  });
-}
-
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'leontelecom-server' });
 });
@@ -7323,230 +5303,16 @@ function anotarRegistroPendiente(reg) {
 const stripePagosRecientes = new Map();   // telefono -> [{ monto, cuando, canal, ref }]
 const VENTANA_DUPLICADO_MS = 20 * 24 * 3600 * 1000;
 
-function registrarPagoYRevisarDoble({ telefono, monto, canal, ref, pagadoPor, cubreHasta, servicioId }) {
+function registrarPagoYRevisarDoble({ telefono, monto, canal, ref }) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
   const ahora = Date.now();
   const previos = (stripePagosRecientes.get(tel) || []).filter((p) => ahora - p.cuando < VENTANA_DUPLICADO_MS);
   const sospechoso = previos.find((p) => p.ref !== ref);
-  const por = String(pagadoPor || '').replace(/\D/g, '');
-  const cubre = /^\d{4}-\d{2}-\d{2}$/.test(String(cubreHasta || '')) ? String(cubreHasta) : '';
-  const svcPago = String(servicioId || '').replace(/\D/g, '');
-  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref, ...(por && por !== tel ? { pagadoPor: por } : {}), ...(cubre ? { cubreHasta: cubre } : {}), ...(svcPago ? { servicioId: svcPago } : {}) });
+  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref });
   stripePagosRecientes.set(tel, previos.slice(-6));
-  sumarAlMes(monto, canal);
   schedulePersist();
   return sospechoso || null;
-}
-
-/*
- * CUÁNTO DINERO HA ENTRADO POR EL COBRO EN LÍNEA.
- *
- * Es el número que le dice a León si esto sirve o no, y no existía: el panel
- * mostraba cuántos clientes tienen CLABE y cuánto está atorado, pero no cuánto
- * entró. Sin eso no hay forma de juzgar el piloto de 50 clientes más que "yo
- * siento que sí".
- *
- * Se guarda por mes y por vía, porque no es lo mismo que entren por
- * transferencia que con tarjeta: la vía dice qué está adoptando la gente.
- * Se conservan seis meses, que es de sobra para ver si la cosa crece.
- */
-const stripeCobrado = new Map();   // '2026-09' -> { pagos, pesos, porVia: { clabe, tarjeta, oxxo } }
-const MESES_QUE_SE_GUARDAN = 6;
-
-function mesDe(cuando) {
-  const d = new Date(cuando || Date.now());
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function sumarAlMes(monto, canal) {
-  const pesos = Number(monto) || 0;
-  if (pesos <= 0) return;
-  const mes = mesDe();
-  const m = stripeCobrado.get(mes) || { pagos: 0, pesos: 0, porVia: {} };
-  m.pagos += 1;
-  m.pesos = +(m.pesos + pesos).toFixed(2);
-  const via = String(canal || 'otro');
-  m.porVia[via] = (m.porVia[via] || 0) + 1;
-  stripeCobrado.set(mes, m);
-
-  // Se tiran los meses viejos aquí y no en un barrido aparte: es una línea, y
-  // un barrido más es una cosa más que se puede olvidar de encender.
-  if (stripeCobrado.size > MESES_QUE_SE_GUARDAN) {
-    for (const viejo of [...stripeCobrado.keys()].sort().slice(0, stripeCobrado.size - MESES_QUE_SE_GUARDAN)) {
-      stripeCobrado.delete(viejo);
-    }
-  }
-}
-
-/*
- * Cuánto hay que cobrarle a este cliente, y por qué.
- *
- * Vive aparte porque ahora lo preguntan tres caminos distintos (la cotización
- * de tarjeta/OXXO, el link de tarjeta y el de OXXO) y los tres tienen que dar
- * exactamente el mismo número. Si cada uno lo calculara por su cuenta, bastaría
- * con que la deuda cambiara entre una pantalla y la siguiente para cotizarle
- * una cosa y cobrarle otra.
- *
- * El monto sale de las FACTURAS PENDIENTES, no del campo `saldo`: en la
- * instalación de León Telecom ese campo viene en 0.00 para 286 de cada 300
- * clientes, así que cobrando por ahí el botón no le serviría a casi nadie.
- * Si Wisphub no contesta, se cae al precio de su plan antes que dejarlo sin
- * poder pagar.
- */
-/*
- * La cuenta ajena que alguien dijo que iba a pagar, si todavía vale.
- *
- * Vale media hora. Es el tiempo que dura el link de pago, y es más de lo que
- * tarda cualquiera en terminar. Después de eso se olvida sola: la persona que
- * vuelve al día siguiente y escribe PAGAR quiere pagar lo suyo, no lo del otro.
- */
-const PAGO_AJENO_VIGENCIA_MS = 30 * 60 * 1000;
-function sesionDePagoAjeno(chatId) {
-  const ses = getSession(chatId);
-  if (!ses.state || !/^pago_(otro_|servicio_)/.test(String(ses.state))) return ses;
-  const desde = Number((ses.data || {}).desde || 0);
-  if (!desde || Date.now() - desde > PAGO_AJENO_VIGENCIA_MS) { clearSession(chatId); return { state: null, data: {} }; }
-  return ses;
-}
-function cuentaAjena(chatId) {
-  const ses = sesionDePagoAjeno(chatId);
-  return ses.state === 'pago_otro_listo' ? String((ses.data || {}).pagarPara || '') : '';
-}
-/*
- * El servicio que el cliente ya eligió, cuando su teléfono tiene varios.
- * Vive en la misma sesión que el pago por otro y caduca igual.
- */
-function mesesEnSesion(chatId) {
-  const ses = sesionDePagoAjeno(chatId);
-  const m = Number((ses.data || {}).meses || 0);
-  return ses.state === 'pago_otro_listo' && m > 1 ? Math.min(12, m) : 1;
-}
-function servicioEnSesion(chatId) {
-  const ses = sesionDePagoAjeno(chatId);
-  const d = ses.data || {};
-  return ses.state === 'pago_otro_listo' && d.servicioId ? { servicioId: String(d.servicioId), usuario: d.usuario || '', etiqueta: d.etiqueta || '' } : null;
-}
-/*
- * ¿Cuántos contratos tiene esta cuenta? Si son varios, antes de cobrar hay
- * que preguntar CUÁL: 26 teléfonos del padrón tienen dos o tres, y pagar "el
- * de la casa" cuando se quería pagar "el del local" deja al cliente cortado y
- * su dinero en el contrato equivocado. Si Wisphub no contesta, se sigue como
- * antes (uno solo): no se detiene el cobro por una consulta.
- */
-/*
- * Antes de cobrar por CUALQUIER vía, si la cuenta tiene varios contratos se
- * pregunta cuál. Devuelve true si preguntó (y entonces quien llama se detiene);
- * `siguiente` es el botón que se vuelve a disparar solo cuando el cliente
- * elija, para que no tenga que volver a empezar.
- */
-async function preguntarContratoSiHayVarios(chatId, sendMsg, siguiente) {
-  if (servicioEnSesion(chatId)) return false;
-  const ajena = cuentaAjena(chatId);
-  const tel = ajena || normalizePhone(chatId);
-  const varios = await serviciosDeLaCuenta(tel);
-  if (varios.length <= 1) return false;
-  setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajena, servicios: varios.slice(0, 3), siguiente, meses: mesesEnSesion(chatId), desde: Date.now() } });
-  const deQuienEs = ajena ? `*${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* tiene` : 'Tienes';
-  const { lineas } = await describirContratos(varios.slice(0, 3));
-  await sendMsg(chatId,
-    `${deQuienEs} *${varios.length} servicios* con nosotros:\n${lineas.join('\n')}\n\n¿Cuál vas a pagar? 👇`
-    + (varios.length > 3 ? '\n\n(Se muestran los primeros 3; si es otro, escríbele a un asesor.)' : ''),
-    [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'pago_servicio_' + i, title: (x.estado && /suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
-  return true;
-}
-
-// Una línea por contrato: cómo está, cuándo le toca y cuánto debe (si se pudo leer).
-async function describirContratos(varios) {
-  const lineas = [];
-  let debeAlgo = false;
-  for (const x of varios) {
-    let deuda = 0;
-    try { deuda = (await wisphubReactivar.deudaDelCliente(x.usuario)).total || 0; } catch (_) { /* sin deuda a la mano */ }
-    if (deuda > 0) debeAlgo = true;
-    const susp = /suspend|cort/i.test(x.estado);
-    lineas.push(`• *${x.etiqueta}*: ${susp ? '🔴 suspendido' : '🟢 activo'}`
-      + (x.fechaCorte ? ` · corte ${x.fechaCorte.split('-').reverse().slice(0, 2).join('/')}` : '')
-      + (deuda > 0 ? ` · debe *$${deuda.toFixed(2)}*` : (susp ? '' : ' · al corriente')));
-  }
-  return { lineas, debeAlgo };
-}
-
-async function serviciosDeLaCuenta(tel) {
-  try {
-    const h = await wisphubReactivar.serviciosDe(tel);
-    return (h.servicios || []).map((x) => ({
-      id: String(x.id_servicio || x.id || ''),
-      usuario: x.usuario || '',
-      etiqueta: [x.plan_internet && (x.plan_internet.nombre || x.plan_internet), x.direccion || x.colonia || x.localidad].filter(Boolean).join(' · ') || `Servicio ${x.id_servicio}`,
-      estado: x.estado || '',
-      fechaCorte: parseFechaCorte(x.fecha_corte) || '',
-      precio: parseFloat(x.precio_plan) || 0,
-    })).filter((x) => x.id);
-  } catch (e) {
-    console.warn('[cobro] no se pudieron leer los servicios de', tel, '·', e.message);
-    return [];
-  }
-}
-
-async function montoACobrar(chatId, telefonoCuenta, servicio = null) {
-  // Normalmente la cuenta es la de quien escribe. Cuando alguien paga por otro,
-  // la cuenta es la de ese otro, y quien escribe solo pone la tarjeta. Si el
-  // teléfono tiene varios contratos, la deuda es la del que eligió.
-  const tel = normalizePhone(telefonoCuenta || chatId);
-  const c = wisphubClients.get(tel) || {};
-  let monto = 0;
-  let deTexto = '';
-  let cubreHasta = '';
-  try {
-    const d = await wisphubReactivar.deudaDelCliente((servicio && servicio.usuario) || c.usuario || '');
-    monto = d.total;
-    deTexto = d.facturas.length > 1 ? ` (${d.facturas.length} mensualidades)` : '';
-    cubreHasta = d.facturas.map((f) => String(f.fecha_vencimiento || '').slice(0, 10)).filter(Boolean).sort().pop() || '';
-  } catch (e) {
-    console.warn('[stripe-leon] no se pudo leer la deuda de', tel, '·', e.message);
-  }
-  if (monto <= 0) { monto = parseFloat(c.precioPlan) || 0; deTexto = ''; }
-
-  /*
-   * MESES POR ADELANTADO. "Pago 6 meses de jalón" pasa más de lo que parece
-   * (gente que se va a trabajar fuera, o que cobra una vez al año). El monto
-   * es lo que debe hoy más los meses siguientes al precio de su plan.
-   */
-  const meses = mesesEnSesion(chatId);
-  if (meses > 1 && monto > 0) {
-    const precio = parseFloat(c.precioPlan) || monto;
-    monto = +(monto + (meses - 1) * precio).toFixed(2);
-    deTexto = ` (${meses} meses)`;
-    if (cubreHasta) { const h = new Date(cubreHasta + 'T12:00:00'); h.setMonth(h.getMonth() + (meses - 1)); cubreHasta = fechaLocalISO(h); }
-  }
-
-  if (monto <= 0) {
-    const ajena = telefonoCuenta && normalizePhone(telefonoCuenta) !== normalizePhone(chatId);
-    const cual = ajena ? `en la cuenta de *${c.name || tel}*` : 'en tu cuenta';
-    return { ok: false, mensaje: `No veo un saldo pendiente ${cual} ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏` };
-  }
-  return { ok: true, monto, deTexto, cubreHasta };
-}
-
-/*
- * De un aviso de Stripe de vuelta al teléfono del cliente.
- *
- * Un contracargo o una devolución llegan como el objeto de la DISPUTA o del
- * CARGO, no como la sesión de pago, así que no siempre traen el teléfono en el
- * metadata. Lo que sí traen es el `payment_intent`, y ese es justo el número de
- * referencia con el que se guardó el pago cuando entró. O sea que el registro
- * de pagos recientes ya es el índice que hace falta, sin ir a preguntarle nada
- * a Stripe.
- */
-function telefonoDeEventoStripe(o) {
-  const directo = String((o && o.metadata && o.metadata.telefono) || '').replace(/\D/g, '');
-  if (directo) return directo;
-  const refs = [o && o.payment_intent, o && o.charge, o && o.id].filter(Boolean).map(String);
-  for (const [tel, pagos] of stripePagosRecientes) {
-    if ((pagos || []).some((p) => refs.includes(String(p.ref)))) return tel;
-  }
-  return '';
 }
 
 /*
@@ -7603,316 +5369,6 @@ function avisarRegistroPendiente(w, telefono) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- *  EL DINERO QUE SE QUEDÓ ATORADO EN STRIPE
- * ═══════════════════════════════════════════════════════════════════════════
- *
- * Una transferencia a la CLABE del cliente NO le llega sola a León Telecom.
- * Cae en el saldo de ese cliente DENTRO de Stripe y se queda ahí hasta que
- * alguien la cobra. Ese cobro lo hace el webhook en cuanto entra el aviso.
- *
- * Pero el webhook puede fallar justo en ese paso, y de hecho es el paso más
- * frágil de todo el cobro: depende de que Stripe conteste una segunda vez, en
- * caliente, mientras Render puede estar reiniciando por un despliegue. Cuando
- * falla, hoy solo salía una alerta y el dinero se quedaba parado esperando a
- * que una persona lo moviera a mano. Si esa persona no lo ve —de madrugada, un
- * domingo, entre cien avisos— el cliente ya está reconectado, ya le dijimos
- * "gracias", y León Telecom nunca recibió su dinero.
- *
- * Esto lo va a buscar solo. Dos redes, no una:
- *
- *   1. REINTENTO de los que ya sabemos que fallaron (cada 10 min).
- *   2. AUDITORÍA de TODOS los clientes con CLABE (cada 6 h), por si el aviso
- *      de Stripe nunca llegó y entonces ni siquiera sabemos que hay dinero.
- *
- * La segunda es la que de verdad cierra el hueco: la primera solo alcanza los
- * fallos que vimos, y el peor caso es justamente el que no vimos.
- */
-/*
- * La deuda del cliente, distinguiendo "no debe nada" de "no se pudo saber".
- *
- * La diferencia decide a quién le toca la comisión, y por eso no puede
- * confundirse. La comisión sale del EXCEDENTE: de lo que el cliente depositó
- * por encima de lo que debía. Si Wisphub no contesta y damos la deuda por cero,
- * el sistema cree que TODO el depósito es excedente y le cobra comisión a
- * dinero que el cliente mandó para su internet. Eso es quitarle a León Telecom
- * de su mensualidad, en silencio y sin que nadie lo cuadre.
- *
- * Así que cuando no se sabe, se dice que no se sabe, y quien llama decide.
- */
-async function deudaConocidaDe(telefono) {
-  const c = wisphubClients.get(String(telefono)) || {};
-  if (!c.usuario) return { conocida: false, total: 0, porque: 'el cliente no está en la lista de Wisphub' };
-  try {
-    const d = await wisphubReactivar.deudaDelCliente(c.usuario);
-    const cubreHasta = (d.facturas || []).map((f) => String(f.fecha_vencimiento || '').slice(0, 10)).filter(Boolean).sort().pop() || '';
-    return { conocida: true, total: Number(d.total) || 0, cubreHasta };
-  } catch (e) {
-    return { conocida: false, total: 0, porque: e.message };
-  }
-}
-
-/*
- * Los pagos que entraron SIN dejar cargo por servicio.
- *
- * Pasa cuando el cliente transfiere justo lo que debía, sin el cargo sumado.
- * No es un error del sistema y el cliente queda perfecto: su pago se aplica
- * completo. Pero a la plataforma ese movimiento le cuesta $8.12 de comisión de
- * Stripe, así que cada uno de estos deja a OBEX en números rojos por ese pago.
- *
- * Se lleva la cuenta porque es la única forma de notarlo. Un pago sin cargo no
- * falla, no alerta y no se ve en ningún lado: simplemente el mes cierra con
- * menos dinero del esperado y nadie sabe por qué. Con esto se ve en el panel.
- */
-let stripeCargosPerdidos = [];   // [{ telefono, pesos, cuando, motivo }]
-const CARGOS_PERDIDOS_MAX = 300;
-
-function anotarCargoPerdido(telefono, pesos, motivo) {
-  stripeCargosPerdidos.push({
-    telefono: String(telefono || ''), pesos: Number(pesos) || 0,
-    cuando: Date.now(), motivo: String(motivo || ''),
-  });
-  if (stripeCargosPerdidos.length > CARGOS_PERDIDOS_MAX) {
-    stripeCargosPerdidos = stripeCargosPerdidos.slice(-CARGOS_PERDIDOS_MAX);
-  }
-  schedulePersist();
-}
-
-const stripeSaldosRezagados = new Map();   // telefono -> { clienteId, pesos, desde, intentos, error }
-
-function anotarSaldoRezagado(telefono, clienteId, pesos, error) {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  if (!tel) return;
-  const previo = stripeSaldosRezagados.get(tel) || { desde: Date.now(), intentos: 0 };
-  stripeSaldosRezagados.set(tel, {
-    ...previo, clienteId: clienteId || previo.clienteId,
-    pesos: Number(pesos) || previo.pesos || 0,
-    error: error ? String(error).slice(0, 200) : previo.error,
-  });
-  schedulePersist();
-}
-
-function olvidarSaldoRezagado(telefono) {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  if (stripeSaldosRezagados.delete(tel)) schedulePersist();
-}
-
-let _barriendoSaldos = false;
-let _ultimaAuditoriaSaldos = 0;
-let _auditoriaDesde = 0;          // por dónde va la auditoría por tandas
-const AUDITORIA_POR_PASADA = 300;  // clientes revisados en cada vuelta
-const AUDITORIA_SALDOS_MS = 6 * 3600 * 1000;
-// Después de tantos intentos fallidos deja de insistir solo y pide una persona:
-// si algo lleva 8 intentos fallando, reintentar la novena vez no lo arregla.
-const REZAGO_INTENTOS_MAX = 8;
-// Cuántas veces se espera a que Wisphub conteste antes de mandar el depósito
-// completo a León Telecom sin cobrar comisión. Cada intento son 10 min.
-const REZAGO_SIN_DEUDA_MAX = 4;
-// Lo que Stripe cobra por recibir una transferencia SPEI. Comprobado contra la
-// API con un cargo real: $440 entraron, $431.88 quedaron.
-const COSTO_SPEI = 8.12;
-
-async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
-  if (_barriendoSaldos) return { corriendo: true };
-  if (!stripeLeon.activo() || !stripeLeon.hayLlave()) return { apagado: true };
-  if (!(process.env.LEON_STRIPE_CUENTA_CONECTADA || '').trim()) return { apagado: true };
-  _barriendoSaldos = true;
-  try {
-    /*
-     * A quién revisarle el saldo en esta pasada.
-     *
-     * Los que ya sabemos que fallaron van SIEMPRE. Al resto del padrón se le
-     * revisa cada 6 h, porque es una llamada a Stripe por cliente y no hace
-     * falta hacerlo cada diez minutos.
-     *
-     * `_auditoriaDesde > 0` significa que la auditoría anterior quedó a medias,
-     * y entonces se sigue en la pasada de los diez minutos en vez de esperar
-     * las seis horas: recorrer el padrón entero de 300 en 300 tardaría día y
-     * medio, y una red de seguridad que tarda día y medio en cerrarse no es
-     * una red.
-     */
-    const auditar = forzarAuditoria || _auditoriaDesde > 0
-      || Date.now() - _ultimaAuditoriaSaldos > AUDITORIA_SALDOS_MS;
-    const revisar = new Map();
-    for (const [tel, r] of stripeSaldosRezagados) {
-      if ((r.intentos || 0) < REZAGO_INTENTOS_MAX) revisar.set(tel, { ...r, yaAnotado: true });
-    }
-    if (auditar) {
-      /*
-       * La auditoría es una llamada a Stripe por cliente. Con el padrón entero
-       * con CLABE serían más de mil en una sola pasada, y mientras corre no se
-       * atienden los reintentos. Se revisa por tandas, siguiendo donde quedó la
-       * anterior: en unas cuantas vueltas se recorre a todos igual.
-       */
-      const todos = [...stripeClientes.entries()].filter(([tel, d]) => d && d.clienteId && !revisar.has(tel));
-      if (_auditoriaDesde >= todos.length) _auditoriaDesde = 0;
-      const tanda = todos.slice(_auditoriaDesde, _auditoriaDesde + AUDITORIA_POR_PASADA);
-      const siguiente = _auditoriaDesde + AUDITORIA_POR_PASADA;
-      if (siguiente >= todos.length) {
-        // Se dio la vuelta completa: ahora sí, a descansar las seis horas.
-        _auditoriaDesde = 0;
-        _ultimaAuditoriaSaldos = Date.now();
-      } else {
-        _auditoriaDesde = siguiente;
-      }
-      for (const [tel, datos] of tanda) revisar.set(tel, { clienteId: datos.clienteId, yaAnotado: false });
-    }
-    if (!revisar.size) return { revisados: 0, rescatados: 0, fallidos: 0 };
-
-    let rescatados = 0;
-    let fallidos = 0;
-    for (const [tel, r] of revisar) {
-      const clienteId = r.clienteId || (stripeClientes.get(tel) || {}).clienteId;
-      if (!clienteId) { olvidarSaldoRezagado(tel); continue; }
-
-      /*
-       * Leer el saldo ANTES de cobrar es lo que hace seguro reintentar. Si el
-       * intento anterior sí había pasado y solo se perdió la respuesta, aquí
-       * el saldo ya está en cero y no se vuelve a cobrar nada.
-       *
-       * Y va en su propio intento, aparte del cobro, por una razón concreta: si
-       * Stripe está caído durante una auditoría, esta lectura falla para los
-       * MILES de clientes que se están revisando. Si eso contara como "dinero
-       * atorado", la lista se llenaría de gente que no tiene ni un peso ahí y a
-       * los ocho intentos saldría una alerta por cada uno. Un aviso importante
-       * sepultado bajo mil avisos falsos es un aviso perdido. Así que solo se
-       * anota a quien YA se sabía que tenía dinero.
-       */
-      let pesos = 0;
-      try {
-        pesos = await stripeLeon.saldoDisponible(clienteId);
-      } catch (e) {
-        if (!r.yaAnotado) {
-          console.warn('[stripe-rezago] no se pudo leer el saldo de', tel, '·', e.message);
-          continue;
-        }
-        pesos = -1;   // ya sabíamos que había dinero: cuenta como intento fallido
-      }
-      if (pesos >= 0 && pesos <= 0.01) { olvidarSaldoRezagado(tel); continue; }
-
-      try {
-        if (pesos < 0) throw new Error('no se pudo leer el saldo en Stripe');
-
-        const nuevo = !r.yaAnotado;   // dinero que nadie había visto entrar
-        /*
-         * La misma regla que en el webhook: sin saber la deuda no se reparte.
-         *
-         * Pero aquí hay un límite. Si Wisphub lleva rato sin contestar, el
-         * dinero no puede quedarse esperando indefinidamente: a los 4 intentos
-         * (unos 40 minutos) se manda COMPLETO a León Telecom, sin comisión.
-         * Entre cobrarle de más a León y renunciar a nuestro cargo, se renuncia
-         * al cargo: el error caro no es perder $30, es que un cliente pague su
-         * internet y ese dinero no llegue.
-         */
-        const intentosPrevios = (stripeSaldosRezagados.get(tel) || {}).intentos || 0;
-        const d = await deudaConocidaDe(tel);
-        if (!d.conocida && intentosPrevios < REZAGO_SIN_DEUDA_MAX) {
-          fallidos++;
-          stripeSaldosRezagados.set(tel, {
-            ...(stripeSaldosRezagados.get(tel) || {}), clienteId, pesos,
-            desde: (stripeSaldosRezagados.get(tel) || {}).desde || Date.now(),
-            intentos: intentosPrevios + 1,
-            error: 'sin deuda: ' + d.porque,
-          });
-          schedulePersist();
-          console.warn('[stripe-rezago] pospuesto ·', tel, '· no se sabe la deuda:', d.porque);
-          continue;
-        }
-        const deuda = d.total;
-        if (!d.conocida) {
-          console.warn('[stripe-rezago] se barre SIN comisión ·', tel, '· Wisphub no contestó en', intentosPrevios, 'intentos');
-          alertAdmin('stripe-rezago',
-            `Se mandó completo a León Telecom el depósito de ${tel} ($${pesos.toFixed(2)}) porque Wisphub no contestó y no se pudo calcular el cargo. El cliente quedó bien; el cargo por servicio de ese pago se perdió.`);
-          anotarCargoPerdido(tel, pesos, 'Wisphub no contestó y no se pudo calcular el cargo');
-        }
-
-        /*
-         * La llave que impide cobrar dos veces se cuelga del MOVIMIENTO, no del
-         * monto ni del día: dos depósitos iguales el mismo día son dos pagos
-         * distintos y tienen que poder cobrarse los dos. Si Stripe no dijera
-         * cuál fue el último movimiento, se cae a monto y día, que protege del
-         * reintento inmediato aunque no distinga esos dos depósitos.
-         */
-        let referencia = '';
-        try { referencia = await stripeLeon.ultimoMovimientoSaldo(clienteId); }
-        catch (e) { console.warn('[stripe-rezago] sin id de movimiento para', tel, '·', e.message); }
-        if (!referencia) {
-          const hoy = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-          referencia = `rezago-${clienteId}-${Math.round(pesos * 100)}-${hoy}`;
-        }
-        const barrido = await stripeLeon.cobrarDelSaldo({
-          clienteId, deposito: pesos, deuda, telefono: tel,
-          nombre: (wisphubClients.get(tel) || {}).name,
-          referencia,
-        });
-        rescatados++;
-        olvidarSaldoRezagado(tel);
-        console.log('[stripe-rezago] rescatado ·', tel, '· $' + barrido.aLeonTelecom.toFixed(2), 'a León');
-        // Mismo conteo que en el webhook: un pago sin cargo cobrado no es ganar
-        // cero, es perder los $8.12 que cuesta la transferencia.
-        if (barrido.sinComision && d.conocida) {
-          anotarCargoPerdido(tel, pesos, 'transfirió justo lo que debía, sin el cargo');
-        }
-
-        /*
-         * Si el aviso original SÍ llegó, al cliente ya se le dio las gracias y
-         * la factura ya se anotó: aquí solo faltaba mover el dinero, y volver a
-         * escribirle sería un segundo "ya quedó" por el mismo pago.
-         *
-         * Si el dinero apareció en la auditoría, nadie sabía que existía: ahí sí
-         * hay que avisarle y aplicar el pago, porque para él pagó y no pasó nada.
-         */
-        if (nuevo) {
-          console.warn('[stripe-rezago] ¡depósito que el webhook nunca reportó! ·', tel, '· $' + pesos.toFixed(2));
-          alertAdmin('stripe-rezago',
-            `Se encontró un depósito de $${pesos.toFixed(2)} de ${tel} que Stripe nunca avisó. Ya se movió a León Telecom y se le aplicó. Vale la pena revisar que el webhook esté recibiendo.`);
-          registrarPagoYRevisarDoble({ telefono: tel, monto: pesos, canal: 'transferencia', ref: barrido.id });
-          markCases(tel, 'recibido', 'stripe-clabe');
-          await avisarPorIniciativa(tel,
-            `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado. ¡Gracias! 🙌`).catch(() => {});
-          try {
-            const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: pesos, referencia: barrido.id });
-            if (w.reactivado) {
-              await avisarPorIniciativa(tel, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
-            }
-            avisarRegistroPendiente(w, tel);
-          } catch (e) { console.error('[stripe-rezago] wisphub:', e.message); }
-        }
-      } catch (e) {
-        const previo = stripeSaldosRezagados.get(tel) || {};
-        const intentos = (previo.intentos || 0) + 1;
-        stripeSaldosRezagados.set(tel, {
-          ...previo, clienteId, intentos,
-          // El monto que se acaba de leer, no el que hubiera de antes: si no,
-          // el panel enseña "$0 atorado" sobre dinero que sí está parado ahí.
-          pesos: pesos > 0 ? pesos : (previo.pesos || 0),
-          desde: previo.desde || Date.now(),
-          error: String(e.message).slice(0, 200),
-        });
-        schedulePersist();
-        fallidos++;
-        console.error('[stripe-rezago] intento', intentos, 'falló para', tel, '·', e.message);
-        /*
-         * Se avisa UNA sola vez, al agotar los intentos. Alertar en cada
-         * pasada convertiría una avería en cien mensajes y la alerta dejaría
-         * de leerse, que es como se pierden las importantes.
-         */
-        if (intentos === REZAGO_INTENTOS_MAX) {
-          alertAdmin('stripe-rezago',
-            `⚠️ Hay dinero de ${tel} atorado en Stripe y ya no se pudo mover solo (${intentos} intentos). Último error: ${e.message}. Hay que barrerlo a mano desde el panel de Stripe.`);
-        }
-      }
-    }
-    if (rescatados) console.log('[stripe-rezago] pasada terminada ·', rescatados, 'rescatado(s)');
-    return { revisados: revisar.size, rescatados, fallidos, auditoria: auditar };
-  } catch (e) {
-    console.error('[stripe-rezago] barrido:', e.message);
-    return { error: e.message };
-  } finally {
-    _barriendoSaldos = false;
-  }
-}
-
 app.post('/webhook/stripe', async (req, res) => {
   const secreto = (process.env.STRIPE_WEBHOOK_SECRET_LEON || '').trim();
   if (!secreto) { console.error('[stripe-leon] falta STRIPE_WEBHOOK_SECRET_LEON'); return res.status(500).json({ error: 'Webhook sin configurar.' }); }
@@ -7948,54 +5404,23 @@ app.post('/webhook/stripe', async (req, res) => {
      */
     if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
         && evento.type === 'checkout.session.completed' && o.payment_status === 'unpaid') {
-      /*
-       * La ficha la tiene quien la sacó, que no siempre es el dueño del
-       * servicio. Si alguien pagó por su mamá, el aviso de "ya está tu ficha"
-       * le sirve a él, y a la mamá le llegaría de la nada.
-       */
       const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
-      const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
-      if (quien) {
-        const ajeno = quien !== tel;
-        const nombreDuenio = (wisphubClients.get(tel) || {}).name || tel;
-        await sendWhatsAppMessage(quien,
-          (ajeno ? `🧾 Ya se generó la ficha para pagar el servicio de *${nombreDuenio}*. ` : '🧾 Ya se generó tu ficha de pago. ')
-          + 'Llévala a OXXO y págala en caja.\n\n'
-          + `En cuanto la tienda reporte el pago te avisamos por aquí y ${ajeno ? 'su' : 'tu'} servicio se reactiva solo. `
+      if (tel) {
+        await sendWhatsAppMessage(tel,
+          '🧾 Ya se generó tu ficha de pago. Llévala a OXXO y págala en caja.\n\n'
+          + 'En cuanto la tienda reporte el pago te avisamos por aquí y tu servicio se reactiva solo. '
           + 'Puede tardar unas horas después de pagar. *No mandes comprobante*, nosotros lo vemos.').catch(() => {});
       }
       return res.json({ recibido: true, ficha: true });
     }
 
-    /*
-     * El link venció sin que lo abriera (o lo abrió y no terminó). Que lo sepa
-     * y que pedir otro sea una palabra: si no, vuelve a abrir el mismo link,
-     * ve "expirado" en inglés y piensa que el sistema no sirve.
-     */
-    if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
-        && evento.type === 'checkout.session.expired' && o.payment_status !== 'paid') {
-      const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
-      const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
-      if (quien && o.metadata.forma !== 'oxxo') {
-        const ajeno = quien !== tel;
-        await sendWhatsAppMessage(quien,
-          '⏱️ El link de pago venció (dura 30 minutos). No se cobró nada. '
-          + `Cuando quieras, escribe *${ajeno ? 'a nombre de quién' : 'pagar'}* y te doy uno nuevo. 🙌`).catch(() => {});
-      }
-      return res.json({ recibido: true, vencido: true });
-    }
-
     if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
         && evento.type === 'checkout.session.async_payment_failed') {
-      fichasOxxo.delete(String(o.metadata.telefono || '').replace(/\D/g, ''));
       const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
-      const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
-      if (quien) {
-        const ajeno = quien !== tel;
-        await avisarPorIniciativa(quien,
-          (ajeno ? `⚠️ La ficha de pago del servicio de *${(wisphubClients.get(tel) || {}).name || tel}* venció sin pagarse, así que sigue pendiente. `
-                 : '⚠️ Tu ficha de pago venció sin pagarse, así que tu servicio sigue pendiente. ')
-          + `Escribe *${ajeno ? 'OTRO' : 'pagar'}* para generar otra, o paga como siempre por depósito. 🙏`).catch(() => {});
+      if (tel) {
+        await sendWhatsAppMessage(tel,
+          '⚠️ Tu ficha de pago venció sin pagarse, así que tu servicio sigue pendiente. '
+          + 'Escribe *pagar* para generar otra, o paga como siempre por depósito. 🙏').catch(() => {});
       }
       return res.json({ recibido: true, fichaVencida: true });
     }
@@ -8022,12 +5447,11 @@ app.post('/webhook/stripe', async (req, res) => {
       const telefono = String(o.metadata.telefono || '').replace(/\D/g, '');
       const pagadoPor = String(o.metadata.pagadoPor || telefono).replace(/\D/g, '');
       if (telefono) {
-        fichasOxxo.delete(telefono);
         markCases(telefono, 'recibido', 'stripe-auto');
         const doble = registrarPagoYRevisarDoble({
           telefono, monto: (o.amount_total || 0) / 100,
           canal: o.payment_status === 'paid' ? 'tarjeta' : 'oxxo',
-          ref: o.payment_intent || o.id, pagadoPor, cubreHasta: o.metadata.cubreHasta, servicioId: o.metadata.servicioId,
+          ref: o.payment_intent || o.id,
         });
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
@@ -8038,10 +5462,8 @@ app.post('/webhook/stripe', async (req, res) => {
          * quien pagó SÍ tiene que salir igual. El dinero ya entró; lo último que
          * queremos es que además nadie se entere.
          */
-        // OXXO se confirma días después y el dueño puede no haber escrito nunca: plantilla.
-        const porIniciativa = pagadoPor !== telefono || o.payment_status !== 'paid';
         try {
-          await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
+          await sendWhatsAppMessage(telefono,
             '✅ Recibimos el pago de tu servicio — quedó confirmado automáticamente, no hace falta comprobante. ¡Gracias! 🙌'
             + (pagadoPor !== telefono ? '\n\n(Lo pagó otra persona por ti.)' : ''));
         } catch (e) { console.error('[stripe-leon] no salió el aviso al dueño', telefono, e.message); }
@@ -8049,7 +5471,7 @@ app.post('/webhook/stripe', async (req, res) => {
         if (pagadoPor && pagadoPor !== telefono) {
           markCases(pagadoPor, 'recibido', 'stripe-auto');
           try {
-            await (o.payment_status !== 'paid' ? avisarPorIniciativa : sendWhatsAppMessage)(pagadoPor,
+            await sendWhatsAppMessage(pagadoPor,
               `✅ Listo, tu pago se aplicó al servicio de *${duenio.name || telefono}*. Quedó confirmado automáticamente. ¡Gracias! 🙌`);
           } catch (e) { console.error('[stripe-leon] no salió el aviso a quien pagó', pagadoPor, e.message); }
         }
@@ -8072,12 +5494,9 @@ app.post('/webhook/stripe', async (req, res) => {
               // este cliente aceptó. Guardar el id de la tarjeta ahora sería
               // guardar uno que puede caducar antes del próximo mes.
               cobroAutomatico: true,
-              // Si el teléfono tiene varios contratos, cuál es el que se cobra solo.
-              ...(o.metadata.servicioId ? { autoServicioId: String(o.metadata.servicioId) } : {}),
             });
             schedulePersist();
             console.log('[stripe-leon] cobro automático activado para', telefono);
-            await sendWhatsAppMessage(telefono, '🔁 Tu cobro automático quedó activo. Cada mes te aviso dos días antes de tu fecha de pago y un día antes se cobra a esta tarjeta. Para quitarlo, escribe *CANCELAR AUTOMÁTICO*.').catch(() => {});
           } catch (e) { console.error('[stripe-leon] no se pudo guardar el cobro automático:', e.message); }
         }
         /*
@@ -8093,17 +5512,10 @@ app.post('/webhook/stripe', async (req, res) => {
            * como "pagó de más".
            */
           const mensualidad = Number(o.metadata.mensualidad || 0) / 100 || (o.amount_total || 0) / 100;
-          /*
-           * Pagó meses adelantados: se anota hasta cuándo, para que el aviso
-           * de corte no le llegue en esos meses, y se le dice a la oficina que
-           * registre los meses que vienen (Wisphub solo tiene la factura de hoy).
-           */
-          const mesesPagados = Number(o.metadata.meses || 1) || 1;
-          if (mesesPagados > 1) anotarMesesAdelantados(telefono, mesesPagados, `$${mensualidad.toFixed(2)}`, o.metadata.servicioId);
-          const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id, idServicio: o.metadata.servicioId || undefined });
+          const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
-            await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+            await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
           }
           if (w.avisos.length) console.warn('[wisphub]', telefono, '·', w.avisos.join(' · '));
 
@@ -8114,11 +5526,11 @@ app.post('/webhook/stripe', async (req, res) => {
            */
           if (w.ambiguo) {
             // Tiene varios contratos: no podemos saber cuál pagó sin preguntarle.
-            await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
+            await sendWhatsAppMessage(telefono,
               '✅ Recibimos tu pago, gracias. Como tienes *más de un servicio* con nosotros, '
               + 'un asesor va a aplicarlo al que corresponde en un momento. Si es urgente, dinos cuál es. 🙏').catch(() => {});
           } else if (!w.reactivado && w.deudaRestante > 0.01 && w.cliente && w.cliente.estado !== 'Activo') {
-            await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
+            await sendWhatsAppMessage(telefono,
               `✅ Recibimos tu pago. Todavía queda un saldo de *$${w.deudaRestante.toFixed(2)}*, `
               + 'y por eso el servicio sigue suspendido. En cuanto se cubra se reactiva solo. 🙏').catch(() => {});
           }
@@ -8147,56 +5559,9 @@ app.post('/webhook/stripe', async (req, res) => {
     if (evento.type === 'customer_cash_balance_transaction.created' && o.type === 'funded') {
       const clienteId = String(o.customer || '');
       // De vuelta del cliente de Stripe al teléfono: el registro es el mapa.
-      // La clave puede traer el servicio (`tel~servicio`): esa CLABE es de UN
-      // contrato en particular, y así se abona sin adivinar.
       let telefono = '';
-      let servicioDelDeposito = '';
-      for (const [clave, datos] of stripeClientes) {
-        if (datos && datos.clienteId === clienteId) {
-          const partes = stripeLeon.partirClave(clave);
-          telefono = partes.tel; servicioDelDeposito = partes.servicioId || String(datos.servicioId || '');
-          break;
-        }
-      }
-      /*
-       * Si el registro no lo conoce, PREGUNTARLE A STRIPE de quién es.
-       *
-       * Antes esto se rendía aquí y el depósito quedaba sin dueño, esperando a
-       * que alguien lo resolviera a mano en el panel. Pero cada cliente se creó
-       * con su teléfono en el metadata, así que Stripe siempre lo sabe: basta
-       * con preguntar. Pasa cuando el registro local se perdió (base nueva,
-       * migración) y es justo el caso donde el cliente ya transfirió y jura que
-       * pagó.
-       */
-      if (!telefono && clienteId) {
-        try {
-          const c = await stripeLeon.obtenerCliente(clienteId);
-          const tel = String((c && c.metadata && c.metadata.telefono) || '').replace(/\D/g, '');
-          if (tel) {
-            telefono = tel;
-            servicioDelDeposito = String((c.metadata && c.metadata.servicioId) || '').replace(/\D/g, '');
-            const claveReg = stripeLeon.claveDeRegistro(tel, servicioDelDeposito);
-            const yaTiene = (stripeClientes.get(claveReg) || {}).clienteId;
-            if (yaTiene && yaTiene !== clienteId) {
-              /*
-               * Ese teléfono YA tiene su cliente de Stripe, y no es este. El
-               * registro no se toca: su CLABE es la que ya anotó en su banco y
-               * cambiarla sería el peor error posible aquí. El depósito sí se
-               * le abona (el dinero es suyo), pero que alguien revise por qué
-               * hay dos clientes para el mismo teléfono.
-               */
-              console.warn('[stripe-leon] depósito de un SEGUNDO cliente de', tel, '·', clienteId, '(el suyo es', yaTiene + ')');
-              alertAdmin('stripe-leon',
-                `Entró dinero de ${tel} a un cliente de Stripe distinto del suyo (${clienteId} en vez de ${yaTiene}). Se le abonó igual y su CLABE NO se cambió, pero conviene revisar en Stripe por qué hay dos.`);
-            } else {
-              stripeClientes.set(claveReg, { ...(stripeClientes.get(claveReg) || {}), clienteId, ...(servicioDelDeposito ? { servicioId: servicioDelDeposito } : {}) });
-              schedulePersist();
-              console.warn('[stripe-leon] cliente recuperado de Stripe ·', clienteId, '→', claveReg);
-            }
-          }
-        } catch (e) {
-          console.error('[stripe-leon] no se pudo preguntar de quién es', clienteId, '·', e.message);
-        }
+      for (const [tel, datos] of stripeClientes) {
+        if (datos && datos.clienteId === clienteId) { telefono = tel; break; }
       }
 
       if (stripeVistos.has(o.id)) {
@@ -8221,99 +5586,53 @@ app.post('/webhook/stripe', async (req, res) => {
          * Va antes del aviso a propósito: si el barrido falla hay que decirlo,
          * no mandar un "ya quedó" sobre dinero que no se movió.
          */
-        const reg = stripeClientes.get(telefono) || {};
-        const deuda = await deudaConocidaDe(telefono);
-        if (!deuda.conocida) {
-          /*
-           * Sin saber la deuda no se puede repartir bien, así que el barrido se
-           * POSPONE en vez de hacerse mal. La comisión sale del excedente sobre
-           * lo que el cliente debía; si damos la deuda por cero cuando en
-           * realidad no la sabemos, todo el depósito parece excedente y le
-           * cobramos comisión a dinero que era la mensualidad de León.
-           *
-           * El dinero no corre ningún riesgo: sigue en Stripe, a nombre del
-           * cliente, y `barrerSaldosRezagados` lo reintenta cada diez minutos.
-           * En cuanto Wisphub conteste se reparte como debe; si nunca contesta,
-           * a los cuarenta minutos se manda completo a León Telecom sin cobrar
-           * nada, que es el lado correcto donde equivocarse.
-           */
-          console.warn('[stripe-leon] barrido pospuesto ·', telefono, '· no se sabe la deuda:', deuda.porque);
-          anotarSaldoRezagado(telefono, o.customer || reg.clienteId, pesos, 'sin deuda: ' + deuda.porque);
-        } else {
+        let barrido = null;
+        try {
+          const reg = stripeClientes.get(telefono) || {};
+          let deuda = 0;
           try {
-            const barrido = await stripeLeon.cobrarDelSaldo({
-              /*
-               * El dinero está en `o.customer`: este aviso ES el movimiento del
-               * saldo de ESE cliente. Tomarlo del registro sería barrer al
-               * cliente equivocado el día que un teléfono tenga dos (pasa si se
-               * duplicó antes de que existiera el registro), y el cobro
-               * fallaría por saldo insuficiente sobre dinero que sí está.
-               */
-              clienteId: o.customer || reg.clienteId, deposito: pesos, deuda: deuda.total,
-              telefono, nombre: (wisphubClients.get(telefono) || {}).name, referencia: o.id,
-            });
-            console.log('[stripe-leon] saldo barrido ·', telefono,
-              '· a León $' + barrido.aLeonTelecom.toFixed(2), '· comisión $' + barrido.comision.toFixed(2));
-            if (barrido.sinComision) {
-              console.warn('[stripe-leon] sin comisión: depositó justo su plan, sin el cargo ·', telefono);
-              anotarCargoPerdido(telefono, pesos, 'transfirió justo lo que debía, sin el cargo');
-            }
-          } catch (e) {
-            /*
-             * El dinero está a salvo en el saldo del cliente: no se pierde, pero
-             * tampoco le llegó a León.
-             *
-             * Antes esto solo alertaba y se quedaba esperando a que una persona
-             * lo moviera a mano. Ahora se anota y `barrerSaldosRezagados` lo
-             * reintenta solo cada diez minutos: la mayoría de estos fallos son
-             * pasajeros (Stripe intermitente, un reinicio a media transacción) y
-             * se arreglan sin que nadie tenga que enterarse. La alerta se guarda
-             * para cuando de verdad ya no se pudo.
-             */
-            console.error('[stripe-leon] NO se pudo barrer el saldo de', telefono, '·', e.message);
-            anotarSaldoRezagado(telefono, o.customer || reg.clienteId, pesos, e.message);
+            const c = wisphubClients.get(telefono) || {};
+            if (c.usuario) deuda = (await wisphubReactivar.deudaDelCliente(c.usuario)).total;
+          } catch (e) { console.warn('[stripe-leon] sin deuda para calcular comisión:', e.message); }
+
+          barrido = await stripeLeon.cobrarDelSaldo({
+            clienteId: reg.clienteId || o.customer, deposito: pesos, deuda,
+            telefono, nombre: (wisphubClients.get(telefono) || {}).name, referencia: o.id,
+          });
+          console.log('[stripe-leon] saldo barrido ·', telefono,
+            '· a León $' + barrido.aLeonTelecom.toFixed(2), '· comisión $' + barrido.comision.toFixed(2));
+          if (barrido.sinComision) {
+            console.warn('[stripe-leon] sin comisión: depositó justo su plan, sin el cargo ·', telefono);
           }
+        } catch (e) {
+          /*
+           * El dinero está a salvo en el saldo del cliente: no se pierde, pero
+           * tampoco le llegó a León. Alguien tiene que barrerlo a mano.
+           */
+          console.error('[stripe-leon] NO se pudo barrer el saldo de', telefono, '·', e.message);
+          alertAdmin('stripe-saldo', `Entró una transferencia de $${pesos.toFixed(2)} de ${telefono} y NO se pudo mover a la cuenta de León Telecom: ${e.message}. El dinero está en Stripe, hay que barrerlo a mano.`);
         }
-        const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id, cubreHasta: deuda.cubreHasta || undefined, servicioId: servicioDelDeposito || undefined });
+        const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id });
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
         }
-        /*
-         * Quien transfiere dos o más mensualidades de un jalón también va
-         * adelantado: se cuenta con el plan del contrato (o con lo que debía,
-         * si el plan no se sabe) y queda anotado hasta cuándo.
-         */
-        let cubreTexto = '';
         try {
-          let unidad = 0;
-          if (servicioDelDeposito) {
-            const svc = (await serviciosDeLaCuenta(telefono)).find((x) => x.id === String(servicioDelDeposito));
-            if (svc) { unidad = svc.precio; if (!unidad) { try { unidad = (await wisphubReactivar.deudaDelCliente(svc.usuario)).total || 0; } catch (_) { /* sin deuda a la mano */ } } }
-          }
-          if (!unidad) unidad = parseFloat((wisphubClients.get(telefono) || {}).precioPlan) || (deuda.conocida ? Number(deuda.total) || 0 : 0);
-          if (unidad > 0 && pesos >= 2 * unidad - 0.5) {
-            const mesesDep = Math.min(12, Math.floor((pesos + 0.5) / unidad));
-            const hasta = anotarMesesAdelantados(telefono, mesesDep, `$${pesos.toFixed(2)} por transferencia`, servicioDelDeposito);
-            cubreTexto = ` Cubre ${mesesDep} meses: quedas pagado hasta el ${hasta.split('-').reverse().join('/')}.`;
-          }
-        } catch (e) { console.warn('[stripe-leon] no se pudo contar los meses del depósito ·', e.message); }
-        try {
-          await avisarPorIniciativa(telefono,
-            `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado automáticamente, no hace falta comprobante.${cubreTexto} ¡Gracias! 🙌`);
+          await sendWhatsAppMessage(telefono,
+            `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado automáticamente, no hace falta comprobante. ¡Gracias! 🙌`);
         } catch (e) { console.error('[stripe-leon] no salió el aviso del depósito a', telefono, e.message); }
         try {
-          const w = await wisphubReactivar.aplicarPago({ telefono, monto: pesos, referencia: o.id, idServicio: servicioDelDeposito || undefined });
+          const w = await wisphubReactivar.aplicarPago({ telefono, monto: pesos, referencia: o.id });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado por depósito ·', telefono, '· tarea', w.tareaId);
-            await avisarPorIniciativa(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+            await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
           }
           if (w.avisos.length) console.warn('[wisphub]', telefono, '·', w.avisos.join(' · '));
           if (w.ambiguo) {
-            await avisarPorIniciativa(telefono,
+            await sendWhatsAppMessage(telefono,
               '✅ Recibimos tu transferencia, gracias. Como tienes *más de un servicio* con nosotros, '
               + 'un asesor va a aplicarla al que corresponde en un momento. Si es urgente, dinos cuál es. 🙏').catch(() => {});
           } else if (!w.reactivado && w.deudaRestante > 0.01 && w.cliente && w.cliente.estado !== 'Activo') {
-            await avisarPorIniciativa(telefono,
+            await sendWhatsAppMessage(telefono,
               `✅ Recibimos tu transferencia. Todavía queda un saldo de *$${w.deudaRestante.toFixed(2)}*, `
               + 'y por eso el servicio sigue suspendido. En cuanto se cubra se reactiva solo. 🙏').catch(() => {});
           }
@@ -8331,79 +5650,6 @@ app.post('/webhook/stripe', async (req, res) => {
         alertAdmin('stripe-leon', `Entró una transferencia de $${pesos.toFixed(2)} al cliente de Stripe ${clienteId}, que no está en el registro: no se pudo abonar a nadie. Revísalo a mano en Stripe.`);
       }
       return res.json({ recibido: true });
-    }
-    /*
-     * ── CUANDO EL DINERO SE DA LA VUELTA ────────────────────────────────────
-     *
-     * Un contracargo o una devolución es un pago que ya dimos por bueno y que
-     * después se deshace. Para entonces el cliente ya está reconectado, ya se
-     * le dijo "gracias", y la factura ya se marcó como pagada en la oficina.
-     *
-     * Hasta ahora esto no se escuchaba: el dinero se iba y el sistema seguía
-     * creyendo que ese mes estaba pagado. Nadie se enteraba hasta cuadrar caja,
-     * si es que alguien cuadraba.
-     *
-     * Aquí NO se corta a nadie automáticamente. Cortar por un contracargo sería
-     * dejar sin internet a alguien que a lo mejor solo no reconoció el nombre
-     * del cargo en su estado de cuenta, que es de donde sale la mayoría de las
-     * disputas. La decisión es de una persona; lo que hace falta es que esa
-     * persona SE ENTERE, con el nombre y el monto en la mano.
-     */
-    if (evento.type === 'charge.dispute.created' || evento.type === 'charge.dispute.closed') {
-      const tel = telefonoDeEventoStripe(o);
-      const quien = tel ? `${(wisphubClients.get(tel) || {}).name || 'cliente'} (${tel})` : `cargo ${o.charge || o.id}`;
-      const monto = ((Number(o.amount) || 0) / 100).toFixed(2);
-
-      if (evento.type === 'charge.dispute.created') {
-        alertAdmin('stripe-disputa',
-          `🚨 CONTRACARGO de ${quien} por $${monto}. El banco retuvo ese dinero y hay que responder en Stripe con la evidencia (contrato, historial de servicio) antes de que venza el plazo. El servicio NO se cortó solo: decidan ustedes.`);
-        console.warn('[stripe-leon] contracargo ·', quien, '· $' + monto, '·', o.id);
-        anotarRegistroPendiente({ tipo: 'disputa', factura: null, total: Number(monto),
-          nombre: (wisphubClients.get(tel) || {}).name || '', telefono: tel || '',
-          detalle: `Contracargo ${o.id} · motivo: ${o.reason || 'sin especificar'}` });
-      } else {
-        const gano = o.status === 'won';
-        alertAdmin('stripe-disputa',
-          `${gano ? '✅' : '❌'} El contracargo de ${quien} por $${monto} se cerró: *${gano ? 'ganado' : String(o.status || 'perdido')}*.`
-          + (gano ? ' El dinero regresa.' : ' Ese dinero ya no vuelve; si el cliente sigue conectado, decidan qué hacer.'));
-        console.warn('[stripe-leon] disputa cerrada ·', quien, '·', o.status);
-      }
-      return res.json({ recibido: true, disputa: true });
-    }
-
-    if (evento.type === 'charge.refunded') {
-      const tel = telefonoDeEventoStripe(o);
-      const devuelto = ((Number(o.amount_refunded) || 0) / 100);
-      const total = ((Number(o.amount) || 0) / 100);
-      const parcial = devuelto > 0 && devuelto < total - 0.01;
-      const quien = tel ? `${(wisphubClients.get(tel) || {}).name || 'cliente'} (${tel})` : `cargo ${o.id}`;
-
-      alertAdmin('stripe-devolucion',
-        `↩️ DEVOLUCIÓN ${parcial ? 'PARCIAL ' : ''}a ${quien} por $${devuelto.toFixed(2)}`
-        + (parcial ? ` de $${total.toFixed(2)}` : '')
-        + '. Si ese pago ya se había marcado en Wisphub, hay que deshacerlo ahí.');
-      console.warn('[stripe-leon] devolución ·', quien, '· $' + devuelto.toFixed(2), '·', o.id);
-      anotarRegistroPendiente({ tipo: 'devolucion', factura: null, total: devuelto,
-        nombre: (wisphubClients.get(tel) || {}).name || '', telefono: tel || '',
-        detalle: `Devolución del cargo ${o.id}` });
-      return res.json({ recibido: true, devolucion: true });
-    }
-
-    /*
-     * Un cobro que se intentó y no pasó. Casi siempre es el barrido del saldo
-     * de una CLABE: el dinero del cliente sigue dentro de Stripe sin llegarle a
-     * León. Se anota para que `barrerSaldosRezagados` lo reintente solo, en vez
-     * de quedarse esperando a que alguien lo note.
-     */
-    if (evento.type === 'payment_intent.payment_failed'
-        && o.metadata && o.metadata.tipo === 'mensualidad-leontelecom') {
-      const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
-      const motivo = (o.last_payment_error && o.last_payment_error.message) || 'sin detalle';
-      console.warn('[stripe-leon] cobro fallido ·', tel || o.id, '·', motivo);
-      if (tel && o.metadata.via === 'clabe') {
-        anotarSaldoRezagado(tel, o.customer, (Number(o.amount) || 0) / 100, motivo);
-      }
-      return res.json({ recibido: true, fallido: true });
     }
   } catch (e) { console.error('[stripe-leon] webhook:', e.message); }
 
@@ -8466,7 +5712,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
    * aquí para saber cuándo está por cerrarse y avisarle antes, y se borra el
    * recordatorio pendiente porque ya no hace falta.
    */
-  if (isAgentNumber(from) || esQuienApruebaProrrogas(from)) {
+  if (isAgentNumber(from)) {
     const num = _normAgentNum(from);
     agentLastInbound.set(num, new Date().toISOString());
     agentPingSent.delete(num);
@@ -8517,7 +5763,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     if (!text) return;
 
     // If message is FROM an agent → route to agent handler (commands or relay)
-    if (isAgentNumber(from) || (esQuienApruebaProrrogas(from) && esRespuestaDeProrroga(text))) {
+    if (isAgentNumber(from)) {
       await handleAgentCommand(from, text);
       return;
     }
@@ -8543,7 +5789,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       return;
     }
     if (payload) {
-      if (isAgentNumber(from) || (esQuienApruebaProrrogas(from) && esRespuestaDeProrroga(payload))) await handleAgentCommand(from, payload);
+      if (isAgentNumber(from)) await handleAgentCommand(from, payload);
       else await handleChatMessage(from, payload, sendWhatsAppMessage);
     }
     return;
@@ -8560,7 +5806,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     if (replyId) {
       console.log(`[WhatsApp] Interactive reply: ${itype} id="${replyId}" from=${from}`);
       // If an agent tapped a button (e.g. "Atender caso") → route to agent commands
-      if (isAgentNumber(from) || (esQuienApruebaProrrogas(from) && esRespuestaDeProrroga(replyId))) {
+      if (isAgentNumber(from)) {
         await handleAgentCommand(from, replyId);
       } else {
         await handleChatMessage(from, replyId, sendWhatsAppMessage);
@@ -9020,136 +6266,6 @@ function mapWisphubAccount(c) {
 // API: Buscar cliente + estado de cuenta.
 // Por NÚMERO → consulta Wisphub EN VIVO (datos frescos, incluye suspendidos).
 // Por NOMBRE → busca en lo sincronizado (clientes activos).
-/*
- * ¿A ESTE CLIENTE LE SALE LA OPCIÓN DE PAGAR EN LÍNEA, Y POR QUÉ NO?
- *
- * Es la pregunta del primer día: alguien llama diciendo "a mí no me aparece", y
- * del otro lado no había forma de contestarle más que adivinando. Se responde
- * donde la oficina ya busca clientes, no en una pantalla aparte que nadie
- * recuerda que existe.
- *
- * Y se dice el MOTIVO, no solo sí o no: cada motivo se arregla en otro lado.
- */
-/*
- * Con quién coincide un nombre escrito a mano ("Ana Lilia Hernández"). Para
- * que el asesor no tenga que buscarlo en Wisphub: el comprobante llega ya con
- * el teléfono, el plan y el estado del servicio al que hay que abonarle. Si
- * hay varias coincidencias se listan todas; si no hay, se dice.
- */
-/*
- * Lo que la gente escribe cuando se le pregunta a nombre de quién está el
- * servicio: "Nombre de titular: Alejandra Soriano", "cliente: José Juan",
- * "de Alejandra Juliani", "el servicio está a nombre de Fabiola Díaz", "si a
- * nombre de Jannin". Se deja solo el nombre.
- */
-function limpiarTitular(texto) {
-  return String(texto || '').replace(/\s+/g, ' ').trim()
-    .replace(/^(s[ií],?\s+|pues\s+|es\s+|est[aá]\s+)?(?:el\s+(servicio|internet|contrato|recibo)\s+(est[aá]|es|viene)\s+)?(a\s+nombre\s+de|nombre\s+(de\s+)?(la\s+|el\s+)?titular|titular|cliente|nombre|de|del|a nombre)\s*[:.\-]?\s+/i, '')
-    .replace(/^(a\s+nombre\s+de|nombre\s+(de\s+)?(la\s+|el\s+)?titular|titular|cliente|nombre|de|del)\s*[:.\-]?\s+/i, '')
-    .replace(/[.]+$/, '').trim();
-}
-
-function coincidenciasDeTitular(nombre) {
-  // "mi mamá Gloria Núñez", "la señora Ana": el parentesco y el tratamiento sobran.
-  const limpio = limpiarTitular(nombre).replace(/^(mi|la|el|de mi|de la|del)\s+(mam[aá]|pap[aá]|esposa?|hij[oa]|herman[oa]|suegr[ao]|abuel[oa]|t[ií][ao]|vecin[oa]|se[ñn]ora?|patr[oó]n[a]?|jef[ea])\s+/i, '').replace(/^(se[ñn]ora?|don|do[ñn]a|sr\.?|sra\.?)\s+/i, '');
-  const q = limpio.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (q.length < 4) return [];
-  const palabras = q.split(' ').filter((w) => w.length > 2);
-  const out = [];
-  for (const [tel, c] of wisphubClients.entries()) {
-    const n = String(c.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (!n) continue;
-    const todas = palabras.length && palabras.every((w) => n.includes(w));
-    if (todas || n.includes(q)) out.push({ tel, name: c.name, plan: c.plan || '', status: c.status || '', precioPlan: c.precioPlan || '' });
-    if (out.length >= 4) break;
-  }
-  return out;
-}
-function lineaCoincidencias(nombre, remitente) {
-  const c = coincidenciasDeTitular(nombre);
-  if (!c.length) return '🔎 No encontré ese nombre en el padrón: revisar a mano.';
-  return c.map((x) => `🔎 Coincide: ${x.name} · ${x.tel}${x.plan ? ' · ' + x.plan : ''}${x.status ? ' · ' + x.status : ''}${x.tel === String(remitente || '').replace(/\D/g, '') ? ' (es quien escribe)' : ' (paga otra persona)'}`).join('\n');
-}
-
-/*
- * LO ÚLTIMO QUE PASÓ CON ESTE CLIENTE, EN CINCO RENGLONES.
- *
- * Cuando llama, la oficina necesita el contexto sin abrir tres pestañas: qué
- * pagó y por dónde, si mandó comprobante y qué se decidió, si se le dio
- * prórroga o se le mandó el estado de cuenta, si su automático pasó. Todo eso
- * ya está guardado en lugares distintos; aquí solo se junta y se ordena.
- */
-function historialDe(telefono, maximo = 5) {
-  const tel = String(telefono || '').replace(/\D/g, '');
-  if (!tel) return [];
-  const filas = [];
-  const ddmm = (iso) => /^\d{4}-\d{2}-\d{2}$/.test(String(iso || '')) ? iso.split('-').reverse().join('/') : String(iso || '');
-  for (const p of stripePagosRecientes.get(tel) || []) {
-    if (!p || !p.cuando) continue;
-    filas.push({ cuando: new Date(p.cuando).toISOString(), tipo: 'pago',
-      texto: `Pagó $${(Number(p.monto) || 0).toFixed(2)} por ${p.canal || 'el bot'}` + (p.pagadoPor ? ` (lo hizo el ${p.pagadoPor})` : '') + (p.cubreHasta ? ` · cubre hasta el ${ddmm(p.cubreHasta)}` : '') });
-  }
-  const nombresCaso = { pago: 'Comprobante', 'estado-cuenta': 'Estado de cuenta', asesor: 'Pidió asesor', emergencia: 'Emergencia', imagen: 'Mandó imagen' };
-  for (const c of caseLog) {
-    if (!c) continue;
-    const suyo = String(c.clientId) === tel;
-    // El comprobante que mandó otra persona por él queda bajo el número de esa persona.
-    const porOtro = !suyo && c.type === 'pago' && String(c.resumen || '').includes('· ' + tel);
-    if (!suyo && !porOtro) continue;
-    const estado = c.status && c.status !== 'pendiente' ? ` · ${c.status}` : '';
-    const encabezado = porOtro ? `Comprobante que mandó el ${c.clientId} por él` : (nombresCaso[c.type] || c.type || 'Caso');
-    filas.push({ cuando: c.ts, tipo: c.type || 'otro', texto: encabezado + ': ' + String(c.resumen || '').slice(0, 120) + estado });
-  }
-  const pr = prorrogas[tel];
-  if (pr && pr.cuando) filas.push({ cuando: pr.cuando, tipo: 'prorroga', texto: `Prórroga de ${pr.dias} día(s) hasta el ${ddmm(pr.hasta)}` + (pr.por ? ` (la dio ${pr.por})` : '') + (pr.motivo ? ` · ${pr.motivo}` : '') });
-  for (const [corte, per] of Object.entries(autoCobros[tel] || {})) {
-    if (!per || !per.cuando || !per.estado) continue;
-    const textos = { cobrado: 'se cobró', rechazado: 'tarjeta rechazada', 'sin-tarjeta': 'sin tarjeta guardada', 'ya-pago': 'ya había pagado', 'sin-deuda': 'sin deuda', 'en-proceso': 'en proceso' };
-    filas.push({ cuando: per.cuando, tipo: 'automatico', texto: `Cobro automático del corte ${ddmm(corte)}: ${textos[per.estado] || per.estado}` + (per.motivo ? ` · ${per.motivo}` : '') });
-  }
-  return filas.filter((f) => f.cuando).sort((a, b) => String(b.cuando).localeCompare(String(a.cuando))).slice(0, maximo);
-}
-
-function conCobroEnLinea(cliente) {
-  const tel = String((cliente && cliente.phone) || '').replace(/\D/g, '');
-  const puede = tel ? stripeLeon.permitido(tel, TELEFONO_PILOTO_STRIPE) : false;
-  let porque = '';
-  if (!puede) {
-    if (!stripeLeon.activo()) porque = 'el cobro en línea está apagado para todos';
-    else if (!stripeLeon.hayLlave()) porque = 'falta configurar Stripe en el servidor';
-    else if (!stripeLeon.cuentaConectada()) porque = 'falta dar de alta la cuenta a la que llega el dinero';
-    else if (!stripeLeon.cuentaLista()) porque = 'Stripe todavía no aprueba la cuenta de cobro';
-    else porque = 'no está entre los clientes del piloto';
-  }
-  /*
-   * Lo que la oficina necesita saber de este cliente de un vistazo cuando
-   * llama: si ya pagó por el bot (y cuándo), si tiene prórroga, si pagó meses
-   * adelantados, si tiene el cobro automático. Cada una de esas cosas cambia
-   * la respuesta que se le da.
-   */
-  const reg = tel ? (stripeClientes.get(tel) || {}) : {};
-  const pago = tel ? pagoRecienteDe(tel) : null;
-  const pr = tel ? prorrogaVigente(tel) : null;
-  const hoy = fechaLocalISO();
-  return {
-    ...cliente, cobroEnLinea: puede, cobroEnLineaPorque: porque,
-    ultimoPagoEnLinea: pago ? { cuando: new Date(pago.cuando).toISOString(), canal: pago.canal } : null,
-    prorroga: pr ? { hasta: pr.hasta, motivo: pr.motivo || '', por: pr.por || '' } : null,
-    // Si pidió prórroga y nadie ha contestado, la oficina lo ve aquí y lo resuelve de una vez.
-    prorrogaPedida: (() => { const x = tel ? prorrogasPedidas[tel] : null; return x && x.cuando ? { cuando: new Date(x.cuando).toISOString(), horas: Math.round((Date.now() - x.cuando) / 3600000), dias: x.dias || 0, texto: x.texto || '', recordado: !!x.recordado } : null; })(),
-    adelantadoHasta: reg.adelantadoHasta && reg.adelantadoHasta >= hoy ? reg.adelantadoHasta : null,
-    cobroAutomatico: !!reg.cobroAutomatico,
-    // Qué pasó con el cobro automático de este periodo: cobrado, rechazado, sin tarjeta…
-    autoEstado: (() => {
-      if (!reg.cobroAutomatico) return null;
-      const corte = parseFechaCorte((cliente && cliente.fechaCorte) || (wisphubClients.get(tel) || {}).fechaCorte);
-      const per = corte ? (((autoCobros[tel] || {})[corte]) || {}) : {};
-      const textos = { cobrado: 'cobrado', rechazado: 'tarjeta rechazada', 'sin-tarjeta': 'sin tarjeta guardada', 'ya-pago': 'ya había pagado', 'sin-deuda': 'sin deuda', 'en-proceso': 'en proceso' };
-      return per.estado ? { estado: per.estado, texto: textos[per.estado] || per.estado, corte, cuando: per.cuando || null, motivo: per.motivo || '' } : null;
-    })(),
-  };
-}
-
 app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ results: [], source: 'none' });
@@ -9164,8 +6280,7 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
       if (r.ok) {
         const d = await r.json();
         const items = d.results || (Array.isArray(d) ? d : []);
-        const results = items.map(mapWisphubAccount).map(conCobroEnLinea);
-        for (const c of results) c.historial = historialDe(c.phone);
+        const results = items.map(mapWisphubAccount);
         return res.json({ results, source: 'wisphub-live', total: results.length });
       }
     } catch (e) { /* si falla, cae al respaldo en memoria */ }
@@ -9178,22 +6293,12 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
     const byPhone = digits.length >= 3 && phone.includes(digits);
     const byName = String(c.name || '').toLowerCase().includes(ql);
     if (byPhone || byName) {
-      out.push(conCobroEnLinea({
+      out.push({
         name: c.name, phone, status: c.status, saldo: c.saldo,
         fechaCorte: c.fechaCorte, plan: c.plan, precioPlan: c.precioPlan,
         estadoFacturas: c.estadoFacturas, id: c.wisphubId
-      }));
+      });
       if (out.length >= 20) break;
-    }
-  }
-  // El padrón sincronizado guarda una fila por teléfono, así que quien tiene
-  // dos contratos aparece con uno solo. Con pocos resultados se le pregunta a
-  // Wisphub por todos sus servicios para que la ficha los enseñe.
-  if (out.length && out.length <= 5) {
-    for (const c of out) {
-      const varios = await serviciosDeLaCuenta(c.phone);
-      if (varios.length > 1) c.contratos = varios;
-      c.historial = historialDe(c.phone);
     }
   }
   res.json({ results: out, source: 'sync', lastSync: lastWisphubSync, total: out.length });
@@ -9542,49 +6647,6 @@ app.get('/admin/api/corte-reminders/stats', verifyAdminToken, requirePermission(
 // usuario del panel, aunque solo tuviera 'productos', podía dispararlo. Se exige
 // 'broadcast' o 'clients' (superadmin/admin pasan siempre) para no quitarle el botón a
 // quien hoy sí lo usa.
-/*
- * Estado de cuenta al cliente, desde su ficha: cuándo corta, qué debe, si tiene
- * prórroga o automático y cómo pagar. Por plantilla, porque lo manda la oficina
- * sin que el cliente haya escrito. Es lo que hoy dicta el asesor por teléfono.
- */
-app.post('/admin/api/clientes/:tel/estado-cuenta', verifyAdminToken, requirePermission('clients'), async (req, res) => {
-  const tel = normalizePhone(String(req.params.tel || ''));
-  const c = wisphubClients.get(tel);
-  if (!c) return res.status(404).json({ error: 'Ese teléfono no está en el padrón' });
-  const corte = parseFechaCorte(c.fechaCorte);
-  const bonita = (f) => (f ? f.split('-').reverse().join('/') : '');
-  const nombre = (String(c.name || '').trim().split(/\s+/)[0] || 'cliente');
-  const lineas = [`Hola ${nombre}, este es el estado de tu cuenta de internet con León Telecom:`];
-  const visto = pagoRecienteDe(tel, corte || '');
-  const pr = prorrogaVigente(tel);
-  const reg = stripeClientes.get(tel) || {};
-  let deuda = 0;
-  try { const d = await deudaConocidaDe(tel); if (d.conocida) deuda = d.total; } catch (_) { /* sin deuda a la mano */ }
-  if (visto) lineas.push(`✅ Tu pago de este mes ya está registrado (${canalTexto(visto.canal)}).`);
-  else if (deuda > 0) lineas.push(`💵 Tienes pendiente $${deuda.toFixed(2)}.`);
-  else lineas.push('✅ Estás al corriente.');
-  if (corte) lineas.push(`📅 Tu fecha de corte es el ${bonita(corte)}.`);
-  if (pr) lineas.push(`⏳ Tienes prórroga hasta el ${bonita(pr.hasta)}: no se corta antes de esa fecha.`);
-  if (reg.cobroAutomatico) lineas.push('🔁 Tienes cobro automático: se cobra solo a tu tarjeta un día antes del corte.');
-  if (!visto && deuda > 0) lineas.push(stripeLeon.permitido(tel, TELEFONO_PILOTO_STRIPE)
-    ? 'Para pagar desde tu teléfono (tarjeta, OXXO o transferencia), responde PAGAR.'
-    : 'Puedes pagar en la oficina o por transferencia; responde PAGAR y te doy los datos.');
-  const texto = lineas.join('\n');
-  try {
-    await avisarPorIniciativa(tel, texto);
-    logCase(tel, c.name || '', 'estado-cuenta', 'Estado de cuenta enviado desde el panel por ' + ((req.admin && req.admin.username) || 'panel'), {});
-    res.json({ ok: true, texto });
-  } catch (e) {
-    res.status(502).json({ error: 'No se pudo mandar: ' + e.message, texto });
-  }
-});
-app.post('/admin/api/cobranza/resumen', verifyAdminToken, requirePermission('clients'), async (_req, res) => {
-  res.json(await resumenCobranzaDiario(true));
-});
-// Solo verlo (para la tarjeta "Hoy" del panel): mismas cifras, sin mandar nada.
-app.get('/admin/api/cobranza/resumen', verifyAdminToken, requirePermission('clients'), async (_req, res) => {
-  res.json(await resumenCobranzaDiario(true, false));
-});
 app.post('/admin/api/corte-reminders/run', verifyAdminToken, requireAnyPermission(['broadcast', 'clients']), async (req, res) => {
   const r = await sweepCorteReminders(true);
   res.json(r || { error: 'No se pudo correr (¿plantilla o Wisphub sin configurar?)' });
@@ -9893,199 +6955,6 @@ app.post('/admin/api/wisphub-sync', verifyAdminToken, requirePermission('wisphub
   res.json(result);
 });
 
-/*
- * Ver y mover a mano el dinero atorado en Stripe.
- *
- * El barrido automático corre cada diez minutos, y para casi todo eso sobra.
- * Pero el día que un cliente llame diciendo "ya transferí" nadie quiere
- * contestarle "espérate diez minutos": con esto se revisa y se mueve al
- * momento, y la respuesta dice exactamente cuánto se rescató.
- *
- * `?auditar=1` fuerza la revisión de TODOS los clientes con CLABE, no solo de
- * los que ya se sabía que habían fallado.
- */
-/* ═══════════ LA CUENTA A LA QUE LE CAE EL DINERO, DESDE EL PANEL ═══════════
- *
- * Antes esto era una variable de entorno que alguien tenía que crear a mano en
- * Stripe y pegar en Render. León no podía hacerlo solo, y mientras tanto todo
- * el cobro en línea se quedaba apagado esperando a que alguien más se sentara.
- */
-app.get('/admin/api/cuenta-cobro', verifyAdminToken, requirePermission('reports'), async (_req, res) => {
-  try {
-    if (!stripeLeon.hayLlave()) {
-      return res.json({ ok: true, configurado: false, cuenta: null });
-    }
-    const id = stripeLeon.cuentaConectada();
-    if (!id) return res.json({ ok: true, configurado: true, cuenta: null });
-    let est = null;
-    try { est = await stripeLeon.estadoCuenta(); }
-    catch (e) { console.warn('[cobro] no se pudo consultar la cuenta:', e.message); }
-    res.json({
-      ok: true, configurado: true,
-      cuenta: {
-        id,
-        puedeCobrar: est ? est.puedeCobrar : stripeLeon.cuentaLista(),
-        faltante: (est && est.faltante) || [],
-        banco: (est && est.banco) || null,
-        demora: est ? est.demora : null,
-        sinRespuesta: !est,
-      },
-    });
-  } catch (e) {
-    console.error('[cobro] cuenta:', e.message);
-    res.status(500).json({ ok: false, error: 'No se pudo consultar la cuenta de cobro.' });
-  }
-});
-
-app.post('/admin/api/cuenta-cobro', verifyAdminToken, requirePermission('reports'), async (req, res) => {
-  try {
-    if (!stripeLeon.hayLlave()) {
-      return res.status(503).json({ ok: false, error: 'Todavía no está configurado el cobro con tarjeta.' });
-    }
-    const urlBase = (process.env.URL_PUBLICA || '').replace(/\/$/, '')
-      || `${req.protocol}://${req.get('host')}`;
-    await stripeLeon.crearCuentaConectada({
-      email: (process.env.LEON_CONTACTO_EMAIL || '').trim() || undefined,
-      nombre: 'León Telecom',
-    });
-    res.json({ ok: true, urlAlta: await stripeLeon.enlaceOnboarding({ urlBase }) });
-  } catch (e) {
-    const dice = (e.stripe && e.stripe.message) || e.message || '';
-    console.error('[cobro] alta de cuenta:', dice);
-    /*
-     * Un 4xx de Stripe es configuración que falta: el siguiente intento va a
-     * fallar igual. Decir "intenta luego" manda a picar un botón que nunca va
-     * a servir y esconde la causa en un registro que nadie abre.
-     */
-    if (e.status >= 400 && e.status < 500 && dice) {
-      return res.status(503).json({ ok: false, error: 'Stripe no dejó crear la cuenta y dijo esto: “' + dice.slice(0, 300) + '”. No es un problema pasajero.' });
-    }
-    res.status(502).json({ ok: false, error: 'No pudimos abrir el alta de la cuenta. Intenta en un momento.' });
-  }
-});
-
-/*
- * El estado del cobro en línea de un vistazo, para el panel.
- *
- * Lo que una persona necesita saber sin abrir Stripe: si está encendido, a
- * quién se le está ofreciendo, cuánta gente ya tiene su CLABE, y sobre todo si
- * hay dinero parado o pagos que se dieron la vuelta.
- */
-function describirAlcance(valor) {
-  const v = String(valor || '').trim();
-  if (!v) return 'solo el teléfono piloto';
-  if (v === '*') return `todos los clientes (${wisphubClients.size})`;
-  if (/^\d{1,3}\s*%$/.test(v)) {
-    const pct = parseInt(v, 10);
-    const cuantos = Math.round((pct / 100) * wisphubClients.size);
-    return `${pct}% del padrón · unos ${cuantos} clientes`;
-  }
-  if (/^\d{1,6}$/.test(v)) {
-    const meta = Number(v);
-    const total = wisphubClients.size;
-    if (meta >= total && total) return `todos los clientes (${total})`;
-    return `${meta} clientes${total ? ` de ${total}` : ''} · los que más batallan para pagar`;
-  }
-  const cuantos = v.split(',').filter((x) => x.replace(/\D/g, '')).length;
-  return `${cuantos} ${cuantos === 1 ? 'teléfono elegido' : 'teléfonos elegidos'} a mano`;
-}
-
-app.get('/admin/api/stripe/estado', verifyAdminToken, (req, res) => {
-  const alcance = (process.env.COBRO_LINEA_TELEFONOS || '').trim();
-  const atorado = [...stripeSaldosRezagados.values()].reduce((a, r) => a + (Number(r.pesos) || 0), 0);
-  const porTipo = (t) => stripeRegistrosPendientes.filter((r) => r.tipo === t).length;
-  res.json({
-    activo: stripeLeon.activo(),
-    hayLlave: stripeLeon.hayLlave(),
-    /*
-     * La cuenta puede venir del panel o de la variable de siempre. Mirar solo
-     * la variable hacía que el tablero dijera "falta configurar Stripe" aunque
-     * él ya la hubiera dado de alta con sus propias manos.
-     */
-    // Cobro automático: cuántos lo tienen y qué hizo la última pasada.
-    automatico: {
-      activos: [...stripeClientes.entries()].filter(([k, v]) => v && v.cobroAutomatico && !stripeLeon.partirClave(k).servicioId).length,
-      ultimoBarrido: _ultimoBarridoAuto,
-      // Los que este periodo NO se pudieron cobrar y siguen sin pagar: la oficina tiene que ir tras ellos.
-      pendientes: (() => {
-        const lista = [];
-        const hace45 = fechaLocalISO(new Date(Date.now() - 45 * 86400000));
-        for (const [tel, log] of Object.entries(autoCobros)) {
-          if (!(stripeClientes.get(tel) || {}).cobroAutomatico) continue;
-          for (const [corte, per] of Object.entries(log || {})) {
-            if (!per || (per.estado !== 'rechazado' && per.estado !== 'sin-tarjeta') || corte < hace45) continue;
-            if (pagoRecienteDe(tel)) continue;
-            lista.push({ telefono: tel, nombre: (wisphubClients.get(tel) || {}).name || '', corte, estado: per.estado, motivo: per.motivo || '', cuando: per.cuando || null });
-          }
-        }
-        return lista.sort((a, b) => b.corte.localeCompare(a.corte)).slice(0, 50);
-      })(),
-    },
-    cuentaConectada: !!stripeLeon.cuentaConectada(),
-    cuentaLista: stripeLeon.cuentaLista(),
-    reactivacionActiva: wisphubReactivar.activo(),
-    /*
-     * El alcance en palabras, no en crudo.
-     *
-     * Decía "50" a secas, que se lee como 50 por ciento, o como 50 y quién
-     * sabe qué. Quien abre este tablero necesita entender a cuánta gente le
-     * está entrando dinero sin tener que acordarse de cómo se configura.
-     */
-    alcance: describirAlcance(alcance),
-    /*
-     * Lo que de verdad quiere saber: cuánto ha entrado. Se manda el mes en
-     * curso y el anterior, que es lo que permite ver si crece.
-     */
-    cobrado: (() => {
-      const meses = [...stripeCobrado.keys()].sort().slice(-2).reverse();
-      return meses.map((mes) => ({ mes, ...stripeCobrado.get(mes) }));
-    })(),
-    conClabe: [...stripeClientes.values()].filter((d) => d && d.clienteId).length,
-    rezagados: stripeSaldosRezagados.size,
-    atorado: +atorado.toFixed(2),
-    porRegistrar: porTipo('factura') + porTipo('afavor') + porTipo('ambiguo'),
-    // La lista en sí, para que el panel enseñe factura y monto y no solo un número.
-    porRegistrarLista: stripeRegistrosPendientes
-      .filter((r) => r && r.tipo !== 'disputa' && r.tipo !== 'devolucion')
-      .slice(-30).reverse()
-      .map((r) => ({ tipo: r.tipo, nombre: r.nombre || '', telefono: r.telefono || '', factura: r.factura || '', total: Number(r.total) || 0, detalle: r.detalle || '', cuando: r.cuando || null })),
-    revertidos: porTipo('disputa') + porTipo('devolucion'),
-    /*
-     * Lo que costó cobrar sin haber podido cobrar el cargo. Cada transferencia
-     * SPEI le cuesta $8.12 a la plataforma, así que un pago sin cargo no es
-     * "ganar cero": es perder esos $8.12.
-     */
-    sinCargo: (() => {
-      const desde = Date.now() - 30 * 24 * 3600 * 1000;
-      const recientes = stripeCargosPerdidos.filter((x) => x.cuando > desde);
-      return { cantidad: recientes.length, costo: +(recientes.length * COSTO_SPEI).toFixed(2) };
-    })(),
-  });
-});
-
-app.get('/admin/api/stripe/rezagados', verifyAdminToken, (req, res) => {
-  const lista = [...stripeSaldosRezagados.entries()].map(([telefono, r]) => ({
-    telefono,
-    nombre: (wisphubClients.get(telefono) || {}).name || '',
-    pesos: Number(r.pesos) || 0,
-    intentos: r.intentos || 0,
-    desde: r.desde ? new Date(r.desde).toISOString() : null,
-    error: r.error || '',
-    // Ya no se reintenta solo: necesita que una persona lo mueva desde Stripe.
-    agotado: (r.intentos || 0) >= REZAGO_INTENTOS_MAX,
-  }));
-  res.json({ total: lista.length, rezagados: lista });
-});
-
-app.post('/admin/api/stripe/barrer', verifyAdminToken, async (req, res) => {
-  try {
-    const r = await barrerSaldosRezagados({ forzarAuditoria: req.query.auditar === '1' });
-    res.json(r || {});
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // API: Get network status (check Wisphub or return online)
 app.get('/admin/api/network-status', verifyAdminToken, async (req, res) => {
   try {
@@ -10236,53 +7105,13 @@ const port = Number(process.env.PORT || 3000);
   // ventana, dedup) impiden que mande nada de más.
   setTimeout(() => sweepCorteReminders().catch(() => {}), 45000);
   setInterval(() => sweepCorteReminders().catch(() => {}), 5 * 60000);
-  // Reportes de falla: cada 2 horas pregunta "¿ya quedó?" a los de hace 3 días.
-  // También a los 2 min de arrancar: en Render gratis el servidor se reinicia
-  // seguido y un intervalo de 2 h podría no llegar nunca.
-  setTimeout(() => preguntarSiYaQuedo().catch(() => {}), 2 * 60000);
-  setInterval(() => preguntarSiYaQuedo().catch(() => {}), 2 * 60 * 60000);
-  // Cobro automático: cada hora mira si a alguien le toca aviso o cobro.
-  setTimeout(() => barrerCobroAutomatico().catch(() => {}), 60000);
-  setInterval(() => barrerCobroAutomatico().catch(() => {}), 60 * 60000);
-  // Resumen de cobranza a la oficina: se intenta cada 20 min y sale una vez, entre 9 y 11.
-  setTimeout(() => resumenCobranzaDiario().catch(() => {}), 90000);
-  setInterval(() => resumenCobranzaDiario().catch(() => {}), 20 * 60000);
-  setInterval(() => recordarProrrogasSinResponder().catch(() => {}), 15 * 60000);
 
   // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
   setInterval(() => flushConversations().catch(() => {}), 60000);
 
-  /*
-   * 3e-bis) ¿La cuenta de León sigue pudiendo cobrar?
-   *
-   * Aprobada hoy no quiere decir aprobada para siempre. Stripe suspende una
-   * cuenta cuando se le vence un documento o cuando le pide información nueva,
-   * y no avisa por este lado. Sin esta revisión, el sistema seguiría mandando
-   * cobros contra una cuenta muerta: el cliente mete su tarjeta, el cargo se
-   * rechaza, y quien da la cara es León.
-   *
-   * Cada diez minutos, que es de sobra para algo que cambia dos veces al año.
-   */
-  setTimeout(() => revisarCuentaLeon(), 30000);
-  setInterval(() => revisarCuentaLeon(), 10 * 60000);
-
   // 3f) Bienvenida a NUEVOS clientes de Wisphub (baseline + saludo a los nuevos)
   setTimeout(() => sweepNewClients().catch(() => {}), 20000);        // primera pasada al arrancar
   setInterval(() => sweepNewClients().catch(() => {}), 15 * 60000);  // luego cada 15 min
-
-  /*
-   * 3g) Ir por el dinero que se quedó atorado dentro de Stripe.
-   *
-   * Arranca a los 90 s (no de inmediato: al levantar, el estado apenas se está
-   * restaurando y Wisphub todavía no sincroniza) y luego cada 10 min. Cada 6 h
-   * esa misma pasada audita a TODOS los clientes con CLABE, por si entró un
-   * depósito cuyo aviso nunca llegó.
-   *
-   * Sale gratis cuando no hay nada que hacer: si el cobro está apagado o no hay
-   * rezagados, la función regresa sin hablar con nadie.
-   */
-  setTimeout(() => barrerSaldosRezagados().catch(() => {}), 90000);
-  setInterval(() => barrerSaldosRezagados().catch(() => {}), 10 * 60000);
 
   // 4) Levantar el servidor
   app.listen(port, () => {

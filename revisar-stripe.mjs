@@ -123,7 +123,6 @@ const NECESARIOS = [
   ['checkout.session.completed', 'el pago con tarjeta y la ficha de OXXO'],
   ['checkout.session.async_payment_succeeded', 'cuando pagan la ficha en OXXO'],
   ['checkout.session.async_payment_failed', 'cuando la ficha de OXXO vence'],
-  ['checkout.session.expired', 'cuando el link venció sin abrirse'],
   ['customer_cash_balance_transaction.created', 'las transferencias a la CLABE'],
 ];
 try {

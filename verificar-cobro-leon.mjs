@@ -149,121 +149,6 @@ console.log('\n=== 1. EL INTERRUPTOR ===');
   process.env.COBRO_LINEA_TELEFONOS = '';
 }
 
-console.log('\n=== 1b. ABRIR DE A POCO, SIN LISTAS A MANO ===');
-{
-  // Un padrón de mentira del tamaño del de verdad.
-  const padron = [];
-  for (let i = 0; i < 1430; i++) padron.push('52951' + String(1000000 + i));
-  const cuantos = (regla) => {
-    process.env.COBRO_LINEA_TELEFONOS = regla;
-    return padron.filter((t) => stripeLeon.permitido(t)).length;
-  };
-
-  cuantos('0%') === 0 ? OK('con 0% no pasa nadie') : MAL('el 0% dejó pasar gente');
-  const diez = cuantos('10%');
-  Math.abs(diez - 143) <= 30 ? OK(`con 10% pasa ~el 10% (${diez} de 1430)`) : MAL('el 10% dio ' + diez);
-  cuantos('100%') === 1430 ? OK('con 100% pasan todos') : MAL('el 100% no dejó pasar a todos');
-
-  /*
-   * Lo que de verdad importa de un despliegue por porcentaje: que sea SIEMPRE
-   * el mismo. Si fuera al azar, un cliente vería el botón el lunes y no el
-   * martes, y llamaría a la oficina a preguntar por qué.
-   */
-  process.env.COBRO_LINEA_TELEFONOS = '10%';
-  const a = padron.filter((t) => stripeLeon.permitido(t));
-  const b = padron.filter((t) => stripeLeon.permitido(t));
-  a.length === b.length && a.every((x, i) => x === b[i])
-    ? OK('al mismo cliente siempre le toca lo mismo (no es al azar)')
-    : MAL('el resultado cambió entre dos consultas');
-
-  // Y al abrir más, a nadie se le quita lo que ya tenía.
-  process.env.COBRO_LINEA_TELEFONOS = '25%';
-  const c = new Set(padron.filter((t) => stripeLeon.permitido(t)));
-  a.every((x) => c.has(x))
-    ? OK('al subir de 10% a 25% nadie pierde el acceso que ya tenía')
-    : MAL('alguien perdió el botón al ampliar el porcentaje');
-
-  process.env.COBRO_LINEA_TELEFONOS = '5219511000005,5219511000009';
-  stripeLeon.permitido('5219511000005') === true && stripeLeon.permitido('5219511000006') === false
-    ? OK('y la lista de teléfonos de siempre sigue funcionando igual')
-    : MAL('el porcentaje rompió la lista explícita');
-  process.env.COBRO_LINEA_TELEFONOS = '';
-}
-
-console.log('\n=== 1c. LA TARIFA DE CADA FORMA DE PAGO ===');
-{
-  /*
-   * Estos números NO son de adorno: son los que ya vio León Telecom en la
-   * propuesta AFO-LT-003. Si el sistema cobra otra cosa, el primer cliente que
-   * pague va a ver un total distinto del que dice el documento, y esa es la
-   * peor forma posible de estrenar el servicio.
-   */
-  const casos = [
-    ['clabe',   20.00, 460.00, 'transferencia: $20 fijos'],
-    ['tarjeta', 36.20, 476.20, 'tarjeta: $12 + 5.5%'],
-    ['oxxo',    38.40, 478.40, 'OXXO: $12 + 6%'],
-  ];
-  for (const [forma, cargo, total, dice] of casos) {
-    const c = stripeLeon.calcularCargo(440, forma);
-    const cOk = Math.abs(c.cargoCentavos / 100 - cargo) < 0.005;
-    const tOk = Math.abs(c.totalCentavos / 100 - total) < 0.005;
-    cOk && tOk
-      ? OK(`${dice} → cargo $${cargo.toFixed(2)}, total $${total.toFixed(2)}`)
-      : MAL(`${forma}: cargo $${(c.cargoCentavos / 100).toFixed(2)}, total $${(c.totalCentavos / 100).toFixed(2)}`);
-  }
-
-  // La transferencia es FIJA: no debe crecer con el plan.
-  const chico = stripeLeon.calcularCargo(200, 'clabe');
-  const grande = stripeLeon.calcularCargo(900, 'clabe');
-  chico.cargoCentavos === 2000 && grande.cargoCentavos === 2000
-    ? OK('el cargo de transferencia no cambia con el tamaño del plan')
-    : MAL('la transferencia cobró distinto según el plan');
-
-  // Y una forma inventada no puede cobrar en silencio.
-  let tronó = false;
-  try { stripeLeon.calcularCargo(440, 'paypal'); } catch { tronó = true; }
-  tronó ? OK('una forma desconocida truena en vez de cobrar cualquier cosa')
-        : MAL('aceptó una forma que no existe');
-}
-
-console.log('\n=== 1d. UN LINK, UNA SOLA FORMA DE PAGO ===');
-{
-  /*
-   * Antes el link dejaba elegir tarjeta u OXXO dentro de Stripe. Con tarifas
-   * distintas eso ya no sirve: se le cotizó una y podría pagar por la otra.
-   */
-  await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
-  let p = estado.pedidos.filter((x) => x.ruta.includes('checkout/sessions')).pop();
-  p.params.get('payment_method_types[0]') === 'card'
-    ? OK('el link de tarjeta solo admite tarjeta') : MAL('admite: ' + p.params.get('payment_method_types[0]'));
-  p.params.get('line_items[1][price_data][unit_amount]') === '3620'
-    ? OK('y cobra los $36.20 de la tarifa de tarjeta') : MAL('cobró ' + p.params.get('line_items[1][price_data][unit_amount]'));
-
-  const oxxo = await stripeLeon.generarLinkPago({ forma: 'oxxo', telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
-  p = estado.pedidos.filter((x) => x.ruta.includes('checkout/sessions')).pop();
-  p.params.get('payment_method_types[0]') === 'oxxo'
-    ? OK('el de OXXO solo admite OXXO') : MAL('admite: ' + p.params.get('payment_method_types[0]'));
-  p.params.get('line_items[1][price_data][unit_amount]') === '3840'
-    ? OK('y cobra los $38.40 de la tarifa de OXXO') : MAL('cobró ' + p.params.get('line_items[1][price_data][unit_amount]'));
-  oxxo.total === 478.40 ? OK('el total que se le dice al cliente coincide') : MAL('dijo ' + oxxo.total);
-  p.params.get('metadata[forma]') === 'oxxo'
-    ? OK('y queda anotado con qué tarifa se cotizó') : MAL('sin la forma en el metadata');
-
-  // Guardar la tarjeta no aplica a OXXO: Stripe rechazaría la sesión entera.
-  await stripeLeon.generarLinkPago({ forma: 'oxxo', telefono: TEL, monto: 440, urlBase: 'https://x.mx',
-    guardarTarjeta: true, clienteId: 'cus_1' });
-  p = estado.pedidos.filter((x) => x.ruta.includes('checkout/sessions')).pop();
-  !p.params.get('payment_intent_data[setup_future_usage]')
-    ? OK('y con OXXO no se pide guardar la tarjeta (Stripe lo rechazaría)')
-    : MAL('mandó setup_future_usage en una ficha de OXXO');
-
-  // Sin forma no se genera nada: un link sin tarifa es un cobro a ciegas.
-  let tronó = false;
-  try { await stripeLeon.generarLinkPago({ telefono: TEL, monto: 440, urlBase: 'https://x.mx' }); }
-  catch { tronó = true; }
-  tronó ? OK('sin decir la forma, no sale link') : MAL('generó un link sin saber qué tarifa cobrar');
-}
-
 console.log('\n=== 2. LA CLABE NUNCA CAMBIA ===');
 {
   const a = await stripeLeon.clabeDelCliente({ telefono: TEL, nombre: 'Cliente Piloto' });
@@ -331,7 +216,7 @@ console.log('\n=== 5. COBRO AUTOMÁTICO: NUNCA DOS VECES ===');
 
   const uno = await pedir();
   uno.ok === true ? OK('el cobro del mes pasa') : MAL(JSON.stringify(uno));
-  uno.total === 440 + 12 + 440 * 0.055 ? OK(`total $${uno.total} (mensualidad + cargo de tarjeta)`) : MAL('total ' + uno.total);
+  uno.total === 440 + 8 + 440 * 0.05 ? OK(`total $${uno.total} (mensualidad + cargo)`) : MAL('total ' + uno.total);
 
   const cobrosAntes = estado.cobros.length;
   const dos = await pedir();
@@ -373,32 +258,32 @@ console.log('\n=== 6. CUANDO EL BANCO DICE QUE NO ===');
 
 console.log('\n=== 7. LA TARJETA SOLO SE GUARDA SI LA PIDIERON ===');
 {
-  const normal = await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: TEL, monto: 440, nombre: 'Piloto', urlBase: 'https://x.mx' });
+  const normal = await stripeLeon.generarLinkPago({ telefono: TEL, monto: 440, nombre: 'Piloto', urlBase: 'https://x.mx' });
   const p1 = estado.pedidos.filter((p) => p.ruta.includes('checkout/sessions')).pop();
   !p1.params.get('payment_intent_data[setup_future_usage]')
     ? OK('un pago normal NO guarda la tarjeta') : MAL('guardó la tarjeta sin permiso');
   p1.params.get('metadata[guardarTarjeta]') === 'no' ? OK('y así queda marcado') : MAL('marca: ' + p1.params.get('metadata[guardarTarjeta]'));
 
-  await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: TEL, monto: 440, urlBase: 'https://x.mx', guardarTarjeta: true, clienteId: 'cus_1' });
+  await stripeLeon.generarLinkPago({ telefono: TEL, monto: 440, urlBase: 'https://x.mx', guardarTarjeta: true, clienteId: 'cus_1' });
   const p2 = estado.pedidos.filter((p) => p.ruta.includes('checkout/sessions')).pop();
   p2.params.get('payment_intent_data[setup_future_usage]') === 'off_session'
     ? OK('si el cliente lo pidió, sí la guarda') : MAL('no la guardó habiéndola pedido');
   p2.params.get('customer') === 'cus_1' ? OK('con su cliente, para poder cobrarle después') : MAL('sin customer');
 
   try {
-    await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: TEL, monto: 440, urlBase: 'https://x.mx', guardarTarjeta: true });
+    await stripeLeon.generarLinkPago({ telefono: TEL, monto: 440, urlBase: 'https://x.mx', guardarTarjeta: true });
     MAL('dejó guardar la tarjeta sin cliente (no serviría el mes que viene)');
   } catch { OK('sin cliente NO deja guardar: fallaría en silencio dentro de 30 días'); }
 }
 
 console.log('\n=== 8. EL DINERO VA A LEÓN TELECOM, NO A LA PLATAFORMA ===');
 {
-  await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
+  await stripeLeon.generarLinkPago({ telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
   const p = estado.pedidos.filter((x) => x.ruta.includes('checkout/sessions')).pop();
   p.params.get('payment_intent_data[transfer_data][destination]') === 'acct_leontelecom'
     ? OK('el dinero se transfiere a la cuenta de León Telecom') : MAL('destino equivocado');
 
-  const c = stripeLeon.calcularCargo(440, 'tarjeta');
+  const c = stripeLeon.calcularCargo(440);
   p.params.get('payment_intent_data[application_fee_amount]') === String(c.cargoCentavos)
     ? OK('y aquí solo se queda el cargo por servicio') : MAL('comisión mal calculada');
 
@@ -416,7 +301,7 @@ console.log('\n=== 8b. QUIÉN RESPONDE POR UN CONTRACARGO ===');
    * disputas de un servicio que no presta. Con 872 pagos al mes eso deja de
    * ser teórico. Esta prueba existe para que nadie lo quite sin darse cuenta.
    */
-  await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
+  await stripeLeon.generarLinkPago({ telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
   const p = estado.pedidos.filter((x) => x.ruta.includes('checkout/sessions')).pop();
   p.params.get('payment_intent_data[on_behalf_of]') === 'acct_leontelecom'
     ? OK('el comercio ante el banco es León Telecom, no la plataforma') : MAL('falta on_behalf_of: los contracargos los pagarías tú');
@@ -461,8 +346,8 @@ console.log('\n=== 8d. MEZCLAR MÉTODOS NO CAMBIA SU CLABE ===');
    */
   const tel = '5219519990000';
   const antes = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: 'Mezclador' });
-  await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: tel, monto: 440, urlBase: 'https://x.mx' });
-  await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: tel, monto: 440, urlBase: 'https://x.mx' });
+  await stripeLeon.generarLinkPago({ telefono: tel, monto: 440, urlBase: 'https://x.mx' });
+  await stripeLeon.generarLinkPago({ telefono: tel, monto: 440, urlBase: 'https://x.mx' });
   const despues = await stripeLeon.clabeDelCliente({ telefono: tel, nombre: 'Mezclador' });
   despues.clabe === antes.clabe ? OK('generar links de pago no le mueve la CLABE') : MAL('la CLABE cambió');
   despues.clienteId === antes.clienteId ? OK('ni su cliente de Stripe') : MAL('cambió el cliente');
@@ -475,11 +360,11 @@ console.log('\n=== 8e. EL CARGO NO SE ABONA A LA FACTURA ===');
    * abonara eso a la factura, el cargo por servicio —que es nuestro— entraría
    * como si fuera pago del internet, y cada cobro marcaría "pagó de más".
    */
-  await stripeLeon.generarLinkPago({ forma: 'tarjeta', telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
+  await stripeLeon.generarLinkPago({ telefono: TEL, monto: 440, urlBase: 'https://x.mx' });
   const p = estado.pedidos.filter((x) => x.ruta.includes('checkout/sessions')).pop();
   p.params.get('metadata[mensualidad]') === '44000'
     ? OK('la mensualidad viaja aparte del cargo ($440)') : MAL('metadata: ' + p.params.get('metadata[mensualidad]'));
-  const c = stripeLeon.calcularCargo(440, 'tarjeta');
+  const c = stripeLeon.calcularCargo(440);
   String(c.totalCentavos) !== p.params.get('metadata[mensualidad]')
     ? OK('y NO es el total con cargo incluido') : MAL('mandó el total');
 }
@@ -491,26 +376,15 @@ console.log('\n=== 8f. BARRER EL SALDO DE LA CLABE HACIA LEÓN ===');
    * CLABE NO le llega a León sola. Cae en el saldo del cliente dentro de Stripe
    * y ahí se queda hasta que se cobra, y ese cobro es el que la parte.
    *
-   * La tarifa de transferencia es de $20 fijos (propuesta AFO-LT-003), así que
-   * al cliente se le pide $460 por un plan de $440. Recibir esa transferencia
-   * le cuesta $8.12 a la plataforma, comprobado contra la API real.
+   * Con un depósito de $470 sobre un plan de $440, la API real devolvió:
+   * comisión de OBEX $30, comisión de Stripe $8.12, a León $440.
    */
   const r = await stripeLeon.cobrarDelSaldo({
-    clienteId: 'cus_1', deposito: 460, deuda: 440, telefono: TEL, nombre: 'Piloto', referencia: 'ccbt_1',
+    clienteId: 'cus_1', deposito: 470, deuda: 440, telefono: TEL, nombre: 'Piloto', referencia: 'ccbt_1',
   });
   r.ok ? OK('el saldo se cobra') : MAL('no se cobró: ' + JSON.stringify(r));
   r.aLeonTelecom === 440 ? OK('a León Telecom le llegan sus $440 íntegros') : MAL('le llegan ' + r.aLeonTelecom);
-  r.comision === 20 ? OK('y el cargo de $20 de la transferencia se queda en la plataforma') : MAL('comisión ' + r.comision);
-
-  /*
-   * Si transfiere de más, lo de más NO se lo queda la plataforma: el cargo está
-   * topado a su tarifa y el resto es de León, como saldo a favor del cliente.
-   */
-  const demas = await stripeLeon.cobrarDelSaldo({
-    clienteId: 'cus_1', deposito: 480, deuda: 440, telefono: TEL, referencia: 'ccbt_demas',
-  });
-  demas.comision === 20 ? OK('si transfiere de más, el cargo sigue siendo $20') : MAL('cobró ' + demas.comision);
-  demas.aLeonTelecom === 460 ? OK('y los $20 de más son de León, no nuestros') : MAL('le llegaron ' + demas.aLeonTelecom);
+  r.comision === 30 ? OK('y la comisión de $30 se queda en la plataforma') : MAL('comisión ' + r.comision);
 
   const p = estado.pedidos.filter((x) => x.ruta.includes('payment_intents')).pop();
   p.params.get('transfer_data[destination]') === 'acct_leontelecom'

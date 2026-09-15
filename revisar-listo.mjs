@@ -131,12 +131,7 @@ if (!STRIPE) {
         ['checkout.session.completed', 'tarjeta y la ficha de OXXO'],
         ['checkout.session.async_payment_succeeded', 'cuando pagan la ficha en OXXO'],
         ['checkout.session.async_payment_failed', 'cuando la ficha vence'],
-        ['checkout.session.expired', 'cuando el link venció sin abrirse'],
         ['customer_cash_balance_transaction.created', 'las transferencias a la CLABE'],
-        ['charge.dispute.created', 'enterarse de un contracargo antes que el banco'],
-        ['charge.dispute.closed', 'saber si el contracargo se ganó o se perdió'],
-        ['charge.refunded', 'que una devolución no quede como pago bueno'],
-        ['payment_intent.payment_failed', 'reintentar solo el dinero que se atoró'],
       ]) {
         (mio.enabled_events.includes('*') || mio.enabled_events.includes(ev))
           ? OK(`  ${ev}`)
@@ -146,70 +141,12 @@ if (!STRIPE) {
   } catch (e) { NO(`Stripe: ${e.message}`); }
 }
 
-/*
- * ── 3b. LA CUENTA A LA QUE LE CAE EL DINERO ─────────────────────────────────
- *
- * Antes esto se daba por bueno si existía una variable de entorno. Eso miente
- * de dos formas: la variable puede estar puesta con una cuenta que Stripe ya no
- * aprueba, y ahora puede NO estar y aun así haber cuenta, porque León la da de
- * alta desde su panel.
- *
- * Así que se le pregunta al servidor, que es el único que sabe la verdad.
- */
-console.log('\n── LA CUENTA DE LEÓN ───────────────────────────────────────────');
-try {
-  const r = await fetch(URL_SERVIDOR + '/api/cuenta-cobro/estado', { signal: AbortSignal.timeout(25000) });
-  if (r.status === 404) {
-    OJO('El servidor desplegado todavía no tiene esta comprobación: falta desplegar');
-  } else {
-    const d = await r.json();
-    if (!d.existe) {
-      NO('León TODAVÍA NO ha dado de alta su cuenta');
-      console.log('       Sin eso no se genera un solo cobro. Que entre a su panel,');
-      console.log('       sección Cobranza, y le dé a "Dar de alta mi cuenta".');
-    } else if (!d.puedeCobrar) {
-      NO('La cuenta existe pero Stripe todavía NO la aprueba');
-      if ((d.faltante || []).length) {
-        // En español y con el código de Stripe entre paréntesis: lo primero
-        // para entenderlo, lo segundo para poder buscarlo en su documentación.
-        const claro = {
-          'verification.document': 'una foto de su identificación',
-          'identity.document': 'una foto de su identificación',
-          'tax_id': 'su RFC', 'external_account': 'su cuenta de banco (CLABE)',
-          'address': 'su domicilio', 'phone': 'su teléfono',
-          'business_profile.url': 'la página de su negocio',
-        };
-        const enEspanol = (c) => {
-          const k = Object.keys(claro).find((x) => String(c).includes(x));
-          return k ? `${claro[k]} (${c})` : c;
-        };
-        console.log('       Le falta: ' + d.faltante.map(enEspanol).join(', '));
-      }
-      console.log('       Mientras tanto, cualquier cobro se rechazaría después de que');
-      console.log('       el cliente ya metió su tarjeta.');
-    } else {
-      OK('La cuenta de León existe y Stripe ya la aprobó');
-    }
-  }
-} catch (e) { OJO(`No se pudo preguntar por la cuenta: ${e.message}`); }
-
 // ── 4. Las variables del servidor ───────────────────────────────────────────
-console.log('\n── LA PLANTILLA DE AVISOS (WhatsApp) ───────────────────────────');
-try {
-  const r = await fetch(URL_SERVIDOR + '/api/cuenta-cobro/estado', { signal: AbortSignal.timeout(25000) });
-  const d = await r.json();
-  if (d.plantillaAvisos === undefined) console.log('  ⚠️  El servidor desplegado todavía no reporta la plantilla: falta desplegar');
-  else if (d.plantillaAvisos) console.log('  ✅ Hay plantilla de avisos: el cobro automático, "¿ya quedó?" y el aviso al titular sí llegan fuera de las 24 h');
-  else console.log('  ❌ Falta WHATSAPP_AVISO_TEMPLATE en Render: esos avisos NO llegan fuera de las 24 h (Meta los rechaza en silencio)');
-} catch (e) { console.log('  ⚠️  No se pudo consultar:', e.message); }
-
 console.log('\n── VARIABLES EN RENDER ─────────────────────────────────────────');
 const VARS = [
   ['STRIPE_SECRET_KEY', true, 'cobrar'],
   ['STRIPE_WEBHOOK_SECRET_LEON', true, 'verificar que los avisos vengan de Stripe'],
-  // Ya no es obligatoria: León la da de alta desde su panel. Queda como
-  // respaldo por si se prefiere ponerla a mano.
-  ['LEON_STRIPE_CUENTA_CONECTADA', false, 'ponerla a mano en vez de darla de alta desde el panel'],
+  ['LEON_STRIPE_CUENTA_CONECTADA', true, 'que el dinero le llegue a León Telecom'],
   ['WISPHUB_API_KEY', true, 'reactivar el servicio'],
   ['SERVER_BASE_URL', true, 'las direcciones de regreso tras pagar'],
   ['COBRO_LINEA_ACTIVO', false, 'encender el cobro (déjalo en false hasta el final)'],

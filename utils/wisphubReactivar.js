@@ -202,7 +202,6 @@ async function intentarMarcarPagada({ idFactura, monto, referencia }) {
         fecha_vencimiento: f.fecha_vencimiento,
         fecha_pago: new Date().toISOString(),
         estado: 2,                     // 2 = Pagada. Puede ser ignorado.
-        saldo: 0,                      // con saldo 0 y total_cobrado, Wisphub deduce el estado
         total_cobrado: Number(monto) || Number(f.total) || 0,
         total_pasarela: Number(monto) || 0,
         referencia: String(referencia || '').slice(0, 100),
@@ -250,7 +249,7 @@ async function reactivarServicio(idServicio) {
  * salir aunque Wisphub esté caído. Que falle la reconexión es un problema; que
  * además se pierda el aviso del pago sería el doble de problema.
  */
-async function aplicarPago({ telefono, monto, referencia, idServicio }) {
+async function aplicarPago({ telefono, monto, referencia }) {
   const salida = { buscado: false, cliente: null, ambiguo: false, serviciosPosibles: [],
     facturasPendientes: 0, facturasSaldadas: 0,
     registroManual: [], deudaRestante: null, sobrante: 0, aFavor: false,
@@ -261,18 +260,6 @@ async function aplicarPago({ telefono, monto, referencia, idServicio }) {
   try {
     const hallazgo = await serviciosDe(telefono);
     salida.buscado = true;
-    /*
-     * EL IDENTIFICADOR QUE QUITA LA DUDA.
-     *
-     * Cuando el pago trae el id del servicio (porque el cliente eligió cuál de
-     * sus servicios estaba pagando, o porque su CLABE es de ESE servicio), no
-     * hay nada que adivinar: se abona y se reactiva exactamente ese, aunque el
-     * teléfono tenga tres contratos. La ambigüedad solo aplica cuando el pago
-     * llegó sin decir cuál.
-     */
-    const elegido = idServicio ? hallazgo.servicios.find((x) => String(x.id_servicio) === String(idServicio)) : null;
-    if (idServicio && !elegido) salida.avisos.push(`El servicio ${idServicio} ya no aparece en ese teléfono; se aplica como antes`);
-    if (elegido) { hallazgo.servicios = [elegido]; hallazgo.ambiguo = false; salida.servicioElegido = elegido.id_servicio; }
     const c = hallazgo.servicios[0];
     if (!c) { salida.avisos.push(`No se encontró un cliente con el teléfono ${telefono}`); return salida; }
 
@@ -312,30 +299,20 @@ async function aplicarPago({ telefono, monto, referencia, idServicio }) {
     }
 
     if (deuda && deuda.facturas.length) {
-      const pago = Number(monto) || 0;
-      let restante = pago;
+      let restante = Number(monto) || 0;
       for (const f of deuda.facturas) {
         const debe = Number(f.total) || 0;
         if (restante + 0.01 < debe) break;      // no alcanza para esta factura
         const r = await intentarMarcarPagada({ idFactura: f.id_factura, monto: debe, referencia })
           .catch((e) => ({ marcada: false, motivo: e.message }));
-        if (r.marcada) salida.facturasSaldadas += 1;
-        else salida.registroManual.push({ factura: f.id_factura, total: debe, motivo: r.motivo });
+        if (r.marcada) {
+          salida.facturasSaldadas += 1;
+          salida.deudaRestante = +(salida.deudaRestante - debe).toFixed(2);
+        } else {
+          salida.registroManual.push({ factura: f.id_factura, total: debe, motivo: r.motivo });
+        }
         restante = +(restante - debe).toFixed(2);
       }
-      /*
-       * Lo que el cliente todavía debe DESPUÉS de este pago.
-       *
-       * Se calcula con el dinero que entró, no con lo que Wisphub alcanzó a
-       * registrar. Antes se restaba solo lo que la API dejó marcar, y como la
-       * API casi nunca deja marcar nada, un cliente que pagaba sus $440
-       * completos seguía "debiendo $440": no se le reconectaba y encima se le
-       * decía que todavía debía. Era el caso NORMAL, no uno raro.
-       *
-       * Lo que Wisphub no dejó registrar va en `registroManual`, y de eso se
-       * entera la oficina. Pero el cliente ya pagó, y se reconecta.
-       */
-      salida.deudaRestante = +Math.max(0, deuda.total - pago).toFixed(2);
       salida.sobrante = Math.max(0, restante);
       if (salida.sobrante > 0.01) {
         salida.avisos.push(`Sobraron $${salida.sobrante.toFixed(2)}: no alcanzaba para la siguiente factura o pagó de más`);

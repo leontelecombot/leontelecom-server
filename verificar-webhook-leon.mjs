@@ -270,7 +270,7 @@ console.log('\n=== 6e. LA CLABE SOLO PARA CLIENTES DE VERDAD ===');
    * a ningún servicio: entra, no tiene dueño, y alguien lo devuelve a mano.
    */
   const fuente = await import('node:fs').then((fs) => fs.readFileSync('index.js', 'utf8'));
-  const bloque = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,9000}?\n    \}/) || [])[0] || '';
+  const bloque = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,2600}?\n    \}/) || [])[0] || '';
   bloque ? OK('se encuentra el manejador de la CLABE') : MAL('no se encontró');
 
   /if \(!c \|\| !c\.name\)/.test(bloque)
@@ -285,29 +285,6 @@ console.log('\n=== 6e. LA CLABE SOLO PARA CLIENTES DE VERDAD ===');
     ? OK('enseña el beneficiario REAL que devuelve Stripe, si lo devuelve') : MAL('no usa el beneficiario real');
   /ventanilla/.test(bloque)
     ? OK('y le dice qué hacer si en ventanilla le preguntan a nombre de quién') : MAL('sin guía para la ventanilla');
-
-  /*
-   * ── LO QUE CUESTA DINERO SI FALTA ────────────────────────────────────────
-   *
-   * La comisión sale del EXCEDENTE sobre lo que el cliente debía. Si el mensaje
-   * le dice "transfiere el monto de tu plan", va a transferir justo eso, el
-   * excedente será cero y no se cobrará nada. Y recibir esa transferencia le
-   * cuesta $8.12 a la plataforma (comprobado contra la API de Stripe), así que
-   * cada uno de esos pagos deja a OBEX en rojo. Con el padrón entero son más de
-   * once mil pesos al mes, perdidos en silencio.
-   *
-   * Por eso el mensaje TIENE que traer el monto con el cargo ya sumado.
-   */
-  /deudaDelCliente/.test(bloque)
-    ? OK('el monto sale de sus facturas pendientes, no de un supuesto') : MAL('no consulta la deuda real');
-  /calcularCargo/.test(bloque)
-    ? OK('y le suma el cargo por pagar en línea') : MAL('¡no suma el cargo! cada pago costaría $8.12 sin cobrar nada');
-  /Transfiere: \*?\$/.test(bloque)
-    ? OK('le dice el TOTAL exacto que tiene que transferir') : MAL('no le dice cuánto transferir');
-  /precioPlan/.test(bloque)
-    ? OK('y si Wisphub no contesta, cae al precio de su plan') : MAL('sin respaldo si Wisphub no contesta');
-  !/transfiere ahí el monto de tu plan/.test(bloque)
-    ? OK('ya NO le dice que transfiera solo su plan (era la fuga)') : MAL('sigue pidiendo solo el plan, sin el cargo');
 }
 
 console.log('\n=== 7. EL MENÚ DE PAGO CABE EN WHATSAPP ===');
@@ -321,7 +298,7 @@ console.log('\n=== 7. EL MENÚ DE PAGO CABE EN WHATSAPP ===');
   const bloque = (fuente.match(/const botonesPago = [\s\S]{0,900}?\];/) || [])[0] || '';
   bloque ? OK('se encuentra el armado del menú') : MAL('no se encontró botonesPago');
 
-  const conCobro = (bloque.match(/id: 'pago_(clabe|con_tarjeta|con_oxxo)'/g) || []).length;
+  const conCobro = (bloque.match(/id: 'pago_(clabe|tarjeta|otras)'/g) || []).length;
   conCobro === 3 ? OK('con cobro en línea son exactamente 3 botones') : MAL('son ' + conCobro);
 
   const sinCobro = (bloque.match(/id: 'pago_(horario|datos)'/g) || []).length;
@@ -336,50 +313,6 @@ console.log('\n=== 7. EL MENÚ DE PAGO CABE EN WHATSAPP ===');
   const ids = [...bloque.matchAll(/id: '(pago_[a-z]+)'/g)].map((m) => m[1]);
   const huerfanos = [...new Set(ids)].filter((id) => !fuente.includes(`_pt === '${id}'`));
   !huerfanos.length ? OK('todos los botones tienen quien los atienda') : MAL('sin manejador: ' + huerfanos.join(', '));
-}
-
-console.log('\n=== 8. TARJETA Y OXXO SE COTIZAN POR SEPARADO ===');
-{
-  /*
-   * Cada forma tiene su tarifa (propuesta AFO-LT-003), así que ya no se puede
-   * entregar un link donde el cliente elija adentro de Stripe: le cotizaríamos
-   * una y podría pagar por la otra. Se le pregunta antes, en WhatsApp.
-   */
-  const fuente = await import('node:fs').then((fs) => fs.readFileSync('index.js', 'utf8'));
-
-  const cotiza = (fuente.match(/_pt === 'pago_tarjeta'[\s\S]{0,5000}?\n    \}/) || [])[0] || '';
-  cotiza ? OK('se encuentra el paso que cotiza las dos formas') : MAL('no se encontró');
-
-  /calcularCargo\(cobro\.monto, 'tarjeta'\)/.test(cotiza) && /calcularCargo\(cobro\.monto, 'oxxo'\)/.test(cotiza)
-    ? OK('le enseña los DOS precios antes de que elija') : MAL('no cotiza las dos formas');
-  /pago_con_tarjeta/.test(cotiza) && /pago_con_oxxo/.test(cotiza)
-    ? OK('con un botón para cada una') : MAL('faltan los botones');
-  !/generarLinkPago/.test(cotiza)
-    ? OK('y todavía NO genera ningún link: primero elige') : MAL('generó el link antes de preguntar');
-
-  const genera = (fuente.match(/_pt === 'pago_con_tarjeta' \|\| _pt === 'pago_con_oxxo'[\s\S]{0,9000}?\n    \}/) || [])[0] || '';
-  genera ? OK('se encuentra el paso que genera el link') : MAL('no se encontró');
-  /forma = _pt === 'pago_con_oxxo' \? 'oxxo' : 'tarjeta'/.test(genera)
-    ? OK('el link sale amarrado a lo que el cliente escogió') : MAL('no amarra la forma');
-  /generarLinkPago\(\{[\s\S]{0,200}?forma,/.test(genera)
-    ? OK('y esa forma es la que se le manda a Stripe') : MAL('no le pasa la forma a Stripe');
-
-  // Los dos botones nuevos también necesitan manejador.
-  const huerfanos = ['pago_con_tarjeta', 'pago_con_oxxo']
-    .filter((id) => !fuente.includes(`_pt === '${id}'`));
-  !huerfanos.length ? OK('los dos botones nuevos tienen quien los atienda')
-                    : MAL('sin manejador: ' + huerfanos.join(', '));
-
-  // Y ningún camino puede pedir un link sin decir con qué tarifa.
-  const sinForma = [...fuente.matchAll(/generarLinkPago\(\{([\s\S]{0,300}?)\}\)/g)]
-    .filter((m) => !/forma/.test(m[1]));
-  !sinForma.length ? OK('ninguna llamada pide un link sin tarifa')
-                   : MAL(sinForma.length + ' llamada(s) sin forma');
-
-  // La tarifa de la CLABE también tiene que ser la suya, no la de tarjeta.
-  const clabe = (fuente.match(/_pt === 'pago_clabe'[\s\S]{0,9000}?\n    \}/) || [])[0] || '';
-  /calcularCargo\(deuda, 'clabe'\)/.test(clabe)
-    ? OK('y el mensaje de la CLABE cobra la tarifa de transferencia') : MAL('la CLABE no usa su tarifa');
 }
 
 console.log(`\n═══ ${ok} bien / ${mal} mal ═══`);

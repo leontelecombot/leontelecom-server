@@ -157,6 +157,9 @@ a.volver{display:inline-block;margin-top:18px;font-size:13px;color:#6b3fa0}
   <div class="campo"><label>Información de la tarjeta</label><div class="inp">1234 1234 1234 1234 &nbsp; 💳</div></div>
   <div class="fila"><div class="campo"><div class="inp">MM / AA</div></div><div class="campo"><div class="inp">CVC</div></div></div>
   <div class="campo"><label>Nombre en la tarjeta</label><div class="inp">&nbsp;</div></div>
+  <div class="sep">otras formas de pago</div>
+  <div class="otro"><div class="ico" style="background:#e6203c">OXXO</div><div><b>OXXO</b> · efectivo en cualquier tienda<br><span style="color:#8792a2;font-size:12px">Se genera un voucher con referencia</span></div></div>
+  <div class="otro"><div class="ico" style="background:#0a7d34">SPEI</div><div><b>Transferencia SPEI</b> · desde tu banco<br><span style="color:#8792a2;font-size:12px">CLABE única; al llegar el dinero se confirma solo</span></div></div>
   <button class="pagar" onclick="location.href='/'">Pagar ${p(total)}</button>
   <p class="pie">Pago procesado de forma segura por Stripe</p>
  </div>
@@ -166,18 +169,8 @@ a.volver{display:inline-block;margin-top:18px;font-size:13px;color:#6b3fa0}
 createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/pagar') {
     anotar('cliente → bot', 'PAGAR');
-    /*
-     * Igual que el bot de verdad: primero se le cotiza cada forma y él elige.
-     * El demo se quedó atrás cuando el sistema empezó a exigir la forma de
-     * pago, y se caía justo al picar "PAGAR", que es el momento de la venta.
-     */
-    const t = stripeLeon.calcularCargo(CLIENTE.saldo, 'tarjeta');
-    const o = stripeLeon.calcularCargo(CLIENTE.saldo, 'oxxo');
-    // Igual que el bot de verdad: primero cuánto debe, luego un botón por forma de pagar.
-    anotar('bot → cliente', `Tu mensualidad es de $${CLIENTE.saldo.toFixed(2)}.\n\n¿Cómo quieres pagar? Toca una opción 👇\n\n🏦 Transferencia: te doy una CLABE que es solo tuya.\n💳 Tarjeta: pagas desde tu teléfono (total $${(t.totalCentavos / 100).toFixed(2)}).\n🏪 OXXO: te doy una ficha para pagar en caja (total $${(o.totalCentavos / 100).toFixed(2)}).`);
-    anotar('cliente → bot', '💳 Tarjeta');
-    const pago = await stripeLeon.generarLinkPago({ telefono: CLIENTE.telefono, monto: CLIENTE.saldo, nombre: CLIENTE.name, urlBase: `http://127.0.0.1:${PUERTO}`, forma: 'tarjeta' });
-    anotar('bot → cliente', `💳 Aquí puedes pagar con tu tarjeta, sin salir de tu casa:\n\n• Mensualidad: $${pago.mensualidad.toFixed(2)}\n• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n• Total: $${pago.total.toFixed(2)}\n\n${pago.url}\n\nEn cuanto se confirme te avisamos por aquí y tu servicio se reactiva solo — no hace falta comprobante.`);
+    const pago = await stripeLeon.generarLinkPago({ telefono: CLIENTE.telefono, monto: CLIENTE.saldo, nombre: CLIENTE.name, urlBase: `http://127.0.0.1:${PUERTO}` });
+    anotar('bot → cliente', `💳 Aquí puedes pagar en línea, sin salir de tu casa:\n\n• Mensualidad: $${pago.mensualidad.toFixed(2)}\n• Cargo por pagar en línea: $${pago.cargo.toFixed(2)}\n• Total: $${pago.total.toFixed(2)}\n\n${pago.url}\n\nPuedes pagar con tarjeta, OXXO o transferencia. En cuanto se confirme te avisamos por aquí — no hace falta que mandes comprobante.`);
   } else if (req.method === 'POST' && req.url === '/confirmar') {
     const cuerpo = JSON.stringify({
       type: 'checkout.session.completed',
