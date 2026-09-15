@@ -3661,7 +3661,15 @@ function facturaDebe(fact) {
  * ya pagó por el propio bot. Aquí se mira lo que el bot SÍ sabe: los pagos
  * en línea que entraron y los comprobantes que la oficina ya dio por buenos.
  */
-const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_RECIENTE) || 31);   // un ciclo completo: quien pagó justo después de su corte no debe recibir el aviso del siguiente
+/*
+ * Cuántos días atrás cuenta un pago como "ya pagó este mes". Tres semanas, no
+ * un mes: con 31 días, quien paga puntual el día antes de su corte (el 14 para
+ * el 15) tenía ese pago "reciente" cuando llegaba el aviso del mes siguiente
+ * (el 14 del otro mes, 30 días después) y se le callaba el recordatorio que sí
+ * le tocaba; mes tras mes. Con 21 días, el pago de hace un mes ya no cuenta y
+ * el de hace dos semanas (el que Wisphub a veces tarda en marcar) sí.
+ */
+const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_RECIENTE) || 21);
 function pagoRecienteDe(telefono) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
@@ -6491,6 +6499,13 @@ app.get('/api/cuenta-cobro/estado', async (_req, res) => {
  */
 if (process.env.PRUEBAS === '1') {
   // Simula que pasó un mes: se olvidan los pagos recientes de un teléfono.
+  app.post('/api/pruebas/envejecer-pagos', (req, res) => {
+    // Hace que los pagos en línea de un cliente parezcan de hace N días (se acumula).
+    const tel = normalizePhone(String((req.body || {}).telefono || ''));
+    const ms = (Number((req.body || {}).dias) || 0) * 86400000;
+    for (const p of stripePagosRecientes.get(tel) || []) p.cuando -= ms;
+    res.json({ ok: true, pagos: (stripePagosRecientes.get(tel) || []).map((p) => ({ canal: p.canal, hace: Math.round((Date.now() - p.cuando) / 86400000) })) });
+  });
   app.post('/api/pruebas/olvidar-pagos', (req, res) => {
     const tel = normalizePhone(String((req.body || {}).telefono || ''));
     stripePagosRecientes.delete(tel);

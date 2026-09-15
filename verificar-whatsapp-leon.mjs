@@ -1146,6 +1146,19 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
   await entra(D, 'Sea depositado 350');
   r = await respuestas(n);
   es(dice(r, /comprobante|ya está registrado|revisando/), '"Sea depositado 350" (frase real) también se entiende como aviso de pago');
+
+  // El pago de Ana cuenta como "de este mes" durante tres semanas, no un mes entero:
+  // el del mes pasado (30 días) NO debe callar el aviso ni el "cuánto debo" de este mes.
+  await fetch(BASE + '/api/pruebas/envejecer-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: B, dias: 14 }) });
+  n = enviados.length;
+  await entra(B, 'cuánto debo');
+  r = await respuestas(n);
+  es(dice(r, /Ya tenemos tu pago de este mes/), 'un pago de hace 14 días todavía cuenta como de este mes');
+  await fetch(BASE + '/api/pruebas/envejecer-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: B, dias: 16 }) });
+  n = enviados.length;
+  await entra(B, 'cuánto debo');
+  r = await respuestas(n);
+  es(!dice(r, /Ya tenemos tu pago de este mes/) && dice(r, /Tu mensualidad es de \*\$440\.00\*/), 'el de hace 30 días ya no: se le cobra el mes nuevo (antes se callaba mes tras mes al que paga puntual)');
 }
 
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
