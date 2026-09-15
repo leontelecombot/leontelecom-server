@@ -960,6 +960,12 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   await entra(ASESOR, 'PRORROGA 951 444 4444 3 se le descompuso el carro');
   let r = await respuestas(n, 2);
   es(r.some((m) => m.a === ASESOR && /Prórroga registrada para \*Diego Ruiz\*/.test(m.texto)), 'el asesor registra una prórroga con "PRORROGA <tel> 3"');
+  {
+    const n0 = enviados.length;
+    await entra(ASESOR, 'ayuda');
+    const r0 = await respuestas(n0);
+    es(r0.some((m) => m.a === ASESOR && /PRORROGA \[número\] \[días\]/.test(m.texto)), 'y la ayuda de comandos del asesor ya lo menciona');
+  }
   es(r.some((m) => m.a === D && /te dimos hasta el/.test(m.texto)), 'y a Diego le llega hasta cuándo tiene');
   // Diego pregunta por su corte y vuelve a pedir tiempo: el bot le recuerda su fecha, sin abrir otro caso.
   n = enviados.length;

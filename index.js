@@ -3250,6 +3250,7 @@ async function handleAgentCommand(agentNumber, text) {
     'ATENDER [número] → Tomar un caso (activa relay)',
     'RECIBIDO [número] → Acuse: agradece al cliente y cierra la espera',
     'LIBERAR [número] → Cerrar caso y devolver al bot',
+    'PRORROGA [número] [días] [motivo] → Darle días para pagar (se le avisa y no le llega aviso de corte)',
     'PAUSADOS → Ver casos activos',
     '',
     'Solo puedes tener UN caso a la vez: ciérralo (LIBERAR) antes de tomar otro.',
