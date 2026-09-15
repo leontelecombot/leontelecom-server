@@ -4685,7 +4685,17 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       setSession(chatId, { state: 'pago_otro_confirmar', data: { candidatos: encontrados, desde: Date.now() } });
-      const botones = encontrados.map((e, i) => ({ id: 'pago_otro_es_' + i, title: String(e.name).slice(0, 20) }));
+      /*
+       * WhatsApp corta los títulos a 20 letras. Dos "María del Carmen López"
+       * distintas se verían iguales; si chocan, se les pega el final del
+       * teléfono para que quien paga sepa cuál es la suya.
+       */
+      const cortos = encontrados.map((e) => String(e.name).slice(0, 20));
+      const botones = encontrados.map((e, i) => {
+        const repetido = cortos.filter((c) => c === cortos[i]).length > 1;
+        const title = repetido ? `${String(e.name).slice(0, 13)} ·${e.tel.slice(-4)}` : cortos[i];
+        return { id: 'pago_otro_es_' + i, title };
+      });
       await sendMsg(chatId,
         encontrados.length === 1
           ? `¿Es la cuenta de *${encontrados[0].name}*?`
