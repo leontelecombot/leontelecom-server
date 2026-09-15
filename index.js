@@ -2934,6 +2934,9 @@ async function pedirProrrogaAQuienDecide(chatId, nombre, texto) {
     `Servicio: ${susp ? '🔴 suspendido' : '🟢 activo'}` + (corte ? ` · corte ${corte.split('-').reverse().join('/')}` : '') + (parseFloat(c.saldo) > 0 ? ` · debe $${parseFloat(c.saldo).toFixed(2)}` : ''),
     `Dice: "${String(texto || '').replace(/\s+/g, ' ').trim().slice(0, 200)}"`,
     dias ? `Pide ${dias} día${dias !== 1 ? 's' : ''}.` : '',
+    // Si el bot ya le vio un pago este periodo, el jefe debe saberlo antes de decidir.
+    (() => { const pg = pagoRecienteDe(tel); return pg ? `⚠️ Ojo: el bot ya le vio un pago el ${new Date(pg.cuando).toLocaleDateString('es-MX', { timeZone: BUSINESS_TZ })} (${pg.canal}).` : ''; })(),
+    prorrogaVigente(tel) ? `⚠️ Ya tiene prórroga hasta el ${fechaConDia(prorrogaVigente(tel).hasta)}.` : '',
     '',
     'Toca un botón, o escribe PRORROGA ' + corto + ' [días] / NO PRORROGA ' + corto + '.',
   ].filter((x) => x !== '');
@@ -9069,6 +9072,8 @@ function conCobroEnLinea(cliente) {
     ...cliente, cobroEnLinea: puede, cobroEnLineaPorque: porque,
     ultimoPagoEnLinea: pago ? { cuando: new Date(pago.cuando).toISOString(), canal: pago.canal } : null,
     prorroga: pr ? { hasta: pr.hasta, motivo: pr.motivo || '', por: pr.por || '' } : null,
+    // Si pidió prórroga y nadie ha contestado, la oficina lo ve aquí y lo resuelve de una vez.
+    prorrogaPedida: (() => { const x = tel ? prorrogasPedidas[tel] : null; return x && x.cuando ? { cuando: new Date(x.cuando).toISOString(), horas: Math.round((Date.now() - x.cuando) / 3600000), dias: x.dias || 0, texto: x.texto || '', recordado: !!x.recordado } : null; })(),
     adelantadoHasta: reg.adelantadoHasta && reg.adelantadoHasta >= hoy ? reg.adelantadoHasta : null,
     cobroAutomatico: !!reg.cobroAutomatico,
     // Qué pasó con el cobro automático de este periodo: cobrado, rechazado, sin tarjeta…

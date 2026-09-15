@@ -1583,6 +1583,12 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   n = enviados.length;
   await entra(H, 'de verdad necesito unos días más para pagar');
   await respuestas(n, 2);
+  // La ficha de Hugo enseña la solicitud pendiente, con cuánto lleva y lo que escribió.
+  {
+    const d = await fetch(BASE + '/admin/api/client-lookup?q=' + H, { headers: H_ }).then((x) => x.json());
+    const f = (d.results || [])[0] || {};
+    es(f.prorrogaPedida && f.prorrogaPedida.horas === 0 && /unos días más/.test(f.prorrogaPedida.texto) && f.prorrogaPedida.recordado === false, 'la ficha de Hugo dice que pidió prórroga hace menos de 1 h, con lo que escribió, para resolverla desde ahí');
+  }
   // Mientras está pedida, cuenta en el resumen de cobranza y en "Hoy en cobranza".
   {
     const hoy = await fetch(BASE + '/admin/api/cobranza/resumen', { headers: H_ }).then((x) => x.json());
@@ -1600,6 +1606,10 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   const neg = await fetch(BASE + '/admin/api/prorrogas/negar', { method: 'POST', headers: { ...H_, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: H }) }).then((x) => x.json());
   r = await respuestas(n, 1);
   es(neg.ok && neg.habia === true && r.some((m) => m.a === H && /no podemos dar más tiempo/.test(m.texto)), 'desde el panel también se niega y se le avisa a Hugo');
+  {
+    const d = await fetch(BASE + '/admin/api/client-lookup?q=' + H, { headers: H_ }).then((x) => x.json());
+    es(!((d.results || [])[0] || {}).prorrogaPedida, 'y la ficha ya no enseña la solicitud');
+  }
   // Las formas reales de pedir tiempo se entienden, y lo que no es pedir tiempo, no.
   {
     const si = ['me dan chance de pagar hasta el viernes?', 'puedo pagar la otra semana?', 'hasta el lunes les pago', 'me pueden esperar unos días con el pago', 'no me corten, pago el sábado', 'no tengo para pagar hoy, pago el 20', 'me esperan tantito con el pago?', 'puedo pagar después?', 'pago el viernes sin falta', '¿me dan prórroga?', 'necesito más tiempo para pagar', 'hoy no puedo pagar', 'les pago en cuanto me paguen', 'aún no me pagan, pago la próxima semana', 'me pueden dar unos días', 'que no me suspendan, pago mañana', 'me van a cortar? pago el lunes', 'no me corten porfa', 'puedo pagar el 25?', 'me dan hasta el 20?', 'me esperan hasta la quincena', 'pago mañana', 'todavía no puedo pagar', 'les pago el 15 de octubre'];

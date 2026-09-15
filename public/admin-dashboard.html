@@ -481,7 +481,7 @@
   <!-- Cobro en línea: lo primero que hay que poder ver es si hay dinero parado -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
-      <div class="card-header"><span class="hico">💳</span> Cobro en línea (Stripe) <a class="btn btn-edit btn-sm" style="width:auto;margin-left:auto;font-weight:500" href="#" onclick="return bajarCsv('pagos')" title="Los pagos que entraron por el bot (fecha, monto, vía, quién pagó, qué factura cubre), para conciliar con Wisphub y el banco">⬇️ Pagos CSV</a></div>
+      <div class="card-header"><span class="hico">💳</span> Cobro en línea (Stripe) <a class="btn btn-edit btn-sm" style="width:auto;margin-left:auto;font-weight:500;text-decoration:none" href="#" onclick="return bajarCsv('pagos')" title="Los pagos que entraron por el bot (fecha, monto, vía, quién pagó, qué factura cubre), para conciliar con Wisphub y el banco">⬇️ Pagos CSV</a></div>
       <div class="card-body">
         <div id="clAlert" class="alert"></div>
         <div id="clEstado"><div class="empty">Cargando…</div></div>
@@ -493,7 +493,7 @@
   <!-- Comprobantes por revisar: lo que el bot ya leyó y espera que la oficina dé por bueno. -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
-      <div class="card-header"><span class="hico">🧾</span> Comprobantes por revisar <a class="btn btn-edit btn-sm" style="width:auto;margin-left:auto;font-weight:500" href="#" onclick="return bajarCsv('comprobantes')" title="Todos los comprobantes recibidos, con su estado, en Excel">⬇️ CSV</a></div>
+      <div class="card-header"><span class="hico">🧾</span> Comprobantes por revisar <a class="btn btn-edit btn-sm" style="width:auto;margin-left:auto;font-weight:500;text-decoration:none" href="#" onclick="return bajarCsv('comprobantes')" title="Todos los comprobantes recibidos, con su estado, en Excel">⬇️ CSV</a></div>
       <div class="card-body">
         <div id="cpAlert" class="alert"></div>
         <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
@@ -509,7 +509,7 @@
   <!-- Prórrogas: a quién se le dio plazo y hasta cuándo. El aviso de corte se calla solo. -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
-      <div class="card-header"><span class="hico">📅</span> Prórrogas <a class="btn btn-edit btn-sm" style="width:auto;margin-left:auto;font-weight:500" href="#" onclick="return bajarCsv('prorrogas')" title="Prórrogas vigentes, vencidas y pedidas sin responder, en Excel">⬇️ CSV</a></div>
+      <div class="card-header"><span class="hico">📅</span> Prórrogas <a class="btn btn-edit btn-sm" style="width:auto;margin-left:auto;font-weight:500;text-decoration:none" href="#" onclick="return bajarCsv('prorrogas')" title="Prórrogas vigentes, vencidas y pedidas sin responder, en Excel">⬇️ CSV</a></div>
       <div class="card-body">
         <div id="prAlert" class="alert"></div>
         <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
@@ -1406,6 +1406,16 @@
               ? '💳 <strong>Sí puede pagar en línea</strong>'
               : '💳 No le aparece el pago en línea' + (c.cobroEnLineaPorque ? ' — ' + esc(c.cobroEnLineaPorque) : ''))
           + '</div>')
+      // Pidió prórroga y sigue sin respuesta: se resuelve desde aquí, sin ir a la tarjeta de prórrogas.
+      + (c.prorrogaPedida
+          ? '<div style="font-size:.85em;margin-top:8px;padding:8px 10px;background:#fff7e6;border:1px solid #fde4b5;border-radius:8px">'
+            + '<div style="margin-bottom:6px">📨 <strong>Pidió prórroga hace ' + (c.prorrogaPedida.horas < 1 ? 'menos de 1 h' : c.prorrogaPedida.horas + ' h') + '</strong>' + (c.prorrogaPedida.dias ? ' · pide ' + c.prorrogaPedida.dias + ' días' : '') + (c.prorrogaPedida.recordado ? ' · ya se le recordó al jefe' : ' · está con el jefe') + (c.prorrogaPedida.texto ? '<br><span style="color:var(--muted)">"' + esc(c.prorrogaPedida.texto) + '"</span>' : '') + '</div>'
+            + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+            + '<button class="btn btn-primary btn-sm" style="width:auto" onclick="resolverPedida(\'' + esc(c.phone) + '\',' + (c.prorrogaPedida.dias || 3) + ',this)">✅ Dar ' + (c.prorrogaPedida.dias || 3) + ' días</button>'
+            + '<button class="btn btn-edit btn-sm" style="width:auto" onclick="resolverPedida(\'' + esc(c.phone) + '\',' + ((c.prorrogaPedida.dias || 3) === 3 ? 5 : 3) + ',this)">📅 Dar ' + ((c.prorrogaPedida.dias || 3) === 3 ? 5 : 3) + ' días</button>'
+            + '<button class="btn btn-danger btn-sm" style="width:auto" onclick="resolverPedida(\'' + esc(c.phone) + '\',0,this)">❌ No dar</button>'
+            + '</div></div>'
+          : '')
       // Lo que cambia la respuesta cuando este cliente llama.
       + ((c.ultimoPagoEnLinea || c.prorroga || c.adelantadoHasta || c.cobroAutomatico)
           ? '<div style="font-size:.85em;margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">'
@@ -1811,8 +1821,11 @@
         : await fetchAuth('/admin/api/prorrogas/negar', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ telefono }) });
       const d = await r.json();
       if(!r.ok){ showAlert('prAlert', d.error || 'No se pudo resolver.', 'error'); if(btn) btn.disabled = false; return; }
-      showAlert('prAlert', dias > 0 ? `Prórroga de ${dias} días dada.${d.avisado ? ' Ya se le avisó por WhatsApp.' : ''}` : `Prórroga negada.${d.avisado ? ' Ya se le avisó cómo pagar.' : ' (No se le pudo avisar por WhatsApp.)'}`, 'success');
-      loadProrrogas();
+      const msg = dias > 0 ? `Prórroga de ${dias} días dada.${d.avisado ? ' Ya se le avisó por WhatsApp.' : ''}` : `Prórroga negada.${d.avisado ? ' Ya se le avisó cómo pagar.' : ' (No se le pudo avisar por WhatsApp.)'}`;
+      showAlert('prAlert', msg, 'success'); showAlert('clientAlert', msg, 'success');
+      loadProrrogas(); loadHoy();
+      // Si se resolvió desde la ficha del cliente, la ficha se vuelve a pintar sin la solicitud.
+      const q = document.getElementById('lookupQ'); if (q && q.value.trim().length >= 2 && document.getElementById('lookupResult').innerHTML) lookupClient();
     }catch(e){ showAlert('prAlert','No se pudo resolver.','error'); if(btn) btn.disabled = false; }
   }
   async function darProrroga(){
