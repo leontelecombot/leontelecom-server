@@ -3875,13 +3875,15 @@ async function sweepCorteReminders(force = false) {
     // Map vivo se cortaría en silencio y media lista se quedaría sin aviso.
     // Aquí mismo se saca de la lista a quien YA PAGÓ: ese no debe recibir nada.
     const candidatos = [];
-    let alCorriente = 0, yaPagaron = 0, conProrroga = 0;
+    let alCorriente = 0, yaPagaron = 0, conProrroga = 0, conAutomatico = 0;
     for (const [phone, c] of wisphubClients.entries()) {
       const fc = parseFechaCorte(c.fechaCorte);
       if (!fc || fc !== manana) continue;
       if (!clienteDebe(c)) { alCorriente++; continue; }
       if (pagoRecienteDe(phone)) { yaPagaron++; continue; }
       if (prorrogaVigente(phone)) { conProrroga++; continue; }
+      // Con cobro automático, el cobro sale hoy mismo: "mañana te cortamos" sería un susto sin sentido.
+      if ((stripeClientes.get(phone) || {}).cobroAutomatico) { conAutomatico++; continue; }
       candidatos.push([phone, c, fc]);
     }
 
@@ -3929,7 +3931,7 @@ async function sweepCorteReminders(force = false) {
       if (new Date(v).getTime() < old) delete corteReminders[k];
     }
     schedulePersist();
-    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente, ${yaPagaron} porque ya pagaron por el bot, ${conProrroga} con prórroga`);
+    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente, ${yaPagaron} porque ya pagaron por el bot, ${conProrroga} con prórroga, ${conAutomatico} con cobro automático`);
     // Que el filtro se coma a TODOS es señal de que el criterio "debe" no está leyendo lo
     // que creemos (ojo: en el criterio de finanzas "No Pagado" CONTIENE "pagad", así que
     // cuenta como al corriente; si Wisphub usa ese texto, el filtro se apoya solo en el
@@ -3938,7 +3940,7 @@ async function sweepCorteReminders(force = false) {
     if (!candidatos.length && alCorriente) {
       alertAdmin('corte-filtro', `Hoy NINGÚN cliente pasó el filtro de deuda: los ${alCorriente} con corte el ${manana} salieron todos "al corriente". Revisa saldo y estado de facturas en el panel antes de dar ese cero por bueno.`);
     }
-    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, candidatos: candidatos.length, forzada: !!force });
+    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, conAutomatico, candidatos: candidatos.length, forzada: !!force });
     // Si AYER no quedó constancia, hubo gente que cortó sin recibir su aviso. Se avisa
     // SOLO el día siguiente al hueco (no los 7 días que el hueco sigue apareciendo en la
     // lista), para que la alerta signifique algo y no se vuelva ruido que nadie lee.
@@ -3946,7 +3948,7 @@ async function sweepCorteReminders(force = false) {
     if (huecos[0] === mexicoDateStr(new Date(Date.now() - 86400000))) {
       alertAdmin('corte-hueco', `Sin avisos de corte el/los día(s): ${huecos.join(', ')}. Revisa el despertador de GitHub Actions (parece que Render se durmió).`);
     }
-    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga };
+    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, conAutomatico };
   } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 

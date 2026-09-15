@@ -805,6 +805,7 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   es(!r.some((m) => m.a === D), 'Diego NO: tiene prórroga');
   es(c.yaPagaron === 2 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagaron, ${c.conProrroga} con prórroga`);
   es(!r.some((m) => m.a === H), 'Hugo NO: su corte es pasado mañana, y además ya está al corriente');
+  es(!r.some((m) => m.a === I), 'Inés NO: tiene cobro automático (y ya se le cobró hoy)');
 }
 
 console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ===');
