@@ -4700,7 +4700,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
           + `   (cargo por pagar en línea: $${(t.cargoCentavos / 100).toFixed(2)})\n\n`
           + `🏪 *En efectivo en OXXO* — total $${(o.totalCentavos / 100).toFixed(2)}\n`
           + `   (cargo por pagar en línea: $${(o.cargoCentavos / 100).toFixed(2)})\n\n`
-          + `Cuesta un poco más en OXXO porque la tienda cobra por recibir el efectivo.`,
+          + `Cuesta un poco más en OXXO porque la tienda cobra por recibir el efectivo.`
+          + (mesesEnSesion(chatId) > 1 ? ' Si solo quieres pagar un mes, escribe *1 mes*.' : ''),
           [], { buttons: [
             { id: 'pago_con_tarjeta', title: '💳 Con tarjeta' },
             { id: 'pago_con_oxxo', title: '🏪 Efectivo OXXO' },
@@ -5382,7 +5383,9 @@ async function handleChatMessage(chatId, text, sendMsg) {
           if (varios.length > 1 && await preguntarContratoSiHayVarios(chatId, sendMsg, 'pagar')) return;
           if (varios.length <= 1) {
             const cobro = await montoACobrar(chatId, ajenaMenu, servicioMenu);
-            if (cobro.ok) encabezado += `${ajenaMenu ? `La mensualidad de *${(wisphubClients.get(ajenaMenu) || {}).name || 'esa cuenta'}*` : 'Tu mensualidad'} es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.\n\n`;
+            if (cobro.ok) encabezado += `${ajenaMenu ? `La mensualidad de *${(wisphubClients.get(ajenaMenu) || {}).name || 'esa cuenta'}*` : 'Tu mensualidad'} es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`
+              // Con meses adelantados en la sesión, que sepa cómo volver a uno solo.
+              + (mesesEnSesion(chatId) > 1 ? ' Si solo quieres pagar un mes, escribe *1 mes*.' : '') + '\n\n';
           }
         } catch (_) { /* sin monto, el menú sale igual */ }
       }
