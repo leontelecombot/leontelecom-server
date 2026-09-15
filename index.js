@@ -5043,10 +5043,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
       setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, meses: _ses.data.meses || 1, desde: Date.now() } });
       let cuanto = '';
       try {
-        // Con varios contratos no se adelanta un monto que puede ser del otro: se pregunta cuál al pagar.
+        // Con varios contratos se pregunta CUÁL de una vez (con lo que debe cada uno); al elegir, sigue el menú de pago.
         const contratos = await serviciosDeLaCuenta(elegido.tel);
-        if (contratos.length > 1) cuanto = ` Tiene *${contratos.length} servicios*; al pagar te pregunto cuál.`;
-        else {
+        if (contratos.length > 1) {
+          await sendMsg(chatId, `Perfecto, vas a pagar la cuenta de *${elegido.name}*.`);
+          if (await preguntarContratoSiHayVarios(chatId, sendMsg, 'pagar')) return;
+        } else {
           const cobro = await montoACobrar(chatId, elegido.tel);
           if (cobro.ok) cuanto = ` Su mensualidad es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`;
         }

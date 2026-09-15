@@ -899,12 +899,19 @@ console.log('\n=== 11d. PAGAR POR OTRO QUE TIENE DOS CONTRATOS ===');
   await respuestas(n);
   n = enviados.length;
   await toca(A, 'pago_otro_es_0');
-  let r = await respuestas(n);
-  es(dice(r, /Tiene \*2 servicios\*; al pagar te pregunto cuál/), 'al confirmar a alguien con dos contratos, no se adelanta un monto que podría ser del otro');
+  let r = await respuestas(n, 2);
+  es(dice(r, /vas a pagar la cuenta de \*Fermín Ortiz\*/) && dice(r, /tiene \*2 servicios\*/) && conBotones(r).botones.length === 2, 'al confirmar a alguien con dos contratos, pregunta de una vez cuál de los dos');
+  es(dice(r, /Local, Av\. Juárez\*: 🔴 suspendido .* debe \*\$500\.00\*/), 'con lo que debe cada uno a la vista');
   n = enviados.length;
+  await entra(A, 'el local');
+  r = await respuestas(n);
+  es(dice(r, /La mensualidad de \*Fermín Ortiz\* es de \*\$500\.00\*/) && dice(r, /¿Cómo quieres pagar\?/), 'elige el local y entonces cotiza ese ($500) y pregunta cómo pagar');
+  n = enviados.length;
+  const antes11d = stripe.sesiones.length;
   await toca(A, 'pago_con_tarjeta');
   r = await respuestas(n);
-  es(dice(r, /tiene \*2 servicios\*/) && conBotones(r).botones.length === 2, 'y al pagar pregunta cuál de los dos');
+  const s11d = stripe.sesiones[antes11d];
+  es(s11d && s11d.telefono === F && s11d.pagadoPor === A && s11d.mensualidad === '50000', 'el link va a la cuenta de Fermín, pagado por Andrés, por los $500 del local');
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
 }
 
