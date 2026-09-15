@@ -679,6 +679,7 @@ console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE P
   let r = await respuestas(n);
   const bot = conBotones(r);
   es(dice(r, /Tienes \*2 servicios\*/), 'antes de cotizar, le dice que tiene 2 servicios y pregunta cuál');
+  es(dice(r, /Local, Av\. Juárez\*: 🔴 suspendido · corte \d\d\/\d\d · debe \*\$500\.00\*/) && dice(r, /Casa, Col\. Centro\*: 🟢 activo .* al corriente/), 'y en la misma pregunta ve cuál debe y cuánto, para no tener que adivinar');
   es(bot.botones.length === 2 && bot.botones.some((b) => /Local/.test(b.title)) && bot.botones.some((b) => /Casa/.test(b.title)), 'con un botón por contrato (casa y local)');
   es(bot.botones.some((b) => /🔴/.test(b.title) && /Local/.test(b.title)), 'y el suspendido marcado en rojo');
   const cual = bot.botones.findIndex((b) => /Local/.test(b.title));

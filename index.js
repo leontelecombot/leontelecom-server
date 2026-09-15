@@ -5016,18 +5016,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // Con varios contratos, se dice cómo va cada uno.
       const variosC = await serviciosDeLaCuenta(telC);
       if (variosC.length > 1) {
-        // Por cada contrato: cómo está, cuándo le toca y cuánto debe (si se pudo leer).
-        const lineas = [];
-        let debeAlgo = false;
-        for (const x of variosC) {
-          let deuda = 0;
-          try { deuda = (await wisphubReactivar.deudaDelCliente(x.usuario)).total || 0; } catch (_) { /* sin deuda a la mano */ }
-          if (deuda > 0) debeAlgo = true;
-          const susp = /suspend|cort/i.test(x.estado);
-          lineas.push(`• *${x.etiqueta}*: ${susp ? '🔴 suspendido' : '🟢 activo'}`
-            + (x.fechaCorte ? ` · corte ${x.fechaCorte.split('-').reverse().slice(0, 2).join('/')}` : '')
-            + (deuda > 0 ? ` · debe *$${deuda.toFixed(2)}*` : (susp ? '' : ' · al corriente')));
-        }
+        const { lineas, debeAlgo } = await describirContratos(variosC);
         await sendMsg(chatId,
           `Tienes *${variosC.length} servicios* con nosotros:\n` + lineas.join('\n')
           + (debeAlgo ? '\n\nEscribe *pagar* y te pregunto cuál quieres pagar.' : '\n\nEstás al corriente en los dos. 🙌'));
@@ -6602,11 +6591,28 @@ async function preguntarContratoSiHayVarios(chatId, sendMsg, siguiente) {
   if (varios.length <= 1) return false;
   setSession(chatId, { state: 'pago_servicio_elegir', data: { pagarPara: ajena, servicios: varios.slice(0, 3), siguiente, meses: mesesEnSesion(chatId), desde: Date.now() } });
   const deQuienEs = ajena ? `*${(wisphubClients.get(ajena) || {}).name || 'esa cuenta'}* tiene` : 'Tienes';
+  const { lineas } = await describirContratos(varios.slice(0, 3));
   await sendMsg(chatId,
-    `${deQuienEs} *${varios.length} servicios* con nosotros. ¿Cuál vas a pagar? 👇`
+    `${deQuienEs} *${varios.length} servicios* con nosotros:\n${lineas.join('\n')}\n\n¿Cuál vas a pagar? 👇`
     + (varios.length > 3 ? '\n\n(Se muestran los primeros 3; si es otro, escríbele a un asesor.)' : ''),
     [], { buttons: varios.slice(0, 3).map((x, i) => ({ id: 'pago_servicio_' + i, title: (x.estado && /suspend|cort/i.test(x.estado) ? '🔴 ' : '') + x.etiqueta })) });
   return true;
+}
+
+// Una línea por contrato: cómo está, cuándo le toca y cuánto debe (si se pudo leer).
+async function describirContratos(varios) {
+  const lineas = [];
+  let debeAlgo = false;
+  for (const x of varios) {
+    let deuda = 0;
+    try { deuda = (await wisphubReactivar.deudaDelCliente(x.usuario)).total || 0; } catch (_) { /* sin deuda a la mano */ }
+    if (deuda > 0) debeAlgo = true;
+    const susp = /suspend|cort/i.test(x.estado);
+    lineas.push(`• *${x.etiqueta}*: ${susp ? '🔴 suspendido' : '🟢 activo'}`
+      + (x.fechaCorte ? ` · corte ${x.fechaCorte.split('-').reverse().slice(0, 2).join('/')}` : '')
+      + (deuda > 0 ? ` · debe *$${deuda.toFixed(2)}*` : (susp ? '' : ' · al corriente')));
+  }
+  return { lineas, debeAlgo };
 }
 
 async function serviciosDeLaCuenta(tel) {
