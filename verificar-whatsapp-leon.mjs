@@ -956,6 +956,8 @@ console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ==
   es(fd.prorroga && /carro/.test(fd.prorroga.motivo), 'Diego: se ve su prórroga con el motivo');
   const g = await buscar(G); const fg = (g.results || g.clients || g.clientes || [g])[0] || g;
   es(!fg.ultimoPagoEnLinea && !fg.prorroga && !fg.adelantadoHasta && !fg.cobroAutomatico, 'Gloria: nada de eso, porque no ha pasado nada con ella');
+  const i = await buscar(I); const fi = (i.results || i.clients || i.clientes || [i])[0] || i;
+  es(fi.cobroAutomatico && fi.autoEstado && fi.autoEstado.estado === 'rechazado' && /rechazada/.test(fi.autoEstado.texto), 'Inés: se ve que su automático de este mes fue rechazado, para no decirle "no te preocupes"');
 }
 
 console.log('\n=== 14. SI EL SERVIDOR SE REINICIA A MEDIA CONVERSACIÓN, NO SE PIERDE A QUIÉN LE PAGA ===');

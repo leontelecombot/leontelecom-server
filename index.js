@@ -8215,6 +8215,14 @@ function conCobroEnLinea(cliente) {
     prorroga: pr ? { hasta: pr.hasta, motivo: pr.motivo || '', por: pr.por || '' } : null,
     adelantadoHasta: reg.adelantadoHasta && reg.adelantadoHasta >= hoy ? reg.adelantadoHasta : null,
     cobroAutomatico: !!reg.cobroAutomatico,
+    // Qué pasó con el cobro automático de este periodo: cobrado, rechazado, sin tarjeta…
+    autoEstado: (() => {
+      if (!reg.cobroAutomatico) return null;
+      const corte = parseFechaCorte((cliente && cliente.fechaCorte) || (wisphubClients.get(tel) || {}).fechaCorte);
+      const per = corte ? (((autoCobros[tel] || {})[corte]) || {}) : {};
+      const textos = { cobrado: 'cobrado', rechazado: 'tarjeta rechazada', 'sin-tarjeta': 'sin tarjeta guardada', 'ya-pago': 'ya había pagado', 'sin-deuda': 'sin deuda', 'en-proceso': 'en proceso' };
+      return per.estado ? { estado: per.estado, texto: textos[per.estado] || per.estado, corte, cuando: per.cuando || null, motivo: per.motivo || '' } : null;
+    })(),
   };
 }
 

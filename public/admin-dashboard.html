@@ -1389,6 +1389,10 @@
             + (c.prorroga ? '<span style="background:#fff4d6;color:#8a5a00;border-radius:999px;padding:3px 10px;font-weight:600">📅 Prórroga hasta el ' + esc(fechaCorta(c.prorroga.hasta)) + (c.prorroga.motivo ? ' · ' + esc(c.prorroga.motivo) : '') + '</span>' : '')
             + (c.adelantadoHasta ? '<span style="background:#e8eefc;color:#2a4fb5;border-radius:999px;padding:3px 10px;font-weight:600">📆 Pagado por adelantado hasta el ' + esc(fechaCorta(c.adelantadoHasta)) + '</span>' : '')
             + (c.cobroAutomatico ? '<span style="background:#f1e9ff;color:#5b2ca8;border-radius:999px;padding:3px 10px;font-weight:600">🔁 Cobro automático activo</span>' : '')
+            // Si este mes el automático no pasó, la oficina lo ve en rojo antes de decirle "no te preocupes".
+            + (c.autoEstado && /^(rechazado|sin-tarjeta)$/.test(c.autoEstado.estado)
+                ? '<span style="background:#fde8e8;color:#b42318;border-radius:999px;padding:3px 10px;font-weight:600">⚠️ Automático de este mes: ' + esc(c.autoEstado.texto) + '</span>'
+                : (c.autoEstado && c.autoEstado.estado === 'cobrado' ? '<span style="background:#e7f6ee;color:#1a7f4b;border-radius:999px;padding:3px 10px;font-weight:600">🔁 Automático de este mes: cobrado</span>' : ''))
             + '</div>'
           : '')
       + (c.id ? '<button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="loadInvoices(\''+esc(String(c.id))+'\',this)">📄 Ver facturas</button><div class="inv-box"></div>' : '')
