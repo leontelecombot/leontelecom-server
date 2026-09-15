@@ -767,8 +767,8 @@ console.log('\n=== 11c. COBRO AUTOMÁTICO CADA MES ===');
     await avisar(evx);
     await respuestas(enviados.length, 2, 2500);
   }
-  // Para Inés pasa un mes: su pago de activación ya es del mes pasado, así que este mes le toca el automático.
-  await fetch(BASE + '/api/pruebas/olvidar-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I }) });
+  // Para Inés y Hugo pasa un mes: su pago de activación ya es del mes pasado, así que este mes les toca el automático.
+  for (const tel of [I, H]) await fetch(BASE + '/api/pruebas/olvidar-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: tel }) });
 
   // El barrido: a Hugo (corte pasado mañana) le toca AVISO; a Inés (corte mañana) COBRO; a Andrés nada, ya pagó.
   n = enviados.length;
