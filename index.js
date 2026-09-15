@@ -5004,10 +5004,21 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // Con varios contratos, se dice cómo va cada uno.
       const variosC = await serviciosDeLaCuenta(telC);
       if (variosC.length > 1) {
+        // Por cada contrato: cómo está, cuándo le toca y cuánto debe (si se pudo leer).
+        const lineas = [];
+        let debeAlgo = false;
+        for (const x of variosC) {
+          let deuda = 0;
+          try { deuda = (await wisphubReactivar.deudaDelCliente(x.usuario)).total || 0; } catch (_) { /* sin deuda a la mano */ }
+          if (deuda > 0) debeAlgo = true;
+          const susp = /suspend|cort/i.test(x.estado);
+          lineas.push(`• *${x.etiqueta}*: ${susp ? '🔴 suspendido' : '🟢 activo'}`
+            + (x.fechaCorte ? ` · corte ${x.fechaCorte.split('-').reverse().slice(0, 2).join('/')}` : '')
+            + (deuda > 0 ? ` · debe *$${deuda.toFixed(2)}*` : (susp ? '' : ' · al corriente')));
+        }
         await sendMsg(chatId,
-          `Tienes *${variosC.length} servicios* con nosotros:\n`
-          + variosC.map((x) => `• ${x.etiqueta}: ${/suspend|cort/i.test(x.estado) ? '🔴 suspendido' : '🟢 activo'}`).join('\n')
-          + '\n\nEscribe *pagar* y te pregunto cuál quieres pagar.');
+          `Tienes *${variosC.length} servicios* con nosotros:\n` + lineas.join('\n')
+          + (debeAlgo ? '\n\nEscribe *pagar* y te pregunto cuál quieres pagar.' : '\n\nEstás al corriente en los dos. 🙌'));
         return;
       }
       const corte = parseFechaCorte(c.fechaCorte);
@@ -6576,6 +6587,8 @@ async function serviciosDeLaCuenta(tel) {
       usuario: x.usuario || '',
       etiqueta: [x.plan_internet && (x.plan_internet.nombre || x.plan_internet), x.direccion || x.colonia || x.localidad].filter(Boolean).join(' · ') || `Servicio ${x.id_servicio}`,
       estado: x.estado || '',
+      fechaCorte: parseFechaCorte(x.fecha_corte) || '',
+      precio: parseFloat(x.precio_plan) || 0,
     })).filter((x) => x.id);
   } catch (e) {
     console.warn('[cobro] no se pudieron leer los servicios de', tel, '·', e.message);

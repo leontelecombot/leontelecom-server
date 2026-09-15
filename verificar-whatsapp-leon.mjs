@@ -155,8 +155,8 @@ const wisphub = {
   // Un teléfono con DOS contratos: la casa (activa) y el local (suspendido).
   extras: {
     [F]: [
-      { id_servicio: 106, usuario: 'clienteF-casa', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Activo', telefono: F, direccion: 'Casa, Col. Centro', plan_internet: { nombre: 'Plan 20' } },
-      { id_servicio: 107, usuario: 'clienteF-local', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Suspendido', telefono: F, direccion: 'Local, Av. Juárez', plan_internet: { nombre: 'Plan 50' } },
+      { id_servicio: 106, usuario: 'clienteF-casa', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Activo', telefono: F, direccion: 'Casa, Col. Centro', plan_internet: { nombre: 'Plan 20' }, fecha_corte: PASADO },
+      { id_servicio: 107, usuario: 'clienteF-local', nombre: 'Fermín', apellidos: 'Ortiz', estado: 'Suspendido', telefono: F, direccion: 'Local, Av. Juárez', plan_internet: { nombre: 'Plan 50' }, fecha_corte: MANANA },
     ],
   },
   deuda: { clienteA: 300, clienteB: 440, clienteC: 0, clienteD: 350, 'clienteF-casa': 0, 'clienteF-local': 500, clienteG: 320, clienteH: 340, clienteI: 290 },
@@ -1030,6 +1030,8 @@ console.log('\n=== 16. "¿CUÁNDO ES MI CORTE?" ===');
   await entra(F, 'cuando me cortan');
   r = await respuestas(n);
   es(dice(r, /Tienes \*2 servicios\*/) && dice(r, /🔴 suspendido/) && dice(r, /🟢 activo/), 'con dos contratos, dice cómo va cada uno');
+  es(dice(r, /Local, Av\. Juárez\*: 🔴 suspendido · corte \d\d\/\d\d · debe \*\$500\.00\*/), 'y de cada uno su fecha de corte y lo que debe (el local: $500)');
+  es(dice(r, /Casa, Col\. Centro\*: 🟢 activo · corte \d\d\/\d\d · al corriente/), 'la casa: activa, con su fecha, al corriente');
 }
 
 console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
