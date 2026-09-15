@@ -6903,9 +6903,9 @@ app.post('/webhook/stripe', async (req, res) => {
          * quien pagó SÍ tiene que salir igual. El dinero ya entró; lo último que
          * queremos es que además nadie se entere.
          */
+        // OXXO se confirma días después y el dueño puede no haber escrito nunca: plantilla.
+        const porIniciativa = pagadoPor !== telefono || o.payment_status !== 'paid';
         try {
-          // OXXO se confirma días después y el dueño puede no haber escrito nunca: plantilla.
-          const porIniciativa = pagadoPor !== telefono || o.payment_status !== 'paid';
           await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
             '✅ Recibimos el pago de tu servicio — quedó confirmado automáticamente, no hace falta comprobante. ¡Gracias! 🙌'
             + (pagadoPor !== telefono ? '\n\n(Lo pagó otra persona por ti.)' : ''));
