@@ -624,6 +624,11 @@ console.log('\n=== 9b. LO QUE LA GENTE ESCRIBE DE VERDAD ===');
   r = await respuestas(n);
   es(dice(r, /¿Es la cuenta de \*Diego Ruiz\*\?/), '"pago a nombre de Diego Ruiz, gracias" encuentra a Diego y pide confirmar');
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  n = enviados.length;
+  await entra(A, 'a nombre de gloria nunez');
+  r = await respuestas(n);
+  es(dice(r, /¿Es la cuenta de \*Gloria Núñez\*\?/), 'sin acentos ni mayúsculas ("gloria nunez") también encuentra a Gloria Núñez');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
 
   n = enviados.length;
   await entra(A, 'cuánto debo');

@@ -4778,11 +4778,13 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
     if (_ses.state === 'pago_otro_buscar' && !_isBtn && !_emergencyNow && !_conComprobante) {
       const digitos = text.replace(/\D/g, '');
-      const nombreBuscado = text.trim().toLowerCase();
+      // Sin acentos de los dos lados: "ana perez" tiene que dar con "Ana Pérez".
+      const sinAcentos = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+      const nombreBuscado = sinAcentos(text);
       const encontrados = [];
       for (const [tel, c] of wisphubClients.entries()) {
         const porTel = digitos.length >= 7 && tel.endsWith(digitos.slice(-10));
-        const porNombre = nombreBuscado.length >= 4 && String(c.name || '').toLowerCase().includes(nombreBuscado);
+        const porNombre = nombreBuscado.length >= 4 && sinAcentos(c.name).includes(nombreBuscado);
         if ((porTel || porNombre) && tel !== normalizePhone(chatId)) encontrados.push({ tel, name: c.name || tel });
         if (encontrados.length >= 4) break;
       }
