@@ -3685,6 +3685,20 @@ function pagoRecienteDe(telefono) {
   }
   return null;
 }
+// El último pago reciente que este teléfono hizo por la cuenta de OTRO (la hija
+// que paga lo de su mamá y luego pregunta "¿ya quedó?").
+function pagoHechoPor(telefono) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  if (!tel) return null;
+  const desde = Date.now() - CORTE_DIAS_PAGO_RECIENTE * 24 * 3600 * 1000;
+  let mejor = null;
+  for (const [titular, lista] of stripePagosRecientes) {
+    for (const p of lista || []) {
+      if (p && p.pagadoPor === tel && p.cuando >= desde && (!mejor || p.cuando > mejor.cuando)) mejor = { ...p, titular };
+    }
+  }
+  return mejor;
+}
 function canalTexto(canal) {
   const m = { tarjeta: 'con tarjeta', oxxo: 'en OXXO', transferencia: 'por transferencia a tu CLABE', 'tarjeta-automatico': 'con tu cobro automático', comprobante: 'con el comprobante que mandaste', 'comprobante de otra persona': 'con el comprobante que mandaron por ti' };
   const k = String(canal || '');
@@ -5001,8 +5015,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // Un comprobante que ya mandó y la oficina todavía no revisa: no se le vuelve a pedir.
       const hace3d = Date.now() - 3 * 24 * 3600 * 1000;
       const enRevision = caseLog.find((c) => c.clientId === telP && c.type === 'pago' && c.status === 'pendiente' && new Date(c.ts).getTime() >= hace3d);
+      const porOtro = visto ? null : pagoHechoPor(telP);
       if (visto) {
         await sendMsg(chatId, `✅ Sí, tu pago ya está registrado (${canalTexto(visto.canal)}). No hace falta que mandes nada más. 🙌`);
+      } else if (porOtro) {
+        const nombreT = (wisphubClients.get(porOtro.titular) || {}).name || 'esa cuenta';
+        await sendMsg(chatId, `✅ Sí, el pago que hiciste para *${nombreT}* ya está registrado (${canalTexto(porOtro.canal)}). No hace falta que mandes nada más. 🙌`);
       } else if (enRevision) {
         await sendMsg(chatId, '📄 Ya tenemos tu comprobante y la oficina lo está revisando. En cuanto lo registren te aviso por aquí; no hace falta que lo vuelvas a mandar. 🙌');
       } else {
@@ -6390,13 +6408,14 @@ function anotarRegistroPendiente(reg) {
 const stripePagosRecientes = new Map();   // telefono -> [{ monto, cuando, canal, ref }]
 const VENTANA_DUPLICADO_MS = 20 * 24 * 3600 * 1000;
 
-function registrarPagoYRevisarDoble({ telefono, monto, canal, ref }) {
+function registrarPagoYRevisarDoble({ telefono, monto, canal, ref, pagadoPor }) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
   const ahora = Date.now();
   const previos = (stripePagosRecientes.get(tel) || []).filter((p) => ahora - p.cuando < VENTANA_DUPLICADO_MS);
   const sospechoso = previos.find((p) => p.ref !== ref);
-  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref });
+  const por = String(pagadoPor || '').replace(/\D/g, '');
+  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref, ...(por && por !== tel ? { pagadoPor: por } : {}) });
   stripePagosRecientes.set(tel, previos.slice(-6));
   sumarAlMes(monto, canal);
   schedulePersist();
@@ -7066,7 +7085,7 @@ app.post('/webhook/stripe', async (req, res) => {
         const doble = registrarPagoYRevisarDoble({
           telefono, monto: (o.amount_total || 0) / 100,
           canal: o.payment_status === 'paid' ? 'tarjeta' : 'oxxo',
-          ref: o.payment_intent || o.id,
+          ref: o.payment_intent || o.id, pagadoPor,
         });
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);

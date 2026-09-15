@@ -659,6 +659,16 @@ console.log('\n=== 9b. LO QUE LA GENTE ESCRIBE DE VERDAD ===');
   es(stripe.sesiones.length === antes + 1 && dice(r, /Total: \$/), 'un toque en Tarjeta desde el menú da el link con el total, sin otra pregunta');
 }
 
+console.log('\n=== 9c. QUIEN PAGÓ POR OTRO PREGUNTA SI YA QUEDÓ ===');
+{
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  const n = enviados.length;
+  await entra(A, 'ya quedó registrado el pago de mi mamá?');
+  const r = await respuestas(n);
+  es(dice(r, /el pago que hiciste para \*Ana Pérez\* ya está registrado/), 'Andrés pagó lo de Ana Pérez y pregunta "¿ya quedó?": se le confirma ese pago, no se le pide comprobante');
+  es(!dice(r, /mándame la foto/), 'y no se le pide la foto');
+}
+
 console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE PAGA ESE ===');
 {
   let n = enviados.length;
