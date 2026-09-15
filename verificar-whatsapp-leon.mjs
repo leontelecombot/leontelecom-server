@@ -742,6 +742,13 @@ console.log('\n=== 11. Y LA CLABE ES DE UN CONTRATO, NO DEL TELÉFONO ===');
   es(dice(r, /Tu mensualidad: \$500\.00/), 'con la deuda del LOCAL ($500), no la de la casa');
   const cli = stripe.clientes.find((c) => c.metadata.telefono === F);
   es(cli && cli.metadata.servicioId === '107', 'el cliente de Stripe de esa CLABE lleva el contrato (107): lo que caiga ahí es del local');
+
+  // Fermín transfiere $1,000 a la CLABE del local (que debe $500): son dos meses, y queda anotado.
+  const n2 = enviados.length;
+  const dep = await avisar({ type: 'customer_cash_balance_transaction.created', data: { object: { id: 'ccbt_local_2m', type: 'funded', customer: cli.id, net_amount: 100000 } } });
+  const r2 = await respuestas(n2, 1, 5000);
+  es(dep.st === 200, 'Stripe avisa que cayó una transferencia en la CLABE del local');
+  es(r2.some((m) => m.a === F && m.tipo === 'template' && /Recibimos tu transferencia por \$1000\.00/.test(m.texto) && /Cubre 2 meses: quedas pagado hasta el \d\d\/\d\d\/\d{4}/.test(m.texto)), 'a Fermín le llega por plantilla que su transferencia cubre 2 meses y hasta cuándo');
 }
 
 console.log('\n=== 11b. SEIS MESES DE JALÓN ===');

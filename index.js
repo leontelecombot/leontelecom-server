@@ -3685,6 +3685,24 @@ function pagoRecienteDe(telefono) {
   }
   return null;
 }
+/*
+ * Pagó meses adelantados (por link o por transferencia): se anota hasta
+ * cuándo, para que el aviso de corte no le llegue en esos meses, y se le
+ * dice a la oficina que registre los meses que vienen (Wisphub solo tiene la
+ * factura de hoy). Devuelve la fecha hasta la que queda cubierto.
+ */
+function anotarMesesAdelantados(telefono, mesesPagados, montoTexto) {
+  const tel = String(telefono || '').replace(/\D/g, '');
+  const w0 = wisphubClients.get(tel) || {};
+  const base = parseFechaCorte(w0.fechaCorte) || fechaLocalISO();
+  const h = new Date(base + 'T12:00:00'); h.setMonth(h.getMonth() + (mesesPagados - 1));
+  const hasta = fechaLocalISO(h);
+  stripeClientes.set(tel, { ...(stripeClientes.get(tel) || {}), adelantadoHasta: hasta, adelantadoMeses: mesesPagados });
+  schedulePersist();
+  alertAdmin('meses-adelantados', `📅 ${w0.name || tel} pagó *${mesesPagados} meses* de una vez (${montoTexto}). Wisphub solo tiene la factura de este mes: hay que registrar los ${mesesPagados - 1} siguientes a mano. Queda cubierto hasta el ${hasta}.`);
+  return hasta;
+}
+
 // El último pago reciente que este teléfono hizo por la cuenta de OTRO (la hija
 // que paga lo de su mamá y luego pregunta "¿ya quedó?").
 function pagoHechoPor(telefono) {
@@ -7246,15 +7264,7 @@ app.post('/webhook/stripe', async (req, res) => {
            * registre los meses que vienen (Wisphub solo tiene la factura de hoy).
            */
           const mesesPagados = Number(o.metadata.meses || 1) || 1;
-          if (mesesPagados > 1) {
-            const w0 = wisphubClients.get(telefono) || {};
-            const base = parseFechaCorte(w0.fechaCorte) || fechaLocalISO();
-            const h = new Date(base + 'T12:00:00'); h.setMonth(h.getMonth() + (mesesPagados - 1));
-            const hasta = fechaLocalISO(h);
-            stripeClientes.set(telefono, { ...(stripeClientes.get(telefono) || {}), adelantadoHasta: hasta, adelantadoMeses: mesesPagados });
-            schedulePersist();
-            alertAdmin('meses-adelantados', `📅 ${w0.name || telefono} pagó *${mesesPagados} meses* de una vez ($${mensualidad.toFixed(2)}). Wisphub solo tiene la factura de este mes: hay que registrar los ${mesesPagados - 1} siguientes a mano. Queda cubierto hasta el ${hasta}.`);
-          }
+          if (mesesPagados > 1) anotarMesesAdelantados(telefono, mesesPagados, `$${mensualidad.toFixed(2)}`);
           const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id, idServicio: o.metadata.servicioId || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
@@ -7433,9 +7443,28 @@ app.post('/webhook/stripe', async (req, res) => {
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
         }
+        /*
+         * Quien transfiere dos o más mensualidades de un jalón también va
+         * adelantado: se cuenta con el plan del contrato (o con lo que debía,
+         * si el plan no se sabe) y queda anotado hasta cuándo.
+         */
+        let cubreTexto = '';
+        try {
+          let unidad = 0;
+          if (servicioDelDeposito) {
+            const svc = (await serviciosDeLaCuenta(telefono)).find((x) => x.id === String(servicioDelDeposito));
+            if (svc) { unidad = svc.precio; if (!unidad) { try { unidad = (await wisphubReactivar.deudaDelCliente(svc.usuario)).total || 0; } catch (_) { /* sin deuda a la mano */ } } }
+          }
+          if (!unidad) unidad = parseFloat((wisphubClients.get(telefono) || {}).precioPlan) || (deuda.conocida ? Number(deuda.total) || 0 : 0);
+          if (unidad > 0 && pesos >= 2 * unidad - 0.5) {
+            const mesesDep = Math.min(12, Math.floor((pesos + 0.5) / unidad));
+            const hasta = anotarMesesAdelantados(telefono, mesesDep, `$${pesos.toFixed(2)} por transferencia`);
+            cubreTexto = ` Cubre ${mesesDep} meses: quedas pagado hasta el ${hasta.split('-').reverse().join('/')}.`;
+          }
+        } catch (e) { console.warn('[stripe-leon] no se pudo contar los meses del depósito ·', e.message); }
         try {
           await avisarPorIniciativa(telefono,
-            `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado automáticamente, no hace falta comprobante. ¡Gracias! 🙌`);
+            `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado automáticamente, no hace falta comprobante.${cubreTexto} ¡Gracias! 🙌`);
         } catch (e) { console.error('[stripe-leon] no salió el aviso del depósito a', telefono, e.message); }
         try {
           const w = await wisphubReactivar.aplicarPago({ telefono, monto: pesos, referencia: o.id, idServicio: servicioDelDeposito || undefined });
