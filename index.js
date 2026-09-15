@@ -1326,7 +1326,13 @@ const stripeClientes = new Map();
 stripeLeon.usarRegistro({
   obtener: (tel) => stripeClientes.get(String(tel)) || null,
   guardar: (tel, datos) => {
-    stripeClientes.set(String(tel), datos);
+    /*
+     * Se FUNDE con lo que ya había, no se reemplaza. En el mismo registro
+     * viven la CLABE, el cobro automático y "pagado hasta": si sacar la CLABE
+     * borrara lo demás, un cliente perdería su cobro automático (o sus meses
+     * adelantados) por pedir su número de cuenta.
+     */
+    stripeClientes.set(String(tel), { ...(stripeClientes.get(String(tel)) || {}), ...datos });
     schedulePersist();
   },
 });
@@ -7685,7 +7691,23 @@ function conCobroEnLinea(cliente) {
     else if (!stripeLeon.cuentaLista()) porque = 'Stripe todavía no aprueba la cuenta de cobro';
     else porque = 'no está entre los clientes del piloto';
   }
-  return { ...cliente, cobroEnLinea: puede, cobroEnLineaPorque: porque };
+  /*
+   * Lo que la oficina necesita saber de este cliente de un vistazo cuando
+   * llama: si ya pagó por el bot (y cuándo), si tiene prórroga, si pagó meses
+   * adelantados, si tiene el cobro automático. Cada una de esas cosas cambia
+   * la respuesta que se le da.
+   */
+  const reg = tel ? (stripeClientes.get(tel) || {}) : {};
+  const pago = tel ? pagoRecienteDe(tel) : null;
+  const pr = tel ? prorrogaVigente(tel) : null;
+  const hoy = fechaLocalISO();
+  return {
+    ...cliente, cobroEnLinea: puede, cobroEnLineaPorque: porque,
+    ultimoPagoEnLinea: pago ? { cuando: new Date(pago.cuando).toISOString(), canal: pago.canal } : null,
+    prorroga: pr ? { hasta: pr.hasta, motivo: pr.motivo || '', por: pr.por || '' } : null,
+    adelantadoHasta: reg.adelantadoHasta && reg.adelantadoHasta >= hoy ? reg.adelantadoHasta : null,
+    cobroAutomatico: !!reg.cobroAutomatico,
+  };
 }
 
 app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients'), async (req, res) => {

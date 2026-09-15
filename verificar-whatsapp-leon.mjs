@@ -794,6 +794,22 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   es(!r.some((m) => m.a === H), 'Hugo NO: su corte es pasado mañana, y además ya está al corriente');
 }
 
+console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ===');
+{
+  const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  const H = { Authorization: 'Bearer ' + login.token };
+  const buscar = async (q) => (await fetch(BASE + '/admin/api/client-lookup?q=' + encodeURIComponent(q), { headers: H }).then((x) => x.json()));
+  const a = await buscar(A); const fa = (a.results || a.clients || a.clientes || [a])[0] || a;
+  es(!!fa.ultimoPagoEnLinea, 'Andrés: se ve que pagó por el bot');
+
+  es(!!fa.adelantadoHasta, 'y hasta cuándo está pagado por adelantado');
+  es(fa.cobroAutomatico === true, 'y que tiene el cobro automático activo');
+  const d = await buscar(D); const fd = (d.results || d.clients || d.clientes || [d])[0] || d;
+  es(fd.prorroga && /carro/.test(fd.prorroga.motivo), 'Diego: se ve su prórroga con el motivo');
+  const g = await buscar(G); const fg = (g.results || g.clients || g.clientes || [g])[0] || g;
+  es(!fg.ultimoPagoEnLinea && !fg.prorroga && !fg.adelantadoHasta && !fg.cobroAutomatico, 'Gloria: nada de eso, porque no ha pasado nada con ella');
+}
+
 console.log(`\n${ok} bien, ${mal} mal`);
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);
