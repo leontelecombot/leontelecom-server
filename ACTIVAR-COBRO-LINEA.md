@@ -167,12 +167,39 @@ resultados**. El módulo prueba las dos formas.
 
 ## Cobro automático
 
-Existe pero **no está enganchado a ningún botón todavía**, a propósito. El código
-(`cobrarGuardado`) solo cobra si el cliente aceptó explícitamente, y la tarjeta
-solo se guarda si `generarLinkPago` recibe `guardarTarjeta: true`.
+Ya está enganchado a la conversación. El cliente escribe *AUTOMÁTICO* (o "quiero
+que se cobre solo"), se le explica en dos líneas y confirma con botón o con un
+"sí" escrito; paga una vez con tarjeta y esa tarjeta queda guardada. De ahí en
+adelante, `barrerCobroAutomatico` (cada hora, entre 9 y 20 h) hace esto por
+periodo (`autoCobros[tel][corte]`):
 
-Antes de encenderlo, el texto que ve el cliente tiene que decir con esas palabras
-que se le va a cobrar cada mes y cómo se cancela.
+- **Dos días antes** del corte avisa cuánto se va a cobrar (por plantilla).
+- **Un día antes** cobra lo que Wisphub diga que debe, una sola vez por periodo.
+- **No cobra** si ese mes ya pagó por otra vía (tarjeta, OXXO, CLABE o comprobante
+  aceptado): le dice "este mes ya pagaste por tu cuenta".
+- **Se pospone** si mandó un comprobante que la oficina no ha revisado (para no
+  cobrar doble); la oficina recibe un aviso y lo ve marcado en "Comprobantes por revisar".
+- **Con prórroga**, el cobro se recorre: aviso dos días antes de que venza y cobro
+  un día antes de que venza, no en la fecha de corte.
+- **Si la tarjeta es rechazada o ya no hay tarjeta**, se le pide pagar de otra
+  forma, el aviso de corte SÍ le llega (con la razón), "pagar" ya no le dice "no
+  tienes que hacer nada", y el panel lo lista en "Automáticos que no pasaron".
+- Se cancela con *CANCELAR AUTOMÁTICO* o cualquier frase parecida.
+
+## Prórrogas
+
+`PRORROGA <tel> <días> [motivo]` por WhatsApp (asesor) o desde la tarjeta del
+panel. Al cliente se le avisa por plantilla en los dos casos. Mientras dura, el
+aviso de corte se calla; el día antes de que venza se le recuerda (salvo que
+tenga automático, que se cobra solo). El panel dice cuánto le queda a cada
+prórroga, si ya pagó y si ya se le avisó.
+
+## A quién NO se le manda "mañana te cortamos"
+
+A quien pagó por el bot este mes, a quien va adelantado (`adelantadoHasta`, por
+link o por transferencia de varias mensualidades), a quien tiene prórroga, a
+quien tiene automático (salvo que ese mes haya sido rechazado) y a quien mandó
+comprobante que sigue sin revisar (a la oficina se le pide revisarlo hoy).
 
 ## Casos raros que ya están cubiertos
 
@@ -360,13 +387,13 @@ node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  51 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  # 149 de la conversación: pagar por otro, contratos, meses, automático, corte, reinicio, fallas, comprobantes
+node verificar-whatsapp-leon.mjs  # 208 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**519 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
+**578 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.
