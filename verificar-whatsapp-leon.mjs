@@ -931,6 +931,10 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   const c4 = corrida4.result || corrida4;
   es(c4.sent === 1 && r.some((m) => m.a === I && m.tipo === 'template' && /cobro automático de este mes no pasó: la tarjeta fue rechazada/.test(m.texto)), 'si el automático fue rechazado, a Inés sí le llega el aviso de corte y dice por qué');
   es(c4.conAutomatico === 0, 'y ya no cuenta como "cubierta por el automático"');
+  n = enviados.length;
+  await entra(I, 'pagar');
+  r = await respuestas(n);
+  es(dice(r, /cobro automático\* no pasó: la tarjeta fue rechazada/) && !dice(r, /No tienes que hacer nada/), 'y si Inés escribe "pagar", no se le dice "no tienes que hacer nada": se le dice que el automático no pasó y que pague de otra forma');
   const lista2 = await fetch(BASE + '/admin/api/prorrogas', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
   const pD = (lista2.prorrogas || []).find((p) => p.telefono === D) || {};
   es(pD.restan === 1 && pD.avisado === true && pD.yaPago === false, `el panel lo dice de un vistazo: vence mañana, ya avisado, no ha pagado (${pD.restan}/${pD.avisado}/${pD.yaPago})`);

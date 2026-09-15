@@ -5151,9 +5151,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
         const vistoMenu = !cuentaAjena(chatId) && mesesEnSesion(chatId) <= 1 ? pagoRecienteDe(normalizePhone(chatId)) : null;
         if (regMenu.cobroAutomatico && !cuentaAjena(chatId) && !vistoMenu) {
           const corteMenu = parseFechaCorte((wisphubClients.get(normalizePhone(chatId)) || {}).fechaCorte);
-          encabezado = '🔁 Tienes *cobro automático*: '
-            + (corteMenu ? `se cobra solo a tu tarjeta un día antes del ${corteMenu.split('-').reverse().join('/')}` : 'se cobra solo a tu tarjeta un día antes de tu fecha de pago')
-            + '. No tienes que hacer nada.\n\nSi de todos modos quieres pagar ahora, elige cómo (y ese mes ya no se te cobra en automático).\n\n';
+          // Si el cobro de este periodo ya se intentó y no pasó, "no tienes que hacer nada" sería mentira.
+          const perMenu = corteMenu ? (((autoCobros[normalizePhone(chatId)] || {})[corteMenu]) || {}) : {};
+          if (perMenu.estado === 'rechazado' || perMenu.estado === 'sin-tarjeta') {
+            encabezado = (perMenu.estado === 'sin-tarjeta'
+              ? '⚠️ Este mes tu *cobro automático* no se hizo: ya no hay una tarjeta guardada.'
+              : '⚠️ Este mes tu *cobro automático* no pasó: la tarjeta fue rechazada.')
+              + ' Paga ahora de otra forma para que no se corte tu servicio (si pagas con tarjeta, esa queda guardada para el mes que viene).\n\n';
+          } else {
+            encabezado = '🔁 Tienes *cobro automático*: '
+              + (corteMenu ? `se cobra solo a tu tarjeta un día antes del ${corteMenu.split('-').reverse().join('/')}` : 'se cobra solo a tu tarjeta un día antes de tu fecha de pago')
+              + '. No tienes que hacer nada.\n\nSi de todos modos quieres pagar ahora, elige cómo (y ese mes ya no se te cobra en automático).\n\n';
+          }
         }
         // Y quien ya pagó este mes también debe saberlo antes de pagar dos veces
         // (salvo que venga a adelantar meses a propósito).
