@@ -967,6 +967,25 @@ async function sendWhatsAppTemplate(to, message, opts = {}) {
   return true;
 }
 
+/*
+ * AVISOS QUE EL BOT MANDA POR SU CUENTA (nadie escribió antes).
+ *
+ * WhatsApp solo deja mandar texto libre dentro de las 24 h siguientes al
+ * último mensaje del cliente. Un "se cobró tu mensualidad", un "¿ya quedó tu
+ * servicio?" tres días después, o el aviso al dueño de que otra persona pagó
+ * por él, casi siempre caen FUERA de esa ventana: Meta los rechaza en
+ * silencio (error 131047) y nadie se entera. Por eso van por la plantilla
+ * aprobada de avisos, igual que el recordatorio de corte. Si no hay plantilla
+ * configurada, se intenta el texto libre: mejor un intento que ninguno.
+ */
+async function avisarPorIniciativa(to, message, opts = {}) {
+  if (WHATSAPP_AVISO_TEMPLATE) {
+    try { return await sendWhatsAppTemplate(to, message, opts); }
+    catch (e) { console.warn('[aviso] plantilla falló para', to, '·', e.message); }
+  }
+  return sendWhatsAppMessage(to, message);
+}
+
 // Envío masivo por PLANTILLA a todos los clientes (sin límite 24h).
 async function sendBulkTemplate(message, opts = {}) {
   const recipients = getAllBroadcastRecipients();
@@ -3100,7 +3119,7 @@ async function handleAgentCommand(agentNumber, text) {
     const hastaTxt = `${d}/${m}/${y}`;
     await sendWhatsAppMessage(agentNumber, `📅 Prórroga registrada para *${nombre}* hasta el *${hastaTxt}* (${p.dias} día${p.dias !== 1 ? 's' : ''}). No le va a llegar aviso de corte hasta entonces.`);
     try {
-      await sendWhatsAppMessage(clientId, `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
+      await avisarPorIniciativa(clientId, `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
     } catch (_) { /* si no se le pudo avisar, la prórroga vale igual */ }
     return;
   }
@@ -3753,7 +3772,7 @@ async function barrerCobroAutomatico(force = false) {
       try { monto = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; } catch (_) { /* se avisa sin monto */ }
       if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;
       per.avisado = new Date().toISOString(); schedulePersist();
-      await sendWhatsAppMessage(tel,
+      await avisarPorIniciativa(tel,
         `📅 Hola. Tu fecha de pago es el ${corte.split('-').reverse().join('/')}. *Mañana se cobrará${monto > 0 ? ` $${monto.toFixed(2)}` : ' tu mensualidad'} a tu tarjeta guardada*, como lo pediste, y tu servicio sigue sin cortes.\n\n`
         + 'Si prefieres pagar de otra forma este mes, escribe *CANCELAR AUTOMÁTICO* antes de mañana.').catch(() => {});
       hechos.avisados++;
@@ -3772,7 +3791,7 @@ async function barrerCobroAutomatico(force = false) {
         const yaPago = pagoRecienteDe(tel);
         if (yaPago) {
           per.estado = 'ya-pago'; per.motivo = yaPago.canal; schedulePersist(); hechos.sinDeuda++;
-          await sendWhatsAppMessage(tel, '✅ Este mes ya pagaste por tu cuenta, así que no se cobró nada a tu tarjeta. El cobro automático sigue activo para el mes que viene. 🙌').catch(() => {});
+          await avisarPorIniciativa(tel, '✅ Este mes ya pagaste por tu cuenta, así que no se cobró nada a tu tarjeta. El cobro automático sigue activo para el mes que viene. 🙌').catch(() => {});
           continue;
         }
         let deuda = 0;
@@ -3780,13 +3799,13 @@ async function barrerCobroAutomatico(force = false) {
         catch (e) { throw new Error('No se pudo leer la deuda: ' + e.message); }
         if (deuda <= 0) {
           per.estado = 'sin-deuda'; schedulePersist(); hechos.sinDeuda++;
-          await sendWhatsAppMessage(tel, '✅ Hoy tocaba tu cobro automático, pero tu cuenta ya está al corriente: no se cobró nada. 🙌').catch(() => {});
+          await avisarPorIniciativa(tel, '✅ Hoy tocaba tu cobro automático, pero tu cuenta ya está al corriente: no se cobró nada. 🙌').catch(() => {});
           continue;
         }
         const tarjeta = await stripeLeon.metodoGuardadoDe(reg.clienteId);
         if (!tarjeta) {
           per.estado = 'sin-tarjeta'; schedulePersist(); hechos.sinTarjeta++;
-          await sendWhatsAppMessage(tel, `⚠️ Tocaba cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta, pero ya no hay una tarjeta guardada. Escribe *pagar* para pagar de otra forma, o vuelve a activar el automático al pagar con tarjeta. 🙏`).catch(() => {});
+          await avisarPorIniciativa(tel, `⚠️ Tocaba cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta, pero ya no hay una tarjeta guardada. Escribe *pagar* para pagar de otra forma, o vuelve a activar el automático al pagar con tarjeta. 🙏`).catch(() => {});
           continue;
         }
         const r = await stripeLeon.cobrarGuardado({ clienteId: reg.clienteId, metodoPago: tarjeta.id, monto: deuda, telefono: tel, nombre: c.name, periodo: corte });
@@ -3795,14 +3814,14 @@ async function barrerCobroAutomatico(force = false) {
           registrarPagoYRevisarDoble({ telefono: tel, monto: r.mensualidad, canal: 'tarjeta-automatico', ref: r.id });
           markCases(tel, 'recibido', 'stripe-auto');
           sumarAlMes(r.mensualidad, 'tarjeta');
-          await sendWhatsAppMessage(tel, `✅ Se cobró tu mensualidad de *$${r.mensualidad.toFixed(2)}* (más $${r.cargo.toFixed(2)} por pagar en línea) a tu tarjeta terminación ${tarjeta.ultimos4}. Tu servicio sigue activo, sin cortes. 🙌`).catch(() => {});
+          await avisarPorIniciativa(tel, `✅ Se cobró tu mensualidad de *$${r.mensualidad.toFixed(2)}* (más $${r.cargo.toFixed(2)} por pagar en línea) a tu tarjeta terminación ${tarjeta.ultimos4}. Tu servicio sigue activo, sin cortes. 🙌`).catch(() => {});
           try {
             const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: r.mensualidad, referencia: r.id, idServicio: reg.autoServicioId || undefined });
             avisarRegistroPendiente(w, tel);
           } catch (e) { console.error('[auto] aplicar pago:', e.message); }
         } else {
           per.estado = 'rechazado'; per.motivo = r.motivo || r.estado; schedulePersist(); hechos.rechazados++;
-          await sendWhatsAppMessage(tel, `⚠️ No se pudo cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta terminación ${tarjeta.ultimos4} (${r.necesitaAlCliente ? 'el banco pide tu autorización' : 'fue rechazada'}). Para que no se corte tu servicio, escribe *pagar* y elige otra forma. 🙏`).catch(() => {});
+          await avisarPorIniciativa(tel, `⚠️ No se pudo cobrar tu mensualidad de $${deuda.toFixed(2)} a tu tarjeta terminación ${tarjeta.ultimos4} (${r.necesitaAlCliente ? 'el banco pide tu autorización' : 'fue rechazada'}). Para que no se corte tu servicio, escribe *pagar* y elige otra forma. 🙏`).catch(() => {});
           alertAdmin('cobro-automatico', `El cobro automático de ${c.name || tel} ($${deuda.toFixed(2)}) fue rechazado (${r.motivo || r.estado}). Ya se le pidió que pague por otra vía.`);
         }
       } catch (e) {
@@ -3834,9 +3853,10 @@ async function preguntarSiYaQuedo(force = false) {
     if (new Date(t.createdAt).getTime() > limite) continue;
     t.preguntadoEn = new Date().toISOString(); schedulePersist();
     try {
-      await sendWhatsAppMessage(t.chatId,
-        `🔧 Hola. Hace unos días reportaste: "${String(t.problema || '').slice(0, 80)}" (folio ${t.folio}). ¿Ya quedó tu servicio?`,
-        [], { buttons: [{ id: 'tk_si_' + t.id, title: '✅ Sí, ya quedó' }, { id: 'tk_no_' + t.id, title: '❌ Sigue igual' }] });
+      // Va por plantilla (fuera de la ventana de 24 h no llega el texto libre),
+      // y la plantilla no trae botones propios: se contesta con una palabra.
+      await avisarPorIniciativa(t.chatId,
+        `🔧 Hola. Hace unos días reportaste: "${String(t.problema || '').slice(0, 80)}" (folio ${t.folio}). ¿Ya quedó tu servicio? Responde *SÍ* si ya quedó, o *NO* si sigue igual.`);
       hechos.preguntados++;
     } catch (e) { console.warn('[tickets] no se pudo preguntar por', t.folio, e.message); }
   }
@@ -4420,10 +4440,21 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
     // ===== Botones del recordatorio de corte (horario en oficina / datos de pago) =====
     // Respuesta a "¿ya quedó tu servicio?" de un reporte de falla.
-    const _tkResp = _pt.match(/^tk_(si|no)_(tk[a-z0-9]+)$/);
+    let _tkResp = _pt.match(/^tk_(si|no)_(tk[a-z0-9]+)$/);
+    if (!_tkResp) {
+      // Un "sí" o "no" pelón, si hay un reporte suyo con la pregunta hecha y sin contestar.
+      const esSi = /^(s[ií]|ya qued[oó]|ya|listo|ya funciona|ya sirve)[\s.!]*$/.test(_pt);
+      const esNo = /^(no|sigue igual|todav[ií]a no|a[uú]n no|no sirve|sigue sin)[\s.!]*$/.test(_pt);
+      if (esSi || esNo) {
+        const t = [...tickets.values()].filter((x) => String(x.chatId) === String(chatId) && x.preguntadoEn && !x.contestadoEn && x.estado !== 'resuelto')
+          .sort((a, b) => new Date(b.preguntadoEn) - new Date(a.preguntadoEn))[0];
+        if (t) _tkResp = [null, esSi ? 'si' : 'no', t.id];
+      }
+    }
     if (_tkResp) {
       const t = tickets.get(_tkResp[2]);
       if (!t || String(t.chatId) !== String(chatId)) { await sendMsg(chatId, 'Ese reporte ya no está. Si sigues con la falla, escríbeme qué pasa y levanto uno nuevo.'); return; }
+      t.contestadoEn = new Date().toISOString();
       t.updatedAt = new Date().toISOString();
       if (_tkResp[1] === 'si') {
         t.estado = 'resuelto'; t.cerradoPor = 'cliente'; schedulePersist();
@@ -6873,7 +6904,7 @@ app.post('/webhook/stripe', async (req, res) => {
          * queremos es que además nadie se entere.
          */
         try {
-          await sendWhatsAppMessage(telefono,
+          await (pagadoPor !== telefono ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
             '✅ Recibimos el pago de tu servicio — quedó confirmado automáticamente, no hace falta comprobante. ¡Gracias! 🙌'
             + (pagadoPor !== telefono ? '\n\n(Lo pagó otra persona por ti.)' : ''));
         } catch (e) { console.error('[stripe-leon] no salió el aviso al dueño', telefono, e.message); }
@@ -6943,7 +6974,7 @@ app.post('/webhook/stripe', async (req, res) => {
           const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id, idServicio: o.metadata.servicioId || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
-            await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+            await (pagadoPor !== telefono ? avisarPorIniciativa : sendWhatsAppMessage)(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
           }
           if (w.avisos.length) console.warn('[wisphub]', telefono, '·', w.avisos.join(' · '));
 

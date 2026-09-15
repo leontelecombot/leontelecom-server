@@ -399,6 +399,7 @@ console.log('\n=== 3. NADA SE REACTIVA HASTA QUE EL DINERO ESTÁ CONFIRMADO ==='
   es(wisphub.activaciones.includes(102), 'con el pago confirmado se reactiva el servicio de Ana Pérez (102)');
   es(!wisphub.activaciones.includes(101), 'y NO el de quien pagó');
   es(msgs.some((m) => m.a === B && /Recibimos el pago.*Lo pagó otra persona por ti/s.test(m.texto)), 'Ana Pérez se entera de que alguien pagó por ella');
+  es(msgs.some((m) => m.a === B && m.tipo === 'template'), 'y le llega por plantilla, porque ella nunca le ha escrito al bot (ventana de 24 h)');
   es(msgs.some((m) => m.a === A && /tu pago se aplicó al servicio de \*Ana Pérez\*/.test(m.texto)), 'quien pagó recibe su acuse');
   es(msgs.some((m) => m.a === B && /reactivado/.test(m.texto)), 'y a Ana Pérez le avisan que ya quedó reactivada');
   const otraVez = await avisar(sesionPagada(s));
@@ -897,12 +898,12 @@ console.log('\n=== 15. TRES DÍAS DESPUÉS DE UNA FALLA, EL BOT PREGUNTA SI YA Q
   const h = await fetch(BASE + '/api/pruebas/ya-quedo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"dias":4}' }).then((x) => x.json());
   r = await respuestas(n, 1);
   const pregunta = r.find((m) => m.a === G && /¿Ya quedó tu servicio\?/.test(m.texto));
-  es(h.preguntados >= 1 && !!pregunta, 'a los tres días le pregunta a Gloria si ya quedó, con dos botones');
-  const btnSi = pregunta && pregunta.botones.find((b) => /^tk_si_/.test(b.id));
+  es(h.preguntados >= 1 && !!pregunta, 'a los tres días le pregunta a Gloria si ya quedó');
+  es(pregunta && pregunta.tipo === 'template', 'y va por la plantilla aprobada: fuera de las 24 h el texto libre no llega');
   n = enviados.length;
-  await toca(G, btnSi ? btnSi.id : 'tk_si_x');
+  await entra(G, 'sí');
   r = await respuestas(n, 1);
-  es(dice(r, /Cierro tu reporte/), '"sí, ya quedó" cierra el reporte solo');
+  es(dice(r, /Cierro tu reporte/), 'contestar "sí" cierra el reporte solo');
   const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
   const tk = await fetch(BASE + '/admin/api/tickets', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
   const mio = (tk.tickets || []).find((t) => t.folio === folio);
