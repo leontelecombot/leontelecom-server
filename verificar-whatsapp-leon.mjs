@@ -771,6 +771,11 @@ console.log('\n=== 11. Y LA CLABE ES DE UN CONTRATO, NO DEL TELÉFONO ===');
   const r2 = await respuestas(n2, 1, 5000);
   es(dep.st === 200, 'Stripe avisa que cayó una transferencia en la CLABE del local');
   es(r2.some((m) => m.a === F && m.tipo === 'template' && /Recibimos tu transferencia por \$1000\.00/.test(m.texto) && /Cubre 2 meses: quedas pagado hasta el \d\d\/\d\d\/\d{4}/.test(m.texto)), 'a Fermín le llega por plantilla que su transferencia cubre 2 meses y hasta cuándo');
+  {
+    const local = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: F, corte: MANANA, servicioId: '107' }) }).then((x) => x.json());
+    const casa = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: F, corte: PASADO, servicioId: '106' }) }).then((x) => x.json());
+    es(local.esteCorte === true && casa.esteCorte === false, 'lo adelantado es del LOCAL: la casa (mismo teléfono) sigue debiendo y su aviso no se calla');
+  }
 }
 
 console.log('\n=== 11b. SEIS MESES DE JALÓN ===');
@@ -1424,8 +1429,10 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
   n = enviados.length;
   await entra('529519999999', 'RECIBIDO 951 666 6666');
   await respuestas(n, 1, 4000);
-  const cubreF = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: F, corte: MANANA }) }).then((x) => x.json());
-  es(cubreF.siguienteCorte === true, 'al darlo por recibido, el pago cubre el corte del local (mañana)');
+  const cubreF = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: F, corte: MANANA, servicioId: '107' }) }).then((x) => x.json());
+  es(cubreF.siguienteCorte === true, 'al darlo por recibido, el pago cubre el corte del LOCAL (mañana)');
+  const cubreCasa = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: F, corte: PASADO, servicioId: '106' }) }).then((x) => x.json());
+  es(cubreCasa.siguienteCorte === false, 'y NO cuenta para la casa (otro contrato del mismo teléfono): a la casa sí le tocaría aviso');
   n = enviados.length;
   const r = await fetch(BASE + '/admin/api/comprobantes/' + encodeURIComponent(mio.id) + '/recibido', { method: 'POST', headers: H_ }).then((x) => x.json());
   const msgs = await respuestas(n, 1);

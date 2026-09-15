@@ -3692,20 +3692,30 @@ const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_
  * evaluando: cubre si cae a ±15 días de ese corte o más adelante. Si no lo
  * trae (pagos viejos, comprobantes), vale la ventana de días.
  */
-function pagoRecienteDe(telefono, corte = '') {
+function pagoRecienteDe(telefono, corte = '', servicioId = '') {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
   const desde = Date.now() - CORTE_DIAS_PAGO_RECIENTE * 24 * 3600 * 1000;
+  /*
+   * Con varios contratos en un teléfono, un pago del local no cubre la casa.
+   * El contrato que se evalúa es el que se pida o, si no, el que trae el
+   * padrón para ese teléfono; los pagos marcados con OTRO contrato no cuentan.
+   */
+  const svc = String(servicioId || (wisphubClients.get(tel) || {}).wisphubId || '').replace(/\D/g, '');
+  const deEste = (x) => !x || !svc || !x.servicioId || String(x.servicioId) === svc;
+  const hoy = fechaLocalISO();
   const reg = stripeClientes.get(tel) || {};
-  if (reg.adelantadoHasta && reg.adelantadoHasta >= fechaLocalISO()) return { cuando: Date.now(), canal: `adelantado hasta ${reg.adelantadoHasta}` };
-  const ref = corte || fechaLocalISO();
+  if (reg.adelantadoHasta && reg.adelantadoHasta >= hoy && (!reg.adelantadoServicio || !svc || reg.adelantadoServicio === svc)) return { cuando: Date.now(), canal: `adelantado hasta ${reg.adelantadoHasta}` };
+  const regSvc = svc ? (stripeClientes.get(stripeLeon.claveDeRegistro(tel, svc)) || {}) : {};
+  if (regSvc.adelantadoHasta && regSvc.adelantadoHasta >= hoy) return { cuando: Date.now(), canal: `adelantado hasta ${regSvc.adelantadoHasta}` };
+  const ref = corte || hoy;
   const refMs = new Date(ref + 'T12:00:00').getTime();
   const cubre = (p) => {
     if (!p.cubreHasta) return p.cuando >= desde;
     const dif = (new Date(p.cubreHasta + 'T12:00:00').getTime() - refMs) / 86400000;
     return dif >= -15;
   };
-  const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && cubre(p) && p.cuando >= Date.now() - 400 * 86400000);
+  const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && deEste(p) && cubre(p) && p.cuando >= Date.now() - 400 * 86400000);
   if (enLinea.length) { const u = enLinea[enLinea.length - 1]; return { cuando: u.cuando, canal: u.canal || 'en línea' }; }
   for (const c of caseLog) {
     if (c.type !== 'pago' || c.status !== 'recibido') continue;
@@ -3716,7 +3726,7 @@ function pagoRecienteDe(telefono, corte = '') {
      * "mañana te cortamos" cuando su hija ya pagó por él.
      */
     const esSuyo = c.clientId === tel || String(c.resumen || '').includes('· ' + tel);
-    if (!esSuyo) continue;
+    if (!esSuyo || !deEste(c)) continue;
     const t = new Date(c.ts).getTime();
     const vale = c.cubreHasta ? ((new Date(c.cubreHasta + 'T12:00:00').getTime() - refMs) / 86400000 >= -15 && t >= Date.now() - 400 * 86400000) : t >= desde;
     if (vale) return { cuando: t, canal: c.clientId === tel ? 'comprobante' : 'comprobante de otra persona' };
@@ -3729,13 +3739,16 @@ function pagoRecienteDe(telefono, corte = '') {
  * dice a la oficina que registre los meses que vienen (Wisphub solo tiene la
  * factura de hoy). Devuelve la fecha hasta la que queda cubierto.
  */
-function anotarMesesAdelantados(telefono, mesesPagados, montoTexto) {
+function anotarMesesAdelantados(telefono, mesesPagados, montoTexto, servicioId = '') {
   const tel = String(telefono || '').replace(/\D/g, '');
   const w0 = wisphubClients.get(tel) || {};
   const base = parseFechaCorte(w0.fechaCorte) || fechaLocalISO();
   const h = new Date(base + 'T12:00:00'); h.setMonth(h.getMonth() + (mesesPagados - 1));
   const hasta = fechaLocalISO(h);
-  stripeClientes.set(tel, { ...(stripeClientes.get(tel) || {}), adelantadoHasta: hasta, adelantadoMeses: mesesPagados });
+  // Con contrato conocido, lo adelantado es de ESE contrato (clave tel~servicio); si no, del teléfono.
+  const svc = String(servicioId || '').replace(/\D/g, '');
+  const clave = svc && svc !== String(w0.wisphubId || '') ? stripeLeon.claveDeRegistro(tel, svc) : tel;
+  stripeClientes.set(clave, { ...(stripeClientes.get(clave) || {}), adelantadoHasta: hasta, adelantadoMeses: mesesPagados, ...(svc ? { adelantadoServicio: svc } : {}) });
   schedulePersist();
   alertAdmin('meses-adelantados', `📅 ${w0.name || tel} pagó *${mesesPagados} meses* de una vez (${montoTexto}). Wisphub solo tiene la factura de este mes: hay que registrar los ${mesesPagados - 1} siguientes a mano. Queda cubierto hasta el ${hasta}.`);
   return hasta;
@@ -3955,7 +3968,7 @@ async function barrerCobroAutomatico(force = false) {
         const r = await stripeLeon.cobrarGuardado({ clienteId: reg.clienteId, metodoPago: tarjeta.id, monto: deuda, telefono: tel, nombre: c.name, periodo: corte });
         if (r.ok) {
           per.estado = 'cobrado'; per.ref = r.id; per.monto = r.mensualidad; schedulePersist(); hechos.cobrados++;
-          registrarPagoYRevisarDoble({ telefono: tel, monto: r.mensualidad, canal: 'tarjeta-automatico', ref: r.id, cubreHasta: corte });
+          registrarPagoYRevisarDoble({ telefono: tel, monto: r.mensualidad, canal: 'tarjeta-automatico', ref: r.id, cubreHasta: corte, servicioId: reg.autoServicioId });
           markCases(tel, 'recibido', 'stripe-auto');
           sumarAlMes(r.mensualidad, 'tarjeta');
           await avisarPorIniciativa(tel, `✅ Se cobró tu mensualidad de *$${r.mensualidad.toFixed(2)}* (más $${r.cargo.toFixed(2)} por pagar en línea) a tu tarjeta terminación ${tarjeta.ultimos4}. Tu servicio sigue activo, sin cortes. 🙌`).catch(() => {});
@@ -6704,7 +6717,8 @@ if (process.env.PRUEBAS === '1') {
     // ¿El último pago de este cliente cubre el corte de hoy/mañana, y el que se pida?
     const tel = normalizePhone(String((req.body || {}).telefono || ''));
     const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte) || fechaLocalISO();
-    res.json({ esteCorte: !!pagoRecienteDe(tel, corte), siguienteCorte: !!pagoRecienteDe(tel, String((req.body || {}).corte || '')) });
+    const svcQ = String((req.body || {}).servicioId || '');
+    res.json({ esteCorte: !!pagoRecienteDe(tel, corte, svcQ), siguienteCorte: !!pagoRecienteDe(tel, String((req.body || {}).corte || ''), svcQ) });
   });
   app.post('/api/pruebas/olvidar-pagos', (req, res) => {
     const tel = normalizePhone(String((req.body || {}).telefono || ''));
@@ -6874,7 +6888,7 @@ function anotarRegistroPendiente(reg) {
 const stripePagosRecientes = new Map();   // telefono -> [{ monto, cuando, canal, ref }]
 const VENTANA_DUPLICADO_MS = 20 * 24 * 3600 * 1000;
 
-function registrarPagoYRevisarDoble({ telefono, monto, canal, ref, pagadoPor, cubreHasta }) {
+function registrarPagoYRevisarDoble({ telefono, monto, canal, ref, pagadoPor, cubreHasta, servicioId }) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
   const ahora = Date.now();
@@ -6882,7 +6896,8 @@ function registrarPagoYRevisarDoble({ telefono, monto, canal, ref, pagadoPor, cu
   const sospechoso = previos.find((p) => p.ref !== ref);
   const por = String(pagadoPor || '').replace(/\D/g, '');
   const cubre = /^\d{4}-\d{2}-\d{2}$/.test(String(cubreHasta || '')) ? String(cubreHasta) : '';
-  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref, ...(por && por !== tel ? { pagadoPor: por } : {}), ...(cubre ? { cubreHasta: cubre } : {}) });
+  const svcPago = String(servicioId || '').replace(/\D/g, '');
+  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref, ...(por && por !== tel ? { pagadoPor: por } : {}), ...(cubre ? { cubreHasta: cubre } : {}), ...(svcPago ? { servicioId: svcPago } : {}) });
   stripePagosRecientes.set(tel, previos.slice(-6));
   sumarAlMes(monto, canal);
   schedulePersist();
@@ -7575,7 +7590,7 @@ app.post('/webhook/stripe', async (req, res) => {
         const doble = registrarPagoYRevisarDoble({
           telefono, monto: (o.amount_total || 0) / 100,
           canal: o.payment_status === 'paid' ? 'tarjeta' : 'oxxo',
-          ref: o.payment_intent || o.id, pagadoPor, cubreHasta: o.metadata.cubreHasta,
+          ref: o.payment_intent || o.id, pagadoPor, cubreHasta: o.metadata.cubreHasta, servicioId: o.metadata.servicioId,
         });
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
@@ -7647,7 +7662,7 @@ app.post('/webhook/stripe', async (req, res) => {
            * registre los meses que vienen (Wisphub solo tiene la factura de hoy).
            */
           const mesesPagados = Number(o.metadata.meses || 1) || 1;
-          if (mesesPagados > 1) anotarMesesAdelantados(telefono, mesesPagados, `$${mensualidad.toFixed(2)}`);
+          if (mesesPagados > 1) anotarMesesAdelantados(telefono, mesesPagados, `$${mensualidad.toFixed(2)}`, o.metadata.servicioId);
           const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id, idServicio: o.metadata.servicioId || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
@@ -7822,7 +7837,7 @@ app.post('/webhook/stripe', async (req, res) => {
             anotarSaldoRezagado(telefono, o.customer || reg.clienteId, pesos, e.message);
           }
         }
-        const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id, cubreHasta: deuda.cubreHasta || undefined });
+        const doble = registrarPagoYRevisarDoble({ telefono, monto: pesos, canal: 'transferencia', ref: o.id, cubreHasta: deuda.cubreHasta || undefined, servicioId: servicioDelDeposito || undefined });
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
         }
@@ -7841,7 +7856,7 @@ app.post('/webhook/stripe', async (req, res) => {
           if (!unidad) unidad = parseFloat((wisphubClients.get(telefono) || {}).precioPlan) || (deuda.conocida ? Number(deuda.total) || 0 : 0);
           if (unidad > 0 && pesos >= 2 * unidad - 0.5) {
             const mesesDep = Math.min(12, Math.floor((pesos + 0.5) / unidad));
-            const hasta = anotarMesesAdelantados(telefono, mesesDep, `$${pesos.toFixed(2)} por transferencia`);
+            const hasta = anotarMesesAdelantados(telefono, mesesDep, `$${pesos.toFixed(2)} por transferencia`, servicioDelDeposito);
             cubreTexto = ` Cubre ${mesesDep} meses: quedas pagado hasta el ${hasta.split('-').reverse().join('/')}.`;
           }
         } catch (e) { console.warn('[stripe-leon] no se pudo contar los meses del depósito ·', e.message); }
