@@ -8921,6 +8921,9 @@ const port = Number(process.env.PORT || 3000);
   setTimeout(() => sweepCorteReminders().catch(() => {}), 45000);
   setInterval(() => sweepCorteReminders().catch(() => {}), 5 * 60000);
   // Reportes de falla: cada 2 horas pregunta "¿ya quedó?" a los de hace 3 días.
+  // También a los 2 min de arrancar: en Render gratis el servidor se reinicia
+  // seguido y un intervalo de 2 h podría no llegar nunca.
+  setTimeout(() => preguntarSiYaQuedo().catch(() => {}), 2 * 60000);
   setInterval(() => preguntarSiYaQuedo().catch(() => {}), 2 * 60 * 60000);
   // Cobro automático: cada hora mira si a alguien le toca aviso o cobro.
   setTimeout(() => barrerCobroAutomatico().catch(() => {}), 60000);
