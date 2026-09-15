@@ -6733,6 +6733,24 @@ app.post('/webhook/stripe', async (req, res) => {
       return res.json({ recibido: true, ficha: true });
     }
 
+    /*
+     * El link venció sin que lo abriera (o lo abrió y no terminó). Que lo sepa
+     * y que pedir otro sea una palabra: si no, vuelve a abrir el mismo link,
+     * ve "expirado" en inglés y piensa que el sistema no sirve.
+     */
+    if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
+        && evento.type === 'checkout.session.expired' && o.payment_status !== 'paid') {
+      const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
+      const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
+      if (quien && o.metadata.forma !== 'oxxo') {
+        const ajeno = quien !== tel;
+        await sendWhatsAppMessage(quien,
+          '⏱️ El link de pago venció (dura 30 minutos). No se cobró nada. '
+          + `Cuando quieras, escribe *${ajeno ? 'a nombre de quién' : 'pagar'}* y te doy uno nuevo. 🙌`).catch(() => {});
+      }
+      return res.json({ recibido: true, vencido: true });
+    }
+
     if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
         && evento.type === 'checkout.session.async_payment_failed') {
       const tel = String(o.metadata.telefono || '').replace(/\D/g, '');

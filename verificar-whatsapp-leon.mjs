@@ -794,6 +794,16 @@ console.log('\n=== 11d. PAGAR POR OTRO QUE TIENE DOS CONTRATOS ===');
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
 }
 
+console.log('\n=== 11e. EL LINK QUE VENCIÓ SIN ABRIRSE ===');
+{
+  const s = stripe.sesiones.find((x) => x.telefono === A && x.pagadoPor === A && x.forma === 'card');
+  let n = enviados.length;
+  const r0 = await avisar({ ...sesionPagada(s, { type: 'checkout.session.expired', payment_status: 'unpaid' }) });
+  const r = await respuestas(n, 1);
+  es(r0.d && r0.d.vencido === true, 'Stripe avisa que el link venció');
+  es(r.some((m) => m.a === A && /El link de pago venció/.test(m.texto) && /escribe \*pagar\*/.test(m.texto)), 'y al cliente se le dice que no se cobró nada y cómo pedir otro');
+}
+
 console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN TIENE PRÓRROGA ===');
 {
   const ASESOR = '529519999999';
