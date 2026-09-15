@@ -4901,6 +4901,30 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
       return;
     }
+    /*
+     * "¿Cuándo es mi corte?" es de las preguntas más comunes y el aviso de
+     * lanzamiento prometió contestarla. Se contesta con el dato de Wisphub, sin
+     * IA de por medio, y con el monto si debe algo.
+     */
+    if (/(cu[aá]ndo|que d[ií]a|qu[eé] d[ií]a|fecha)\s.*(corte|vence|pago|pagar)|^(mi|fecha de) corte|^corte[\s?]*$|cu[aá]ndo me (cortan|toca pagar)/.test(_pt)
+        && !_enOtraCosa && !_conComprobante && !_isBtn) {
+      const telC = normalizePhone(chatId);
+      const c = wisphubClients.get(telC);
+      if (!c) {
+        await sendMsg(chatId, 'No encuentro un servicio a nombre de este número. Si eres cliente, escríbele a un asesor con tu nombre completo para revisarlo. 🙏');
+        return;
+      }
+      const corte = parseFechaCorte(c.fechaCorte);
+      const bonita = corte ? corte.split('-').reverse().join('/') : '';
+      const suspendido = /suspend|cort/i.test(String(c.status || ''));
+      let monto = '';
+      try { const cobro = await montoACobrar(chatId, ''); if (cobro.ok && clienteDebe(c)) monto = ` Tienes pendiente *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`; } catch (_) { /* sin monto */ }
+      await sendMsg(chatId,
+        (suspendido ? '🔴 Tu servicio está *suspendido*.' : (corte ? `📅 Tu fecha de corte es el *${bonita}*.` : '📅 No tengo tu fecha de corte a la mano.'))
+        + monto
+        + (suspendido || monto ? '\n\nEscribe *pagar* y te digo cómo, o *cuánto debo* para ver el detalle.' : '\n\nEstás al corriente. 🙌'));
+      return;
+    }
     if (/^(oficina|en la oficina|pagar en oficina|otras formas)[\s.!]*$/.test(_pt) && !_enOtraCosa) {
       return handleChatMessage(chatId, 'pago_otras', sendMsg);
     }

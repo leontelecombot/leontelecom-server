@@ -912,6 +912,20 @@ console.log('\n=== 15. TRES DÍAS DESPUÉS DE UNA FALLA, EL BOT PREGUNTA SI YA Q
   es(h2.preguntados === 0, 'y no se vuelve a preguntar');
 }
 
+console.log('\n=== 16. "¿CUÁNDO ES MI CORTE?" ===');
+{
+  await entra(G, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(G, 'cuándo es mi fecha de corte?');
+  let r = await respuestas(n);
+  es(dice(r, /suspendido|fecha de corte es el \*\d\d\/\d\d\/\d{4}\*/), 'contesta con su estado o su fecha de corte, con el dato de Wisphub');
+  es(dice(r, /Tienes pendiente \*\$320\.00\*/), 'y cuánto debe');
+  n = enviados.length;
+  await entra(C, 'que dia me toca pagar');
+  r = await respuestas(n);
+  es(dice(r, /al corriente|fecha de corte/), 'a quien está al corriente se lo dice');
+}
+
 console.log(`\n${ok} bien, ${mal} mal`);
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);
