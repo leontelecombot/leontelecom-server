@@ -3626,7 +3626,7 @@ function darProrroga(telefono, dias, por, motivo = '') {
   const tel = String(telefono || '').replace(/\D/g, '');
   const n = Math.max(1, Math.min(31, Number(dias) || 0));
   const hasta = new Date(); hasta.setDate(hasta.getDate() + n);
-  prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/\D/g, ''), cuando: new Date().toISOString(), motivo: String(motivo || '').slice(0, 200) };
+  prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/[^\w@. -]/g, '').slice(0, 40), cuando: new Date().toISOString(), motivo: String(motivo || '').slice(0, 200) };
   schedulePersist();
   return prorrogas[tel];
 }

@@ -482,6 +482,28 @@
     </div>
   </div>
 
+  <!-- Prórrogas: a quién se le dio plazo y hasta cuándo. El aviso de corte se calla solo. -->
+  <div class="wrap" style="margin-bottom:28px">
+    <div class="card">
+      <div class="card-header"><span class="hico">📅</span> Prórrogas</div>
+      <div class="card-body">
+        <div id="prAlert" class="alert"></div>
+        <p style="font-size:.85em;color:var(--muted);margin-bottom:10px">
+          Cuando un cliente pide más tiempo, dale plazo aquí (o el asesor por WhatsApp con
+          <code>PRORROGA 9511234567 3</code>). Al cliente le llega hasta cuándo tiene, y el
+          <b>aviso de corte no le sale</b> hasta que venza.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+          <div><label style="font-size:.78em;color:var(--muted)">Teléfono</label><br><input id="prTel" placeholder="951 123 4567" style="width:150px"></div>
+          <div><label style="font-size:.78em;color:var(--muted)">Días</label><br><input id="prDias" type="number" min="1" max="31" value="3" style="width:70px"></div>
+          <div style="flex:1;min-width:160px"><label style="font-size:.78em;color:var(--muted)">Motivo (opcional)</label><br><input id="prMotivo" placeholder="se le descompuso el carro" style="width:100%"></div>
+          <button class="btn btn-primary" onclick="darProrroga()">Dar prórroga</button>
+        </div>
+        <div id="prLista"><div class="empty">Cargando…</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Editor del mensaje de aviso de corte (arriba, es lo que más se edita) -->
   <div class="wrap" style="margin-bottom:28px">
     <div class="card">
@@ -940,7 +962,7 @@
      * justo debajo de un "Ya puede cobrar". Un panel que se contradice a sí
      * mismo hace dudar de todo lo demás que dice.
      */
-    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro().then(loadCobroLinea); }
+    else if(page==='cobranza' && can('clients')){ loadCobranza(); loadCorteTemplates(); loadCuentaCobro().then(loadCobroLinea); loadProrrogas(); }
     else if(page==='cortes' && can('clients')){ loadCorteStats(); }
     else if(page==='productos' && can('products')){ loadProducts(); }
     else if(page==='planes' && can('products')){ loadPlans(); }
@@ -1588,6 +1610,44 @@
       showAlert('ccAlert', 'No se pudo abrir el alta. Intenta en un momento.', 'error');
     }
     btn.disabled = false; btn.textContent = antes;
+  }
+
+  /* ── Prórrogas ─────────────────────────────────────────────────────────── */
+  async function loadProrrogas(){
+    const caja = document.getElementById('prLista');
+    try{
+      const r = await fetchAuth('/admin/api/prorrogas');
+      const d = await r.json();
+      const lista = d.prorrogas || [];
+      if(!lista.length){ caja.innerHTML = '<div class="empty">Nadie tiene prórroga ahorita.</div>'; return; }
+      caja.innerHTML = '<table class="data-table"><thead><tr><th>Cliente</th><th>Hasta</th><th>Quién la dio</th><th>Motivo</th><th></th></tr></thead><tbody>'
+        + lista.map(p => {
+          const [y,m,dd] = String(p.hasta).split('-');
+          return `<tr><td><b>${esc(p.nombre || p.telefono)}</b><br><span style="color:var(--muted);font-size:.85em">${esc(p.telefono)}</span></td>
+            <td>${dd}/${m}/${y}<br><span style="color:var(--muted);font-size:.85em">${p.dias} día${p.dias!==1?'s':''}</span></td>
+            <td>${esc(p.por || '')}</td><td>${esc(p.motivo || '')}</td>
+            <td style="text-align:right"><button class="btn btn-danger btn-sm" onclick="quitarProrroga('${esc(p.telefono)}')" title="Quitar la prórroga">✕</button></td></tr>`;
+        }).join('') + '</tbody></table>';
+    }catch(e){ caja.innerHTML = '<div class="empty">No se pudieron cargar las prórrogas.</div>'; }
+  }
+  async function darProrroga(){
+    const telefono = document.getElementById('prTel').value.trim();
+    const dias = Number(document.getElementById('prDias').value);
+    const motivo = document.getElementById('prMotivo').value.trim();
+    if(!telefono){ showAlert('prAlert','Escribe el teléfono del cliente.','error'); return; }
+    try{
+      const r = await fetchAuth('/admin/api/prorrogas', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ telefono, dias, motivo }) });
+      const d = await r.json();
+      if(!r.ok){ showAlert('prAlert', d.error || 'No se pudo dar la prórroga.', 'error'); return; }
+      const [y,m,dd] = String(d.hasta).split('-');
+      showAlert('prAlert', `Prórroga hasta el ${dd}/${m}/${y}. El aviso de corte no le va a salir hasta entonces.`, 'success');
+      document.getElementById('prTel').value=''; document.getElementById('prMotivo').value='';
+      loadProrrogas();
+    }catch(e){ showAlert('prAlert','No se pudo dar la prórroga.','error'); }
+  }
+  async function quitarProrroga(tel){
+    if(!confirm('¿Quitar la prórroga? El aviso de corte le volverá a salir cuando toque.')) return;
+    try{ await fetchAuth('/admin/api/prorrogas/'+encodeURIComponent(tel), { method:'DELETE' }); loadProrrogas(); }catch(e){}
   }
 
   async function loadCobroLinea(){
