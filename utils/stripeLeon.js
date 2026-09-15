@@ -526,7 +526,7 @@ async function stripe(ruta, cuerpo, opciones = {}) {
  * sería silencioso y del peor tipo, porque los dos creerían que ya quedó.
  * `pagadoPor` es solo para el registro y para avisarle a quien pagó.
  */
-async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma, servicioId, meses }) {
+async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, guardarTarjeta, clienteId, forma, servicioId, meses, cubreHasta }) {
   const cuenta = cuentaConectada();
   if (!cuenta) throw new Error('Todavía no se ha dado de alta la cuenta a la que le cae el dinero');
   if (!cuentaLista()) throw new Error('La cuenta de cobro todavía no está aprobada por Stripe');
@@ -613,6 +613,9 @@ async function generarLinkPago({ telefono, monto, nombre, urlBase, pagadoPor, gu
       mensualidad: String(c.baseCentavos),
       // Cuántos meses cubre este pago (1 = solo el que toca).
       meses: String(Math.max(1, Number(meses) || 1)),
+      // Hasta qué vencimiento queda cubierto (la última factura que se paga): con
+      // esto "ya pagó este mes" se decide por periodo, no por días.
+      ...(cubreHasta ? { cubreHasta: String(cubreHasta).slice(0, 10) } : {}),
     },
     payment_intent_data: {
       metadata: { telefono: String(telefono), pagadoPor: String(pagadoPor || telefono), tipo: 'mensualidad-leontelecom', forma, ...(servicioId ? { servicioId: String(servicioId) } : {}) },

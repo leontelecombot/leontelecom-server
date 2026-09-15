@@ -3670,13 +3670,26 @@ function facturaDebe(fact) {
  * el de hace dos semanas (el que Wisphub a veces tarda en marcar) sí.
  */
 const CORTE_DIAS_PAGO_RECIENTE = Math.max(1, Number(process.env.CORTE_DIAS_PAGO_RECIENTE) || 21);
-function pagoRecienteDe(telefono) {
+/*
+ * ¿Ya pagó lo de este periodo? Si el pago trae hasta qué vencimiento cubre
+ * (`cubreHasta`, la factura que pagó), se compara con el corte que se está
+ * evaluando: cubre si cae a ±15 días de ese corte o más adelante. Si no lo
+ * trae (pagos viejos, comprobantes), vale la ventana de días.
+ */
+function pagoRecienteDe(telefono, corte = '') {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
   const desde = Date.now() - CORTE_DIAS_PAGO_RECIENTE * 24 * 3600 * 1000;
   const reg = stripeClientes.get(tel) || {};
   if (reg.adelantadoHasta && reg.adelantadoHasta >= fechaLocalISO()) return { cuando: Date.now(), canal: `adelantado hasta ${reg.adelantadoHasta}` };
-  const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && p.cuando >= desde);
+  const ref = corte || fechaLocalISO();
+  const refMs = new Date(ref + 'T12:00:00').getTime();
+  const cubre = (p) => {
+    if (!p.cubreHasta) return p.cuando >= desde;
+    const dif = (new Date(p.cubreHasta + 'T12:00:00').getTime() - refMs) / 86400000;
+    return dif >= -15;
+  };
+  const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && cubre(p) && p.cuando >= Date.now() - 400 * 86400000);
   if (enLinea.length) { const u = enLinea[enLinea.length - 1]; return { cuando: u.cuando, canal: u.canal || 'en línea' }; }
   for (const c of caseLog) {
     if (c.type !== 'pago' || c.status !== 'recibido') continue;
@@ -3867,7 +3880,7 @@ async function barrerCobroAutomatico(force = false) {
     // Dos días antes: el aviso, con el monto que Wisphub diga hoy. Si este mes ya
     // pagó por su cuenta (o va adelantado), no se le anuncia un cobro que no va a pasar.
     if (diaDeCobro === pasadoManana && !per.avisado) {
-      if (pagoRecienteDe(tel)) { per.avisado = new Date().toISOString(); per.estado = 'ya-pago'; schedulePersist(); continue; }
+      if (pagoRecienteDe(tel, corte)) { per.avisado = new Date().toISOString(); per.estado = 'ya-pago'; schedulePersist(); continue; }
       let monto = 0;
       try { monto = (await wisphubReactivar.deudaDelCliente(c.usuario || '')).total; } catch (_) { /* se avisa sin monto */ }
       if (monto <= 0) monto = parseFloat(c.precioPlan) || 0;
@@ -3902,7 +3915,7 @@ async function barrerCobroAutomatico(force = false) {
          * aceptado), no se le cobra en automático aunque Wisphub siga con la
          * factura pendiente: la oficina la marca a mano y eso tarda días.
          */
-        const yaPago = pagoRecienteDe(tel);
+        const yaPago = pagoRecienteDe(tel, corte);
         if (yaPago) {
           per.estado = 'ya-pago'; per.motivo = yaPago.canal; schedulePersist(); hechos.sinDeuda++;
           await avisarPorIniciativa(tel, '✅ Este mes ya pagaste por tu cuenta, así que no se cobró nada a tu tarjeta. El cobro automático sigue activo para el mes que viene. 🙌').catch(() => {});
@@ -3925,7 +3938,7 @@ async function barrerCobroAutomatico(force = false) {
         const r = await stripeLeon.cobrarGuardado({ clienteId: reg.clienteId, metodoPago: tarjeta.id, monto: deuda, telefono: tel, nombre: c.name, periodo: corte });
         if (r.ok) {
           per.estado = 'cobrado'; per.ref = r.id; per.monto = r.mensualidad; schedulePersist(); hechos.cobrados++;
-          registrarPagoYRevisarDoble({ telefono: tel, monto: r.mensualidad, canal: 'tarjeta-automatico', ref: r.id });
+          registrarPagoYRevisarDoble({ telefono: tel, monto: r.mensualidad, canal: 'tarjeta-automatico', ref: r.id, cubreHasta: corte });
           markCases(tel, 'recibido', 'stripe-auto');
           sumarAlMes(r.mensualidad, 'tarjeta');
           await avisarPorIniciativa(tel, `✅ Se cobró tu mensualidad de *$${r.mensualidad.toFixed(2)}* (más $${r.cargo.toFixed(2)} por pagar en línea) a tu tarjeta terminación ${tarjeta.ultimos4}. Tu servicio sigue activo, sin cortes. 🙌`).catch(() => {});
@@ -4045,7 +4058,7 @@ async function sweepCorteReminders(force = false) {
       const fc = parseFechaCorte(c.fechaCorte);
       if (!fc || fc !== manana) continue;
       if (!clienteDebe(c)) { alCorriente++; continue; }
-      if (pagoRecienteDe(phone)) { yaPagaron++; continue; }
+      if (pagoRecienteDe(phone, fc)) { yaPagaron++; continue; }
       // Mandó comprobante y nadie lo ha revisado: el aviso lo ofende, y lo que urge es revisarlo hoy.
       if (comprobanteEnRevisionDe(phone)) { enRevision.push(c.name || phone); continue; }
       if (prorrogaVigente(phone)) { conProrroga++; continue; }
@@ -4721,6 +4734,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           // Con esto el webhook abona y reactiva ESE contrato, sin adivinar.
           servicioId: servicio ? servicio.servicioId : undefined,
           meses: mesesEnSesion(chatId),
+          cubreHasta: cobro.cubreHasta || undefined,
         });
         if (paraOtro) clearSession(chatId);
 
@@ -5148,6 +5162,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
           telefono: tel, monto, nombre: c.name, urlBase: SERVER_BASE_URL, forma: 'tarjeta',
           guardarTarjeta: true, clienteId: datos.clienteId,
           servicioId: servicio ? servicio.servicioId : undefined,
+          cubreHasta: (cobro.ok && cobro.cubreHasta) || undefined,
         });
         await sendMsg(chatId,
           '💳 Paga esta vez con tu tarjeta y queda guardada para los meses que vienen:\n\n'
@@ -6506,6 +6521,12 @@ if (process.env.PRUEBAS === '1') {
     for (const p of stripePagosRecientes.get(tel) || []) p.cuando -= ms;
     res.json({ ok: true, pagos: (stripePagosRecientes.get(tel) || []).map((p) => ({ canal: p.canal, hace: Math.round((Date.now() - p.cuando) / 86400000) })) });
   });
+  app.post('/api/pruebas/cubre', (req, res) => {
+    // ¿El último pago de este cliente cubre el corte de hoy/mañana, y el que se pida?
+    const tel = normalizePhone(String((req.body || {}).telefono || ''));
+    const corte = parseFechaCorte((wisphubClients.get(tel) || {}).fechaCorte) || fechaLocalISO();
+    res.json({ esteCorte: !!pagoRecienteDe(tel, corte), siguienteCorte: !!pagoRecienteDe(tel, String((req.body || {}).corte || '')) });
+  });
   app.post('/api/pruebas/olvidar-pagos', (req, res) => {
     const tel = normalizePhone(String((req.body || {}).telefono || ''));
     stripePagosRecientes.delete(tel);
@@ -6668,14 +6689,15 @@ function anotarRegistroPendiente(reg) {
 const stripePagosRecientes = new Map();   // telefono -> [{ monto, cuando, canal, ref }]
 const VENTANA_DUPLICADO_MS = 20 * 24 * 3600 * 1000;
 
-function registrarPagoYRevisarDoble({ telefono, monto, canal, ref, pagadoPor }) {
+function registrarPagoYRevisarDoble({ telefono, monto, canal, ref, pagadoPor, cubreHasta }) {
   const tel = String(telefono || '').replace(/\D/g, '');
   if (!tel) return null;
   const ahora = Date.now();
   const previos = (stripePagosRecientes.get(tel) || []).filter((p) => ahora - p.cuando < VENTANA_DUPLICADO_MS);
   const sospechoso = previos.find((p) => p.ref !== ref);
   const por = String(pagadoPor || '').replace(/\D/g, '');
-  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref, ...(por && por !== tel ? { pagadoPor: por } : {}) });
+  const cubre = /^\d{4}-\d{2}-\d{2}$/.test(String(cubreHasta || '')) ? String(cubreHasta) : '';
+  previos.push({ monto: Number(monto) || 0, cuando: ahora, canal, ref, ...(por && por !== tel ? { pagadoPor: por } : {}), ...(cubre ? { cubreHasta: cubre } : {}) });
   stripePagosRecientes.set(tel, previos.slice(-6));
   sumarAlMes(monto, canal);
   schedulePersist();
@@ -6840,10 +6862,12 @@ async function montoACobrar(chatId, telefonoCuenta, servicio = null) {
   const c = wisphubClients.get(tel) || {};
   let monto = 0;
   let deTexto = '';
+  let cubreHasta = '';
   try {
     const d = await wisphubReactivar.deudaDelCliente((servicio && servicio.usuario) || c.usuario || '');
     monto = d.total;
     deTexto = d.facturas.length > 1 ? ` (${d.facturas.length} mensualidades)` : '';
+    cubreHasta = d.facturas.map((f) => String(f.fecha_vencimiento || '').slice(0, 10)).filter(Boolean).sort().pop() || '';
   } catch (e) {
     console.warn('[stripe-leon] no se pudo leer la deuda de', tel, '·', e.message);
   }
@@ -6859,6 +6883,7 @@ async function montoACobrar(chatId, telefonoCuenta, servicio = null) {
     const precio = parseFloat(c.precioPlan) || monto;
     monto = +(monto + (meses - 1) * precio).toFixed(2);
     deTexto = ` (${meses} meses)`;
+    if (cubreHasta) { const h = new Date(cubreHasta + 'T12:00:00'); h.setMonth(h.getMonth() + (meses - 1)); cubreHasta = fechaLocalISO(h); }
   }
 
   if (monto <= 0) {
@@ -6866,7 +6891,7 @@ async function montoACobrar(chatId, telefonoCuenta, servicio = null) {
     const cual = ajena ? `en la cuenta de *${c.name || tel}*` : 'en tu cuenta';
     return { ok: false, mensaje: `No veo un saldo pendiente ${cual} ahorita, así que no hay nada que cobrar por aquí. Si crees que es un error, escribe a un asesor. 🙏` };
   }
-  return { ok: true, monto, deTexto };
+  return { ok: true, monto, deTexto, cubreHasta };
 }
 
 /*
@@ -7364,7 +7389,7 @@ app.post('/webhook/stripe', async (req, res) => {
         const doble = registrarPagoYRevisarDoble({
           telefono, monto: (o.amount_total || 0) / 100,
           canal: o.payment_status === 'paid' ? 'tarjeta' : 'oxxo',
-          ref: o.payment_intent || o.id, pagadoPor,
+          ref: o.payment_intent || o.id, pagadoPor, cubreHasta: o.metadata.cubreHasta,
         });
         if (doble) {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);

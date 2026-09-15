@@ -95,6 +95,7 @@ const stripeFalso = createServer((req, res) => {
         forma: p.get('payment_method_types[0]'),
         mensualidad: p.get('metadata[mensualidad]'),
         meses: p.get('metadata[meses]') || '1',
+        cubreHasta: p.get('metadata[cubreHasta]') || '',
         customer: p.get('customer') || '',
         guardarTarjeta: p.get('metadata[guardarTarjeta]') || 'no',
         futuro: p.get('payment_intent_data[setup_future_usage]') || '',
@@ -191,7 +192,7 @@ const wisphubFalso = createServer((req, res) => {
       const usuario = u.searchParams.get('cliente') || '';
       const total = wisphub.deuda[usuario] || 0;
       const results = total > 0
-        ? [{ id_factura: 9000 + Number(usuario.slice(-1).charCodeAt(0)), total: total.toFixed(2), estado: 'Pendiente', fecha_vencimiento: '2026-09-01' }]
+        ? [{ id_factura: 9000 + Number(usuario.slice(-1).charCodeAt(0)), total: total.toFixed(2), estado: 'Pendiente', fecha_vencimiento: MANANA }]
         : [];
       return res.end(JSON.stringify({ results }));
     }
@@ -307,7 +308,7 @@ const sesionPagada = (s, extra = {}) => ({
   data: { object: {
     id: s.id, payment_status: extra.payment_status || 'paid', amount_total: Number(s.mensualidad) + 1000,
     payment_intent: 'pi_' + s.id,
-    metadata: { telefono: s.telefono, pagadoPor: s.pagadoPor, tipo: 'mensualidad-leontelecom', forma: s.forma, mensualidad: s.mensualidad },
+    metadata: { telefono: s.telefono, pagadoPor: s.pagadoPor, tipo: 'mensualidad-leontelecom', forma: s.forma, mensualidad: s.mensualidad, ...(s.cubreHasta ? { cubreHasta: s.cubreHasta } : {}) },
   } },
 });
 
@@ -1147,18 +1148,17 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
   r = await respuestas(n);
   es(dice(r, /comprobante|ya está registrado|revisando/), '"Sea depositado 350" (frase real) también se entiende como aviso de pago');
 
-  // El pago de Ana cuenta como "de este mes" durante tres semanas, no un mes entero:
-  // el del mes pasado (30 días) NO debe callar el aviso ni el "cuánto debo" de este mes.
-  await fetch(BASE + '/api/pruebas/envejecer-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: B, dias: 14 }) });
+  // El pago de Ana sabe qué factura cubrió (vence mañana): cuenta para ESTE corte aunque tenga días,
+  // y NO cuenta para el corte del mes que viene (antes, con la ventana de 31 días, el pago puntual
+  // del mes pasado callaba el aviso de este mes).
+  await fetch(BASE + '/api/pruebas/envejecer-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: B, dias: 30 }) });
   n = enviados.length;
   await entra(B, 'cuánto debo');
   r = await respuestas(n);
-  es(dice(r, /Ya tenemos tu pago de este mes/), 'un pago de hace 14 días todavía cuenta como de este mes');
-  await fetch(BASE + '/api/pruebas/envejecer-pagos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: B, dias: 16 }) });
-  n = enviados.length;
-  await entra(B, 'cuánto debo');
-  r = await respuestas(n);
-  es(!dice(r, /Ya tenemos tu pago de este mes/) && dice(r, /Tu mensualidad es de \*\$440\.00\*/), 'el de hace 30 días ya no: se le cobra el mes nuevo (antes se callaba mes tras mes al que paga puntual)');
+  es(dice(r, /Ya tenemos tu pago de este mes/), 'el pago que cubrió la factura de este corte cuenta aunque se haya hecho hace 30 días');
+  const enUnMes = (() => { const d = new Date(MANANA + 'T12:00:00'); d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 10); })();
+  const cubre = await fetch(BASE + '/api/pruebas/cubre', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: B, corte: enUnMes }) }).then((x) => x.json());
+  es(cubre.esteCorte === true && cubre.siguienteCorte === false, 'y para el corte del mes que viene ese mismo pago ya NO cuenta: le tocará aviso y cobro');
 }
 
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
