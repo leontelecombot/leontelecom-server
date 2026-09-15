@@ -1183,6 +1183,12 @@ console.log('\n=== 19b. CON COMPROBANTE SIN REVISAR, EL AUTOMÁTICO NO COBRA (PA
   n = enviados.length;
   const cobrosAntes = stripe.cobros.length;
   const h = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
+  {
+    const lista = await fetch(BASE + '/admin/api/comprobantes', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+    const deInes = (lista.comprobantes || []).find((c) => c.telefono === I) || {};
+    es(deInes.urgencia === 'corte mañana' && deInes.autoEspera === true, 'en "Comprobantes por revisar", el de Inés sale marcado: corte mañana y su automático espera esta revisión');
+    es((lista.comprobantes || [])[0] && (lista.comprobantes[0].urgencia || lista.comprobantes[0].autoEspera), 'y los urgentes van primero');
+  }
   const r = await respuestas(n, 1, 4000);
   es(h.enRevision === 1 && stripe.cobros.length === cobrosAntes, `con el comprobante sin revisar, a Inés NO se le cobra a la tarjeta · ${JSON.stringify(h)}`);
   es(r.some((m) => /SIN REVISAR/.test(m.texto) && /Inés Vega/.test(m.texto) && /cobro automático/.test(m.texto)), 'y a la oficina se le pide revisarlo hoy');

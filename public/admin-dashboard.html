@@ -1659,7 +1659,9 @@
       if(!lista.length){ caja.innerHTML = '<div class="empty">No hay comprobantes esperando revisión.</div>'; return; }
       caja.innerHTML = lista.map(c => `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
           <div style="flex:1;min-width:240px">
-            <div><b>${esc(c.nombre || c.telefono)}</b> <span style="color:var(--muted);font-size:.85em">· ${esc(c.telefono)} · ${esc(fechaCorta(c.ts))}${c.fueraDeHorario?' · fuera de horario':''}</span></div>
+            <div><b>${esc(c.nombre || c.telefono)}</b> <span style="color:var(--muted);font-size:.85em">· ${esc(c.telefono)} · ${esc(fechaCorta(c.ts))}${c.fueraDeHorario?' · fuera de horario':''}</span>
+              ${c.urgencia ? `<span class="badge" style="background:#fde8e8;color:#b42318;margin-left:6px">⚠️ ${esc(c.urgencia)}</span>` : ''}
+              ${c.autoEspera ? `<span class="badge" style="background:#fef3c7;color:#92400e;margin-left:6px">🔁 su cobro automático espera esta revisión</span>` : ''}</div>
             <div style="font-size:.85em;color:var(--muted);margin-top:4px;white-space:pre-line">${esc(String(c.resumen||'').replace(/ · (?=[💳🧾👤🔎💵🏦📅📄🗂🕒])/gu,'\n'))}</div>
             ${c.imageUrl?`<a href="${esc(c.imageUrl)}" target="_blank" style="font-size:.85em">Ver imagen</a>`:''}${c.docUrl?` <a href="${esc(c.docUrl)}" target="_blank" style="font-size:.85em">Ver PDF</a>`:''}
           </div>

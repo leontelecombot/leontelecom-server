@@ -6294,10 +6294,18 @@ app.get('/admin/api/comprobantes', verifyAdminToken, (_req, res) => {
       // El titular al que hay que abonarle: el que coincide en el padrón, o quien escribió.
       const telTitular = (String(c.resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1] || c.clientId;
       const w = wisphubClients.get(telTitular) || {};
+      // Lo que urge: el corte del titular es hoy o mañana, ya está suspendido, o su cobro automático está esperando esta revisión.
+      const corteT = parseFechaCorte(w.fechaCorte);
+      const urgencia = /suspend|cort/i.test(String(w.status || '')) ? 'suspendido'
+        : corteT && corteT <= fechaLocalISO() ? 'corte hoy'
+        : corteT && corteT === fechaMasDias(1) ? 'corte mañana' : '';
+      const autoEspera = !!((stripeClientes.get(telTitular) || {}).cobroAutomatico && corteT && (((autoCobros[telTitular] || {})[corteT]) || {}).avisadoRevision && !(((autoCobros[telTitular] || {})[corteT]) || {}).estado);
       return { id: c.id, ts: c.ts, telefono: c.clientId, nombre: c.name || (wisphubClients.get(c.clientId) || {}).name || '', resumen: String(c.resumen || '').slice(0, 400), imageUrl: c.imageUrl || '', docUrl: c.docUrl || '', fueraDeHorario: !!c.offHours,
-        titular: { telefono: telTitular, nombre: w.name || '', wisphubId: w.wisphubId || null } };
-    });
-  res.json({ comprobantes: lista, total: lista.length });
+        titular: { telefono: telTitular, nombre: w.name || '', wisphubId: w.wisphubId || null, corte: corteT || '' }, urgencia, autoEspera };
+    })
+    // Los urgentes primero; entre iguales, el más viejo arriba.
+    .sort((a, b) => ((b.urgencia || b.autoEspera) ? 1 : 0) - ((a.urgencia || a.autoEspera) ? 1 : 0) || String(a.ts).localeCompare(String(b.ts)));
+  res.json({ comprobantes: lista, total: lista.length, urgentes: lista.filter((x) => x.urgencia || x.autoEspera).length });
 });
 app.post('/admin/api/comprobantes/:id/recibido', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const c = caseLog.find((x) => x.id === req.params.id);
