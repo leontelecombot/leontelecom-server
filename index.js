@@ -4473,7 +4473,10 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const esSi = /^(s[ií]|ya qued[oó]|ya|listo|ya funciona|ya sirve)[\s.!]*$/.test(_pt);
       const esNo = /^(no|sigue igual|todav[ií]a no|a[uú]n no|no sirve|sigue sin)[\s.!]*$/.test(_pt);
       if (esSi || esNo) {
-        const t = [...tickets.values()].filter((x) => String(x.chatId) === String(chatId) && x.preguntadoEn && !x.contestadoEn && x.estado !== 'resuelto')
+        // Solo cuenta como respuesta a la pregunta si la pregunta fue hace menos de 2 días:
+        // un "sí" suelto una semana después es de otra conversación.
+        const hace2d = Date.now() - 2 * 24 * 3600 * 1000;
+        const t = [...tickets.values()].filter((x) => String(x.chatId) === String(chatId) && x.preguntadoEn && !x.contestadoEn && x.estado !== 'resuelto' && new Date(x.preguntadoEn).getTime() >= hace2d)
           .sort((a, b) => new Date(b.preguntadoEn) - new Date(a.preguntadoEn))[0];
         if (t) _tkResp = [null, esSi ? 'si' : 'no', t.id];
       }
