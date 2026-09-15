@@ -3718,7 +3718,9 @@ function darProrroga(telefono, dias, por, motivo = '') {
   const tel = String(telefono || '').replace(/\D/g, '');
   const n = Math.max(1, Math.min(31, Number(dias) || 0));
   const hasta = new Date(); hasta.setDate(hasta.getDate() + n);
-  prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/[^\w@. -]/g, '').slice(0, 40), cuando: new Date().toISOString(), motivo: String(motivo || '').slice(0, 200) };
+  // Si se ajusta una prórroga sin decir por qué, el motivo original se queda.
+  const motivoFinal = String(motivo || '').trim() || ((prorrogas[tel] || {}).motivo || '');
+  prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/[^\w@. -]/g, '').slice(0, 40), cuando: new Date().toISOString(), motivo: motivoFinal.slice(0, 200) };
   schedulePersist();
   return prorrogas[tel];
 }
@@ -4018,13 +4020,37 @@ async function sweepCorteReminders(force = false) {
         await new Promise(r => setTimeout(r, 300)); // pausa para no saturar la API
       } catch (e) { failed++; }
     }
+    /*
+     * A quien le dimos prórroga no se le manda "mañana te cortamos", pero
+     * tampoco se le deja vencer en silencio: el día antes de que se acabe se
+     * le recuerda, con cómo pagar. Es una prórroga, no un olvido.
+     */
+    let prorrogaVence = 0;
+    for (const [telP, p] of Object.entries(prorrogas)) {
+      try {
+        if (!p || p.hasta !== manana) continue;
+        const c = wisphubClients.get(telP);
+        if (!c || !clienteDebe(c) || pagoRecienteDe(telP)) continue;
+        const key = `${telP}|prorroga|${p.hasta}`;
+        if (corteReminders[key]) continue;
+        const first = String(c.name || '').trim().split(/\s+/)[0] || '';
+        const nombre = first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : 'cliente';
+        const pagar = stripeLeon.permitido(telP, TELEFONO_PILOTO_STRIPE)
+          ? ' Responde PAGAR y te digo cómo hacerlo desde tu teléfono (tarjeta, OXXO o transferencia), sin ir a la oficina.'
+          : ' Puedes pagar en la oficina o por transferencia; responde PAGAR y te doy los datos.';
+        await sendWhatsAppTemplate(telP, `Hola ${nombre}, te recordamos que mañana ${bonita} vence la prórroga que te dimos para pagar tu servicio de internet. Si ya pagaste, no hagas caso a este mensaje.${pagar}`);
+        corteReminders[key] = new Date().toISOString();
+        prorrogaVence++;
+        await new Promise(r => setTimeout(r, 300));
+      } catch (e) { failed++; }
+    }
     // Limpieza: registros de hace más de 60 días
     const old = Date.now() - 60 * 24 * 3600 * 1000;
     for (const [k, v] of Object.entries(corteReminders)) {
       if (new Date(v).getTime() < old) delete corteReminders[k];
     }
     schedulePersist();
-    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente, ${yaPagaron} porque ya pagaron por el bot, ${conProrroga} con prórroga, ${conAutomatico} con cobro automático`);
+    console.log(`[corte] Recordatorios para ${manana}: ${sent} enviados, ${yaEnviados} ya enviados antes, ${failed} fallidos, ${alCorriente} omitidos por estar al corriente, ${yaPagaron} porque ya pagaron por el bot, ${conProrroga} con prórroga (${prorrogaVence} avisados de que mañana vence), ${conAutomatico} con cobro automático`);
     // Que el filtro se coma a TODOS es señal de que el criterio "debe" no está leyendo lo
     // que creemos (ojo: en el criterio de finanzas "No Pagado" CONTIENE "pagad", así que
     // cuenta como al corriente; si Wisphub usa ese texto, el filtro se apoya solo en el
@@ -4033,7 +4059,7 @@ async function sweepCorteReminders(force = false) {
     if (!candidatos.length && alCorriente) {
       alertAdmin('corte-filtro', `Hoy NINGÚN cliente pasó el filtro de deuda: los ${alCorriente} con corte el ${manana} salieron todos "al corriente". Revisa saldo y estado de facturas en el panel antes de dar ese cero por bueno.`);
     }
-    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, conAutomatico, candidatos: candidatos.length, forzada: !!force });
+    registrarCorridaCorte({ fecha: today, ok: true, manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, prorrogaVence, conAutomatico, candidatos: candidatos.length, forzada: !!force });
     // Si AYER no quedó constancia, hubo gente que cortó sin recibir su aviso. Se avisa
     // SOLO el día siguiente al hueco (no los 7 días que el hueco sigue apareciendo en la
     // lista), para que la alerta signifique algo y no se vuelva ruido que nadie lee.
@@ -4041,7 +4067,7 @@ async function sweepCorteReminders(force = false) {
     if (huecos[0] === mexicoDateStr(new Date(Date.now() - 86400000))) {
       alertAdmin('corte-hueco', `Sin avisos de corte el/los día(s): ${huecos.join(', ')}. Revisa el despertador de GitHub Actions (parece que Render se durmió).`);
     }
-    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, conAutomatico };
+    return { manana, sent, failed, yaEnviados, alCorriente, yaPagaron, conProrroga, prorrogaVence, conAutomatico };
   } catch (e) { console.error('[corte] sweep error:', e.message); return { error: e.message }; }
 }
 

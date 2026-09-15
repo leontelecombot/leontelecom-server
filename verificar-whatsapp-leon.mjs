@@ -905,6 +905,22 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   es(c.yaPagaron === 2 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagaron, ${c.conProrroga} con prórroga`);
   es(!r.some((m) => m.a === H), 'Hugo NO: su corte es pasado mañana, y además ya está al corriente');
   es(!r.some((m) => m.a === I), 'Inés NO: tiene cobro automático (y ya se le cobró hoy)');
+  es(c.prorrogaVence === 0, 'y a Diego no se le avisa nada: su prórroga vence en 3 días');
+
+  // La prórroga de Diego se acorta a 1 día desde el panel: mañana vence, hoy se le recuerda.
+  const acorta = await fetch(BASE + '/admin/api/prorrogas', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: D, dias: 1 }) }).then((x) => x.json());
+  es(acorta.ok && acorta.dias === 1, 'desde el panel se le deja la prórroga en 1 día');
+  n = enviados.length;
+  const corrida2 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
+  r = await respuestas(n, 1, 6000);
+  const c2 = corrida2.result || corrida2;
+  es(c2.sent === 0 && c2.yaEnviados === 1, 'en la segunda corrida a Gloria no se le repite el aviso');
+  es(c2.prorrogaVence === 1 && r.some((m) => m.a === D && m.tipo === 'template' && /mañana .* vence la prórroga/.test(m.texto)), 'a Diego le llega por plantilla que mañana vence su prórroga, con cómo pagar');
+  es(!r.some((m) => m.a !== D), 'y a nadie más');
+  n = enviados.length;
+  const corrida3 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
+  await respuestas(n, 1, 1500);
+  es((corrida3.result || corrida3).prorrogaVence === 0 && !enviados.slice(n).some((m) => m.a === D), 'si la corrida se repite, el aviso de la prórroga no se duplica');
 }
 
 console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ===');
