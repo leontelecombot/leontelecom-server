@@ -1660,6 +1660,7 @@
             ${c.imageUrl?`<a href="${esc(c.imageUrl)}" target="_blank" style="font-size:.85em">Ver imagen</a>`:''}${c.docUrl?` <a href="${esc(c.docUrl)}" target="_blank" style="font-size:.85em">Ver PDF</a>`:''}
           </div>
           <button class="btn btn-primary btn-sm" onclick="pagoRecibido('${esc(c.id)}',this)">✅ Pago recibido</button>
+          ${c.titular && c.titular.wisphubId ? `<div style="flex-basis:100%"><button class="btn btn-edit btn-sm" style="width:auto;padding:6px 12px" onclick="loadInvoices('${esc(String(c.titular.wisphubId))}',this)" title="Las facturas de ${esc(c.titular.nombre||c.titular.telefono)} en Wisphub">📄 Facturas de ${esc(c.titular.nombre||'el titular')}</button><div class="inv-box"></div></div>` : ''}
         </div>`).join('');
     }catch(e){ caja.innerHTML = '<div class="empty">No se pudieron cargar los comprobantes.</div>'; }
   }

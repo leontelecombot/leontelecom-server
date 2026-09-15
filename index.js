@@ -6112,7 +6112,13 @@ async function revisarCuentaLeon() {
 /* Comprobantes que esperan revisión, y darlos por buenos desde el panel. */
 app.get('/admin/api/comprobantes', verifyAdminToken, (_req, res) => {
   const lista = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').slice(0, 100)
-    .map((c) => ({ id: c.id, ts: c.ts, telefono: c.clientId, nombre: c.name || (wisphubClients.get(c.clientId) || {}).name || '', resumen: String(c.resumen || '').slice(0, 400), imageUrl: c.imageUrl || '', docUrl: c.docUrl || '', fueraDeHorario: !!c.offHours }));
+    .map((c) => {
+      // El titular al que hay que abonarle: el que coincide en el padrón, o quien escribió.
+      const telTitular = (String(c.resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1] || c.clientId;
+      const w = wisphubClients.get(telTitular) || {};
+      return { id: c.id, ts: c.ts, telefono: c.clientId, nombre: c.name || (wisphubClients.get(c.clientId) || {}).name || '', resumen: String(c.resumen || '').slice(0, 400), imageUrl: c.imageUrl || '', docUrl: c.docUrl || '', fueraDeHorario: !!c.offHours,
+        titular: { telefono: telTitular, nombre: w.name || '', wisphubId: w.wisphubId || null } };
+    });
   res.json({ comprobantes: lista, total: lista.length });
 });
 app.post('/admin/api/comprobantes/:id/recibido', verifyAdminToken, requirePermission('clients'), async (req, res) => {
