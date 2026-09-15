@@ -9180,6 +9180,42 @@ app.get('/admin/api/corte-reminders/stats', verifyAdminToken, requirePermission(
 // usuario del panel, aunque solo tuviera 'productos', podía dispararlo. Se exige
 // 'broadcast' o 'clients' (superadmin/admin pasan siempre) para no quitarle el botón a
 // quien hoy sí lo usa.
+/*
+ * Estado de cuenta al cliente, desde su ficha: cuándo corta, qué debe, si tiene
+ * prórroga o automático y cómo pagar. Por plantilla, porque lo manda la oficina
+ * sin que el cliente haya escrito. Es lo que hoy dicta el asesor por teléfono.
+ */
+app.post('/admin/api/clientes/:tel/estado-cuenta', verifyAdminToken, requirePermission('clients'), async (req, res) => {
+  const tel = normalizePhone(String(req.params.tel || ''));
+  const c = wisphubClients.get(tel);
+  if (!c) return res.status(404).json({ error: 'Ese teléfono no está en el padrón' });
+  const corte = parseFechaCorte(c.fechaCorte);
+  const bonita = (f) => (f ? f.split('-').reverse().join('/') : '');
+  const nombre = (String(c.name || '').trim().split(/\s+/)[0] || 'cliente');
+  const lineas = [`Hola ${nombre}, este es el estado de tu cuenta de internet con León Telecom:`];
+  const visto = pagoRecienteDe(tel, corte || '');
+  const pr = prorrogaVigente(tel);
+  const reg = stripeClientes.get(tel) || {};
+  let deuda = 0;
+  try { const d = await deudaConocidaDe(tel); if (d.conocida) deuda = d.total; } catch (_) { /* sin deuda a la mano */ }
+  if (visto) lineas.push(`✅ Tu pago de este mes ya está registrado (${canalTexto(visto.canal)}).`);
+  else if (deuda > 0) lineas.push(`💵 Tienes pendiente $${deuda.toFixed(2)}.`);
+  else lineas.push('✅ Estás al corriente.');
+  if (corte) lineas.push(`📅 Tu fecha de corte es el ${bonita(corte)}.`);
+  if (pr) lineas.push(`⏳ Tienes prórroga hasta el ${bonita(pr.hasta)}: no se corta antes de esa fecha.`);
+  if (reg.cobroAutomatico) lineas.push('🔁 Tienes cobro automático: se cobra solo a tu tarjeta un día antes del corte.');
+  if (!visto && deuda > 0) lineas.push(stripeLeon.permitido(tel, TELEFONO_PILOTO_STRIPE)
+    ? 'Para pagar desde tu teléfono (tarjeta, OXXO o transferencia), responde PAGAR.'
+    : 'Puedes pagar en la oficina o por transferencia; responde PAGAR y te doy los datos.');
+  const texto = lineas.join('\n');
+  try {
+    await avisarPorIniciativa(tel, texto);
+    logCase(tel, c.name || '', 'estado-cuenta', 'Estado de cuenta enviado desde el panel por ' + ((req.admin && req.admin.username) || 'panel'), {});
+    res.json({ ok: true, texto });
+  } catch (e) {
+    res.status(502).json({ error: 'No se pudo mandar: ' + e.message, texto });
+  }
+});
 app.post('/admin/api/cobranza/resumen', verifyAdminToken, requirePermission('clients'), async (_req, res) => {
   res.json(await resumenCobranzaDiario(true));
 });

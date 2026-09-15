@@ -1407,6 +1407,8 @@
       + (c.id ? '<button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="loadInvoices(\''+esc(String(c.id))+'\',this)">📄 Ver facturas</button>' : '')
       // Desde la ficha, un toque lleva a darle prórroga con su teléfono ya puesto.
       + (c.phone && can('clients') ? ' <button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="prorrogaDesdeFicha(\''+esc(String(c.phone))+'\',\''+esc(String(c.name||''))+'\')">📅 Dar prórroga</button>' : '')
+      // Lo que el asesor dicta por teléfono, en un toque: corte, deuda, prórroga y cómo pagar.
+      + (c.phone && can('clients') ? ' <button class="btn btn-edit btn-sm" style="margin-top:10px;width:auto;padding:7px 12px" onclick="mandarEstadoCuenta(\''+esc(String(c.phone))+'\',this)">💬 Mandar estado de cuenta</button>' : '')
       + (c.id ? '<div class="inv-box"></div>' : '')
       + '</div>';
   }
@@ -1718,6 +1720,14 @@
             <td style="text-align:right"><button class="btn btn-danger btn-sm" onclick="quitarProrroga('${esc(p.telefono)}')" title="Quitar la prórroga">✕</button></td></tr>`;
         }).join('') + '</tbody></table>';
     }catch(e){ caja.innerHTML = '<div class="empty">No se pudieron cargar las prórrogas.</div>'; }
+  }
+  async function mandarEstadoCuenta(tel, btn){
+    if(btn){ btn.disabled = true; btn.textContent = 'Mandando…'; }
+    try{
+      const r = await fetchAuth('/admin/api/clientes/'+encodeURIComponent(tel)+'/estado-cuenta', { method:'POST' });
+      const d = await r.json();
+      if(btn){ btn.textContent = r.ok ? '✅ Enviado' : '❌ No se pudo'; btn.title = d.texto || d.error || ''; setTimeout(() => { btn.disabled = false; btn.textContent = '💬 Mandar estado de cuenta'; }, 4000); }
+    }catch(e){ if(btn){ btn.disabled = false; btn.textContent = '💬 Mandar estado de cuenta'; } }
   }
   // Llega desde la ficha del cliente: cambia a Cobranza, llena el teléfono y deja el cursor en los días.
   function prorrogaDesdeFicha(tel, nombre){

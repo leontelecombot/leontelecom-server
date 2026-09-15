@@ -1110,6 +1110,16 @@ console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ==
   es(fd.prorroga && /carro/.test(fd.prorroga.motivo), 'Diego: se ve su prórroga con el motivo');
   const g = await buscar(G); const fg = (g.results || g.clients || g.clientes || [g])[0] || g;
   es(!fg.ultimoPagoEnLinea && !fg.prorroga && !fg.adelantadoHasta && !fg.cobroAutomatico, 'Gloria: nada de eso, porque no ha pasado nada con ella');
+  // Desde la ficha: "mandar estado de cuenta" le llega a Gloria por plantilla con su deuda, su corte y cómo pagar.
+  {
+    const n0 = enviados.length;
+    const ec = await fetch(BASE + '/admin/api/clientes/' + G + '/estado-cuenta', { method: 'POST', headers: H }).then((x) => x.json());
+    const r0 = await respuestas(n0, 1, 4000);
+    const m0 = r0.find((m) => m.a === G);
+    es(ec.ok && !!m0 && m0.tipo === 'template' && /estado de tu cuenta/.test(m0.texto) && /Tienes pendiente \$320\.00/.test(m0.texto) && /fecha de corte es el \d\d\/\d\d\/\d{4}/.test(m0.texto) && /responde PAGAR/.test(m0.texto), 'desde la ficha se le manda a Gloria su estado de cuenta por plantilla: deuda, corte y cómo pagar');
+    const ecD = await fetch(BASE + '/admin/api/clientes/' + D + '/estado-cuenta', { method: 'POST', headers: H }).then((x) => x.json());
+    es(ecD.ok && /prórroga hasta el/.test(ecD.texto), 'y el de Diego menciona su prórroga');
+  }
   const i = await buscar(I); const fi = (i.results || i.clients || i.clientes || [i])[0] || i;
   es(fi.cobroAutomatico && fi.autoEstado && fi.autoEstado.estado === 'rechazado' && /rechazada/.test(fi.autoEstado.texto), 'Inés: se ve que su automático de este mes fue rechazado, para no decirle "no te preocupes"');
 }
