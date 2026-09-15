@@ -755,6 +755,12 @@ console.log('\n=== 11c. COBRO AUTOMÁTICO CADA MES ===');
   await respuestas(n, 1, 1200);
   es(h2.avisados === 0 && h2.cobrados === 0 && stripe.cobros.length === cobrosAntes + 1, 'si el barrido corre otra vez el mismo día, no avisa ni cobra de nuevo');
 
+  // Con el automático activo, PAGAR le recuerda que no tiene que hacer nada.
+  n = enviados.length;
+  await entra(H, 'pagar');
+  r = await respuestas(n);
+  es(dice(r, /Tienes \*cobro automático\*.*No tienes que hacer nada/s), 'con el automático activo, "pagar" le dice que se cobra solo y no tiene que hacer nada');
+
   // Cancelar es una frase.
   n = enviados.length;
   await entra(H, 'cancelar automático');

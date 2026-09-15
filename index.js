@@ -4841,6 +4841,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
         ];
       let encabezado = '';
       if (esPiloto) {
+        // Quien tiene cobro automático no necesita hacer nada: que lo sepa antes de pagar dos veces.
+        const regMenu = stripeClientes.get(normalizePhone(chatId)) || {};
+        if (regMenu.cobroAutomatico && !cuentaAjena(chatId)) {
+          const corteMenu = parseFechaCorte((wisphubClients.get(normalizePhone(chatId)) || {}).fechaCorte);
+          encabezado = '🔁 Tienes *cobro automático*: '
+            + (corteMenu ? `se cobra solo a tu tarjeta un día antes del ${corteMenu.split('-').reverse().join('/')}` : 'se cobra solo a tu tarjeta un día antes de tu fecha de pago')
+            + '. No tienes que hacer nada.\n\nSi de todos modos quieres pagar ahora, elige cómo (y ese mes ya no se te cobra en automático).\n\n';
+        }
         // Si se sabe cuánto debe, se le dice ANTES de preguntar cómo: es la
         // primera duda de cualquiera ("¿cuánto es?").
         try {
