@@ -4968,7 +4968,14 @@ async function handleChatMessage(chatId, text, sendMsg) {
     }
 
     // Intención de pago (o el "PAGAR" que sugiere el recordatorio de corte) → botones.
-    if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago|cu[aá]nto (debo|tengo que pagar|es|pago|es mi)|mi saldo|mi adeudo|qu[eé] debo)/.test(_pt)) {
+    /*
+     * Así piden los datos de pago en las conversaciones reales: "Para pagar en
+     * transferencia?", "Proporcionarme los números de cuenta para depositar",
+     * "me pasan la clabe". Todo eso es "quiero pagar".
+     */
+    const _pideDatosPago = /n[uú]meros? de cuenta|cuenta para (depositar|transferir|pagar)|d[oó]nde (deposito|transfiero|le deposito|hago el pago)|(en|por) transferencia\??$|datos (bancarios|de la cuenta|para (pagar|depositar|transferir))|\bclabe\b|a qu[eé] cuenta/.test(_pt);
+    if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago|cu[aá]nto (debo|tengo que pagar|es|pago|es mi)|mi saldo|mi adeudo|qu[eé] debo)/.test(_pt)
+        || (_pideDatosPago && !_enOtraCosa && !_conComprobante && !_isBtn)) {
       /*
        * WhatsApp solo muestra TRES botones y `sendWhatsAppMessage` corta el
        * resto sin avisar. Por eso el menú se arma completo según el caso en vez

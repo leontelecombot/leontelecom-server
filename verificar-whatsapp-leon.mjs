@@ -942,6 +942,18 @@ console.log('\n=== 17. "YA PAGUÉ" SIN COMPROBANTE ===');
   es(dice(r, /tu pago ya está registrado/), 'si el pago ya entró por el bot, se lo confirma y no le pide nada');
 }
 
+console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
+{
+  let n = enviados.length;
+  await entra(A, 'Proporcionarme los números de cuenta para depositar');
+  let r = await respuestas(n);
+  es(conBotones(r).botones.some((b) => b.id === 'pago_clabe'), '"los números de cuenta para depositar" abre el menú de pago (con la transferencia primero)');
+  n = enviados.length;
+  await entra(D, 'Para pagar en transferencia?');
+  r = await respuestas(n);
+  es(conBotones(r).botones.some((b) => b.id === 'pago_datos'), 'fuera del piloto, "para pagar en transferencia?" da los datos de pago de siempre');
+}
+
 console.log(`\n${ok} bien, ${mal} mal`);
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);
