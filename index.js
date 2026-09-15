@@ -4718,18 +4718,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
 
         const bloqueMonto = cargo
           ? `\n💵 *Transfiere: $${(cargo.totalCentavos / 100).toFixed(2)}*\n`
-            + `   • ${cuantas > 1 ? `Tus ${cuantas} mensualidades` : 'Tu mensualidad'}: $${(cargo.baseCentavos / 100).toFixed(2)}\n`
+            + `   • ${cuantas > 1 ? (ajenaClabe ? `Sus ${cuantas} mensualidades` : `Tus ${cuantas} mensualidades`) : (ajenaClabe ? 'Su mensualidad' : 'Tu mensualidad')}: $${(cargo.baseCentavos / 100).toFixed(2)}\n`
             + `   • Cargo por pagar en línea: $${(cargo.cargoCentavos / 100).toFixed(2)}\n`
           : '\n💵 Transfiere el monto de tu recibo más el cargo por pagar en línea.\n';
 
         await sendMsg(chatId,
-          `🏦 Esta es *tu cuenta personal* para pagar tu internet:\n\n`
+          (ajenaClabe
+            ? `🏦 Esta es la cuenta para pagar el internet de *${c.name}*${servicioClabe && servicioClabe.etiqueta ? ` (${servicioClabe.etiqueta})` : ''}:\n\n`
+            : `🏦 Esta es *tu cuenta personal* para pagar tu internet${servicioClabe && servicioClabe.etiqueta ? ` (${servicioClabe.etiqueta})` : ''}:\n\n`)
           + `*CLABE:* ${datos.clabe}\n`
           + (datos.banco ? `*Banco:* ${datos.banco}\n` : '')
           + (datos.beneficiario ? `*A nombre de:* ${datos.beneficiario}\n` : '')
           + bloqueMonto
-          + `\nGuárdala en tu banco: *la CLABE es tuya y no cambia nunca*. Lo único que cambia es el monto, según lo que debas ese mes.\n\n`
-          + `Cuando transfieras, tu pago se registra solo y tu servicio se reactiva — *no hace falta que mandes comprobante*.\n\n`
+          + (ajenaClabe
+            ? `\nEsta CLABE es *de esa cuenta* y no cambia nunca: lo que caiga aquí se le abona a *${c.name}*, lo mandes tú o quien sea. Lo único que cambia es el monto, según lo que deba ese mes.\n\n`
+              + `Cuando transfieras, el pago se registra solo y *su* servicio se reactiva — *no hace falta que mandes comprobante*.\n\n`
+            : `\nGuárdala en tu banco: *la CLABE es tuya y no cambia nunca*. Lo único que cambia es el monto, según lo que debas ese mes.\n\n`
+              + `Cuando transfieras, tu pago se registra solo y tu servicio se reactiva — *no hace falta que mandes comprobante*.\n\n`)
           + `Si transfieres desde tu app del banco, dala de alta una vez como cuenta frecuente y ya.\n\n`
           + `Si vas a ventanilla y te preguntan a nombre de quién va, enséñales esta pantalla: la cuenta la administra el banco que procesa nuestros pagos. 🙌`);
       } catch (e) {

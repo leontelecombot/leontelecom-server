@@ -827,6 +827,24 @@ console.log('\n=== 11e. EL LINK QUE VENCIÓ SIN ABRIRSE ===');
   es(r.some((m) => m.a === A && /El link de pago venció/.test(m.texto) && /escribe \*pagar\*/.test(m.texto)), 'y al cliente se le dice que no se cobró nada y cómo pedir otro');
 }
 
+console.log('\n=== 11f. LA CLABE DE LA CUENTA DE OTRO DICE DE QUIÉN ES ===');
+{
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(A, 'a nombre de Diego Ruiz');
+  await respuestas(n);
+  n = enviados.length;
+  await toca(A, 'pago_otro_es_0');
+  await respuestas(n);
+  n = enviados.length;
+  await toca(A, 'pago_clabe');
+  const r = await respuestas(n);
+  es(dice(r, /la cuenta para pagar el internet de \*Diego Ruiz\*/), 'la CLABE de otro dice de quién es la cuenta');
+  es(dice(r, /se le abona a \*Diego Ruiz\*, lo mandes tú o quien sea/), 'y aclara que lo que caiga ahí es de él');
+  es(!dice(r, /tu cuenta personal|Tu mensualidad/), 'sin hablarle de "tu cuenta" ni "tu mensualidad"');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+}
+
 console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN TIENE PRÓRROGA ===');
 {
   const ASESOR = '529519999999';
