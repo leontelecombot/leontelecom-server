@@ -958,6 +958,26 @@ console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
   es(conBotones(r).botones.some((b) => b.id === 'pago_datos'), 'fuera del piloto, "para pagar en transferencia?" da los datos de pago de siempre');
 }
 
+console.log('\n=== 19. CUANDO LA OFICINA DA POR BUENO UN COMPROBANTE, EL CLIENTE LO SABE ===');
+{
+  // Gloria (suspendida) manda su comprobante como PDF y dice a nombre de quién.
+  let n = enviados.length;
+  await fetch(BASE + '/webhook/whatsapp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + G.slice(2), type: 'document', document: { id: 'doc1', filename: 'pago.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Gloria' } }] } }] }] }) });
+  await respuestas(n, 1, 4000);
+  n = enviados.length;
+  await entra(G, 'Gloria Núñez');
+  await respuestas(n, 1, 4000);
+  // La oficina lo da por bueno.
+  n = enviados.length;
+  await entra('529519999999', 'RECIBIDO 951 777 7777');
+  const r = await respuestas(n, 2);
+  const aG = r.find((m) => m.a === G);
+  es(!!aG && /Tu pago quedó registrado/.test(aG.texto), 'a Gloria le llega "tu pago quedó registrado" (no un "recibido" genérico)');
+  es(!!aG && /se reactiva en unos minutos/.test(aG.texto), 'y como estaba suspendida, le dice que se reactiva');
+  es(!!aG && aG.tipo === 'template', 'por plantilla, porque el comprobante pudo ser de hace días');
+}
+
 console.log(`\n${ok} bien, ${mal} mal`);
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);

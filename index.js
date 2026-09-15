@@ -3050,7 +3050,7 @@ async function handleAgentCommand(agentNumber, text) {
   }
 
   // ATENDER [número] — toma el control y activa el relay
-  const atenderMatch = v.match(/^ATENDER\s+(\d+)/);
+  const atenderMatch = v.match(/^ATENDER\s+(\d[\d\s-]{6,})/);
   if (atenderMatch) {
     const clientId = normalizeClientNumber(atenderMatch[1]);
 
@@ -3125,7 +3125,7 @@ async function handleAgentCommand(agentNumber, text) {
   }
 
   // LIBERAR [número] — cierra el relay y devuelve al bot
-  const liberarMatch = v.match(/^LIBERAR\s+(\d+)/);
+  const liberarMatch = v.match(/^LIBERAR\s+(\d[\d\s-]{6,})/);
   if (liberarMatch) {
     const clientId = normalizeClientNumber(liberarMatch[1]);
     unpauseChat(clientId);
@@ -3143,7 +3143,7 @@ async function handleAgentCommand(agentNumber, text) {
   }
 
   // RECIBIDO [número] — acuse de recibo: agradece al cliente y cierra la espera (NO abre relay)
-  const recibidoMatch = v.match(/^RECIBIDO\s+(\d+)/);
+  const recibidoMatch = v.match(/^RECIBIDO\s+(\d[\d\s-]{6,})/);
   if (recibidoMatch) {
     const clientId = normalizeClientNumber(recibidoMatch[1]);
     const cName = nameOf(getProfile(clientId), clientId);
@@ -3154,6 +3154,7 @@ async function handleAgentCommand(agentNumber, text) {
       return;
     }
     // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
+    const eraPago = caseLog.some((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
     const marcados = markCases(clientId, 'recibido', agentNumber);
     if (!marcados && !pendingAgentRequests.has(clientId)) {
       // Si quedó anotado quién lo gestionó, se dice; si es un caso viejo de
@@ -3167,7 +3168,15 @@ async function handleAgentCommand(agentNumber, text) {
     pendingAgentRequests.delete(clientId);
     schedulePersist();
     try {
-      await sendWhatsAppMessage(clientId, '✅ ¡Recibido, gracias! 🙌');
+      /*
+       * Si lo que se recibió fue un PAGO, que se diga con todas sus letras: es
+       * la respuesta que el cliente está esperando. Y por plantilla: el
+       * comprobante pudo llegar hace dos días y el texto libre ya no entra.
+       */
+      const suspendidoAun = /suspend|cort/i.test(String((wisphubClients.get(clientId) || {}).status || ''));
+      await avisarPorIniciativa(clientId, eraPago
+        ? '✅ Tu pago quedó registrado. ¡Gracias! 🙌' + (suspendidoAun ? ' Tu servicio se reactiva en unos minutos; si en una hora sigue sin navegar, reinicia tu módem o escríbenos.' : '')
+        : '✅ ¡Recibido, gracias! 🙌');
     } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
     await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
     // Avisa a los demás asesores que este caso ya fue gestionado.
