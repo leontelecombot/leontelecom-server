@@ -6882,12 +6882,12 @@ async function barrerSaldosRezagados({ forzarAuditoria = false } = {}) {
             `Se encontró un depósito de $${pesos.toFixed(2)} de ${tel} que Stripe nunca avisó. Ya se movió a León Telecom y se le aplicó. Vale la pena revisar que el webhook esté recibiendo.`);
           registrarPagoYRevisarDoble({ telefono: tel, monto: pesos, canal: 'transferencia', ref: barrido.id });
           markCases(tel, 'recibido', 'stripe-clabe');
-          await sendWhatsAppMessage(tel,
+          await avisarPorIniciativa(tel,
             `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado. ¡Gracias! 🙌`).catch(() => {});
           try {
             const w = await wisphubReactivar.aplicarPago({ telefono: tel, monto: pesos, referencia: barrido.id });
             if (w.reactivado) {
-              await sendWhatsAppMessage(tel, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+              await avisarPorIniciativa(tel, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
             }
             avisarRegistroPendiente(w, tel);
           } catch (e) { console.error('[stripe-rezago] wisphub:', e.message); }
@@ -7299,22 +7299,22 @@ app.post('/webhook/stripe', async (req, res) => {
           alertAdmin('pago-doble', `⚠️ POSIBLE PAGO DOBLE de ${telefono}: ya había pagado $${doble.monto.toFixed(2)} por ${doble.canal} hace ${Math.round((Date.now() - doble.cuando) / 3600000)} h. Revisa si hay que devolverle.`);
         }
         try {
-          await sendWhatsAppMessage(telefono,
+          await avisarPorIniciativa(telefono,
             `✅ Recibimos tu transferencia por $${pesos.toFixed(2)} — tu pago quedó registrado automáticamente, no hace falta comprobante. ¡Gracias! 🙌`);
         } catch (e) { console.error('[stripe-leon] no salió el aviso del depósito a', telefono, e.message); }
         try {
           const w = await wisphubReactivar.aplicarPago({ telefono, monto: pesos, referencia: o.id, idServicio: servicioDelDeposito || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado por depósito ·', telefono, '· tarea', w.tareaId);
-            await sendWhatsAppMessage(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+            await avisarPorIniciativa(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
           }
           if (w.avisos.length) console.warn('[wisphub]', telefono, '·', w.avisos.join(' · '));
           if (w.ambiguo) {
-            await sendWhatsAppMessage(telefono,
+            await avisarPorIniciativa(telefono,
               '✅ Recibimos tu transferencia, gracias. Como tienes *más de un servicio* con nosotros, '
               + 'un asesor va a aplicarla al que corresponde en un momento. Si es urgente, dinos cuál es. 🙏').catch(() => {});
           } else if (!w.reactivado && w.deudaRestante > 0.01 && w.cliente && w.cliente.estado !== 'Activo') {
-            await sendWhatsAppMessage(telefono,
+            await avisarPorIniciativa(telefono,
               `✅ Recibimos tu transferencia. Todavía queda un saldo de *$${w.deudaRestante.toFixed(2)}*, `
               + 'y por eso el servicio sigue suspendido. En cuanto se cubra se reactiva solo. 🙏').catch(() => {});
           }
