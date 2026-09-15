@@ -6858,7 +6858,7 @@ app.post('/webhook/stripe', async (req, res) => {
       const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
       if (quien) {
         const ajeno = quien !== tel;
-        await sendWhatsAppMessage(quien,
+        await avisarPorIniciativa(quien,
           (ajeno ? `⚠️ La ficha de pago del servicio de *${(wisphubClients.get(tel) || {}).name || tel}* venció sin pagarse, así que sigue pendiente. `
                  : '⚠️ Tu ficha de pago venció sin pagarse, así que tu servicio sigue pendiente. ')
           + `Escribe *${ajeno ? 'OTRO' : 'pagar'}* para generar otra, o paga como siempre por depósito. 🙏`).catch(() => {});
@@ -6904,7 +6904,9 @@ app.post('/webhook/stripe', async (req, res) => {
          * queremos es que además nadie se entere.
          */
         try {
-          await (pagadoPor !== telefono ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
+          // OXXO se confirma días después y el dueño puede no haber escrito nunca: plantilla.
+          const porIniciativa = pagadoPor !== telefono || o.payment_status !== 'paid';
+          await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono,
             '✅ Recibimos el pago de tu servicio — quedó confirmado automáticamente, no hace falta comprobante. ¡Gracias! 🙌'
             + (pagadoPor !== telefono ? '\n\n(Lo pagó otra persona por ti.)' : ''));
         } catch (e) { console.error('[stripe-leon] no salió el aviso al dueño', telefono, e.message); }
@@ -6912,7 +6914,7 @@ app.post('/webhook/stripe', async (req, res) => {
         if (pagadoPor && pagadoPor !== telefono) {
           markCases(pagadoPor, 'recibido', 'stripe-auto');
           try {
-            await sendWhatsAppMessage(pagadoPor,
+            await (o.payment_status !== 'paid' ? avisarPorIniciativa : sendWhatsAppMessage)(pagadoPor,
               `✅ Listo, tu pago se aplicó al servicio de *${duenio.name || telefono}*. Quedó confirmado automáticamente. ¡Gracias! 🙌`);
           } catch (e) { console.error('[stripe-leon] no salió el aviso a quien pagó', pagadoPor, e.message); }
         }
@@ -6974,7 +6976,7 @@ app.post('/webhook/stripe', async (req, res) => {
           const w = await wisphubReactivar.aplicarPago({ telefono, monto: mensualidad, referencia: o.payment_intent || o.id, idServicio: o.metadata.servicioId || undefined });
           if (w.reactivado) {
             console.log('[wisphub] servicio reactivado ·', telefono, '· tarea', w.tareaId);
-            await (pagadoPor !== telefono ? avisarPorIniciativa : sendWhatsAppMessage)(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
+            await (porIniciativa ? avisarPorIniciativa : sendWhatsAppMessage)(telefono, '📶 Tu servicio ya quedó reactivado. Si en unos minutos sigue sin navegar, reinicia tu módem. 🙌').catch(() => {});
           }
           if (w.avisos.length) console.warn('[wisphub]', telefono, '·', w.avisos.join(' · '));
 
