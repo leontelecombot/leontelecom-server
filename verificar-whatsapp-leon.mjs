@@ -1219,6 +1219,20 @@ console.log('\n=== 17b. "PARA QUE ME RECONECTEN" ===');
   es(dice(r, /acabo de mandar reactivar tu servicio/) && wisphub.activaciones.length === antesAct + 1 && wisphub.activaciones.at(-1) === 102, 'con el pago visto y suspendida, se manda reactivar su servicio (102) y se le dice qué hacer con el módem');
 }
 
+console.log('\n=== 17c. "CANCELÉ Y ME ESTÁN COBRANDO" ===');
+{
+  const ASESOR = '529519999999';
+  let n = enviados.length;
+  await entra(D, 'Cancelé y me están cobrando');
+  let r = await respuestas(n, 2);
+  es(r.some((m) => m.a === ASESOR && /RECLAMO DE COBRO/.test(m.texto) && /Cancelé y me están cobrando/.test(m.texto)), 'un reclamo de cobro le llega al asesor con el mensaje');
+  es(r.some((m) => m.a === D && /lo vamos a revisar/.test(m.texto)), 'y al cliente se le dice que una persona lo va a revisar');
+  n = enviados.length;
+  await entra(I, 'me cobraron doble');
+  r = await respuestas(n, 2);
+  es(r.some((m) => m.a === I && /CANCELAR AUTOMÁTICO/.test(m.texto)) && r.some((m) => m.a === ASESOR && /COBRO AUTOMÁTICO activo/.test(m.texto)), 'si tiene automático, se le dice cómo quitarlo y el asesor lo sabe');
+}
+
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
 {
   let n = enviados.length;

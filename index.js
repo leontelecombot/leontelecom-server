@@ -5522,6 +5522,27 @@ async function handleChatMessage(chatId, text, sendMsg) {
       return;
     }
 
+    // ===== Reclamo de cobro ("cancelé y me están cobrando", "me cobraron doble") → asesor =====
+    // Es dinero y es queja: no se contesta con menú ni con IA, se pasa a una persona con el contexto.
+    if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey)
+        && /(me (est[aá]n|siguen|est[aá]s|sigues) cobrando|cobro indebido|me cobraron (de m[aá]s|doble|dos veces|otra vez)|me cobr[oó] (doble|dos veces|de m[aá]s)|cargo (que no (hice|reconozco)|indebido|doble)|no reconozco (el|ese|un) (cargo|cobro)|pagu[eé] dos veces|pago doble|me descontaron (doble|dos veces)|cancel[eé].{0,30}(cobr|cargo))/.test(_pt)) {
+      addMessageToHistory(chatId, 'user', text);
+      const _nom = nameOf(getProfile(chatId));
+      const _tel = normalizePhone(chatId);
+      const _visto = pagoRecienteDe(_tel);
+      const _reg = stripeClientes.get(_tel) || {};
+      const _notif = await notifyAgentRequest(chatId, [
+        '💸 RECLAMO DE COBRO',
+        _nom ? `Cliente: ${_nom}` : '',
+        `Mensaje: ${text}`,
+        _visto ? `Último pago visto por el bot: ${canalTexto(_visto.canal)} (${new Date(_visto.cuando).toLocaleDateString('es-MX')})` : 'Sin pagos recientes vistos por el bot.',
+        _reg.cobroAutomatico ? 'Tiene COBRO AUTOMÁTICO activo (si pide quitarlo: que escriba CANCELAR AUTOMÁTICO).' : '',
+      ].filter(Boolean).join('\n'), '').catch(() => false);
+      await sendMsg(chatId, 'Entiendo, y lo vamos a revisar con cuidado. ' + agentNotifiedMsg(_notif, _nom, 'asesor')
+        + (_reg.cobroAutomatico ? '\n\nSi lo que quieres es que ya no se cobre a tu tarjeta cada mes, escribe *CANCELAR AUTOMÁTICO* y queda quitado al instante.' : ''));
+      return;
+    }
+
     // ===== Prórroga / plazo de pago → directo con un asesor (decisión humana) =====
     // Solo si no es emergencia, no es un botón y no hay un comprobante pendiente por
     // confirmar (esos flujos de arriba tienen prioridad). agentNotifiedMsg ya adapta
