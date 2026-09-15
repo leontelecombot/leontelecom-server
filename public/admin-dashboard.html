@@ -1716,7 +1716,7 @@
       const d = await r.json();
       if(!r.ok){ showAlert('prAlert', d.error || 'No se pudo dar la prórroga.', 'error'); return; }
       const [y,m,dd] = String(d.hasta).split('-');
-      showAlert('prAlert', `Prórroga hasta el ${dd}/${m}/${y}. El aviso de corte no le va a salir hasta entonces.`, 'success');
+      showAlert('prAlert', `Prórroga hasta el ${dd}/${m}/${y}. El aviso de corte no le va a salir hasta entonces.${d.avisado ? ' Ya se le avisó por WhatsApp.' : ' (No se le pudo avisar por WhatsApp.)'}${d.conAutomatico ? ' Tiene cobro automático: se le cobra un día antes de que venza.' : ''}`, 'success');
       document.getElementById('prTel').value=''; document.getElementById('prMotivo').value='';
       loadProrrogas();
     }catch(e){ showAlert('prAlert','No se pudo dar la prórroga.','error'); }

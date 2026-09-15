@@ -3144,9 +3144,7 @@ async function handleAgentCommand(agentNumber, text) {
     const hastaTxt = `${d}/${m}/${y}`;
     await sendWhatsAppMessage(agentNumber, `📅 Prórroga registrada para *${nombre}* hasta el *${hastaTxt}* (${p.dias} día${p.dias !== 1 ? 's' : ''}). No le va a llegar aviso de corte hasta entonces.`);
     try {
-      await avisarPorIniciativa(clientId, p.conAutomatico
-        ? `📅 Listo, te dimos hasta el *${hastaTxt}*. Como tienes *cobro automático*, ese mes se cobra a tu tarjeta un día antes de que venza la prórroga (te aviso dos días antes), no en tu fecha de corte. Si prefieres pagar antes de otra forma, escribe *pagar*. 🙌`
-        : `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
+      await avisarProrroga(clientId, p);
     } catch (_) { /* si no se le pudo avisar, la prórroga vale igual */ }
     return;
   }
@@ -3754,6 +3752,16 @@ function darProrroga(telefono, dias, por, motivo = '') {
   prorrogas[tel] = { hasta: fechaLocalISO(hasta), dias: n, por: String(por || '').replace(/[^\w@. -]/g, '').slice(0, 40), cuando: new Date().toISOString(), motivo: motivoFinal.slice(0, 200) };
   schedulePersist();
   return { ...prorrogas[tel], conAutomatico: !!(stripeClientes.get(tel) || {}).cobroAutomatico };
+}
+
+// Lo que se le dice al cliente cuando se le da (o se le ajusta) una prórroga,
+// se dé por WhatsApp o desde el panel: la misma frase en los dos lados.
+async function avisarProrroga(telefono, p) {
+  const [y, m, d] = String(p.hasta || '').split('-');
+  const hastaTxt = `${d}/${m}/${y}`;
+  return avisarPorIniciativa(telefono, p.conAutomatico
+    ? `📅 Listo, te dimos hasta el *${hastaTxt}*. Como tienes *cobro automático*, ese mes se cobra a tu tarjeta un día antes de que venza la prórroga (te aviso dos días antes), no en tu fecha de corte. Si prefieres pagar antes de otra forma, escribe *pagar*. 🙌`
+    : `📅 Listo, te dimos hasta el *${hastaTxt}* para pagar tu servicio. Ese día es el último: si no pagas, el servicio se suspende. Cuando quieras pagar, escribe *pagar*. 🙌`);
 }
 
 function clienteDebe(c) {
@@ -6349,13 +6357,18 @@ app.get('/admin/api/prorrogas', verifyAdminToken, (_req, res) => {
     .sort((a, b) => a.hasta.localeCompare(b.hasta));
   res.json({ prorrogas: lista, total: lista.length });
 });
-app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'), (req, res) => {
+app.post('/admin/api/prorrogas', verifyAdminToken, requirePermission('clients'), async (req, res) => {
   const tel = normalizePhone(String((req.body || {}).telefono || ''));
   const dias = Number((req.body || {}).dias || 0);
   if (!tel || tel.length < 12) return res.status(400).json({ error: 'Falta el teléfono' });
   if (!(dias >= 1 && dias <= 31)) return res.status(400).json({ error: 'Los días van de 1 a 31' });
   const p = darProrroga(tel, dias, (req.admin && req.admin.username) || 'panel', (req.body || {}).motivo);
-  res.json({ ok: true, telefono: tel, ...p });
+  // Desde el panel también se le avisa al cliente (salvo que la oficina diga que no).
+  let avisado = false;
+  if (!(req.body || {}).sinAviso) {
+    try { await avisarProrroga(tel, p); avisado = true; } catch (e) { console.warn('[prorroga] no se pudo avisar a', tel, '·', e.message); }
+  }
+  res.json({ ok: true, telefono: tel, avisado, ...p });
 });
 app.delete('/admin/api/prorrogas/:telefono', verifyAdminToken, requirePermission('clients'), (req, res) => {
   const tel = normalizePhone(String(req.params.telefono || ''));

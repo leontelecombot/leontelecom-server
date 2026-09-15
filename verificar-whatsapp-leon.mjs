@@ -941,8 +941,11 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   es(c.prorrogaVence === 0, 'y a Diego no se le avisa nada: su prórroga vence en 3 días');
 
   // La prórroga de Diego se acorta a 1 día desde el panel: mañana vence, hoy se le recuerda.
+  n = enviados.length;
   const acorta = await fetch(BASE + '/admin/api/prorrogas', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: D, dias: 1 }) }).then((x) => x.json());
+  r = await respuestas(n, 1, 4000);
   es(acorta.ok && acorta.dias === 1, 'desde el panel se le deja la prórroga en 1 día');
+  es(acorta.avisado === true && r.some((m) => m.a === D && m.tipo === 'template' && /te dimos hasta el \*\d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'y a Diego le llega por plantilla la nueva fecha, igual que si se la diera el asesor por WhatsApp');
   n = enviados.length;
   const corrida2 = await fetch(BASE + '/admin/api/corte-reminders/run', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: '{}' }).then((x) => x.json());
   r = await respuestas(n, 1, 6000);
