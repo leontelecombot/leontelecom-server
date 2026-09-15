@@ -3630,9 +3630,17 @@ function pagoRecienteDe(telefono) {
   const enLinea = (stripePagosRecientes.get(tel) || []).filter((p) => p && p.cuando >= desde);
   if (enLinea.length) { const u = enLinea[enLinea.length - 1]; return { cuando: u.cuando, canal: u.canal || 'en línea' }; }
   for (const c of caseLog) {
-    if (c.clientId !== tel || c.type !== 'pago' || c.status !== 'recibido') continue;
+    if (c.type !== 'pago' || c.status !== 'recibido') continue;
+    /*
+     * El comprobante lo manda quien paga, que muchas veces no es el titular.
+     * Si el aviso al asesor ya traía "Coincide: ... · <teléfono del titular>",
+     * ese pago cuenta para el TITULAR: es a él a quien no hay que mandarle
+     * "mañana te cortamos" cuando su hija ya pagó por él.
+     */
+    const esSuyo = c.clientId === tel || String(c.resumen || '').includes('· ' + tel);
+    if (!esSuyo) continue;
     const t = new Date(c.ts).getTime();
-    if (t >= desde) return { cuando: t, canal: 'comprobante' };
+    if (t >= desde) return { cuando: t, canal: c.clientId === tel ? 'comprobante' : 'comprobante de otra persona' };
   }
   return null;
 }
