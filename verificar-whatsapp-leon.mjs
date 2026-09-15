@@ -255,7 +255,8 @@ const srv = spawn('node', ['index.js'], { env: ENV_SERVIDOR, stdio: ['ignore', '
 const log = [];
 srv.stdout.on('data', (d) => log.push(String(d)));
 srv.stderr.on('data', (d) => log.push(String(d)));
-const salir = (c) => { srv.kill('SIGKILL'); restaurar(); process.exit(c); };
+let SEGUNDO = null;
+const salir = (c) => { srv.kill('SIGKILL'); if (SEGUNDO) SEGUNDO.kill('SIGKILL'); restaurar(); process.exit(c); };
 process.on('uncaughtException', (e) => { console.error(e); console.log(log.join('').split('\n').filter((l) => /wisphub|stripe-leon|rror|Incoming/.test(l)).slice(-40).join('\n')); salir(1); });
 
 let vivo = false;
@@ -875,7 +876,39 @@ console.log('\n=== 14. SI EL SERVIDOR SE REINICIA A MEDIA CONVERSACIÓN, NO SE P
   await toca(A, 'pago_tarjeta');
   const r = await respuestas(n);
   es(dice(r, /La mensualidad de \*Ana Pérez\* es de/), 'después del reinicio, sigue cotizando la cuenta de Ana Pérez, no la suya');
-  srv2.kill('SIGKILL');
+  SEGUNDO = srv2;   // sigue vivo para las secciones que faltan
+}
+
+console.log('\n=== 15. TRES DÍAS DESPUÉS DE UNA FALLA, EL BOT PREGUNTA SI YA QUEDÓ ===');
+{
+  // Gloria reporta una falla con todo (síntoma, nombre, ubicación) hasta que sale el folio.
+  await entra(G, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(G, 'no tengo internet desde ayer, se me va la señal');
+  let r = await respuestas(n, 1, 3000);
+  for (const paso of ['Gloria Núñez', 'Calle Hidalgo 12, centro', 'sí']) {
+    if ((await respuestas(enviados.length, 0, 300)) && enviados.slice(n).some((m) => /SOP-/.test(m.texto))) break;
+    n = enviados.length; await entra(G, paso); r = await respuestas(n, 1, 3000);
+  }
+  const folio = (enviados.map((m) => m.texto).join(' ').match(/SOP-[A-Z0-9]+/) || [])[0];
+  es(!!folio, `el reporte quedó con folio (${folio || 'sin folio'})`);
+  // Pasan tres días.
+  n = enviados.length;
+  const h = await fetch(BASE + '/api/pruebas/ya-quedo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"dias":4}' }).then((x) => x.json());
+  r = await respuestas(n, 1);
+  const pregunta = r.find((m) => m.a === G && /¿Ya quedó tu servicio\?/.test(m.texto));
+  es(h.preguntados >= 1 && !!pregunta, 'a los tres días le pregunta a Gloria si ya quedó, con dos botones');
+  const btnSi = pregunta && pregunta.botones.find((b) => /^tk_si_/.test(b.id));
+  n = enviados.length;
+  await toca(G, btnSi ? btnSi.id : 'tk_si_x');
+  r = await respuestas(n, 1);
+  es(dice(r, /Cierro tu reporte/), '"sí, ya quedó" cierra el reporte solo');
+  const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+  const tk = await fetch(BASE + '/admin/api/tickets', { headers: { Authorization: 'Bearer ' + login.token } }).then((x) => x.json());
+  const mio = (tk.tickets || []).find((t) => t.folio === folio);
+  es(mio && mio.estado === 'resuelto' && mio.cerradoPor === 'cliente', 'y en el panel aparece resuelto, cerrado por el cliente');
+  const h2 = await fetch(BASE + '/api/pruebas/ya-quedo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"dias":4}' }).then((x) => x.json());
+  es(h2.preguntados === 0, 'y no se vuelve a preguntar');
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);

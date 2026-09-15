@@ -3815,6 +3815,34 @@ async function barrerCobroAutomatico(force = false) {
   return _resultado(hechos);
 }
 
+/*
+ * ¿YA QUEDÓ? Un reporte de falla que nadie cierra.
+ *
+ * En el panel, 31 de 33 reportes seguían "abiertos" aunque el técnico ya
+ * había ido: nadie los cierra. A los tres días el bot le pregunta al cliente
+ * si ya quedó, con dos botones. "Sí" cierra el reporte solo; "sigue igual" lo
+ * vuelve a subir al asesor con la marca de que ya pasaron tres días.
+ */
+const TICKET_DIAS_PREGUNTA = Math.max(1, Number(process.env.TICKET_DIAS_PREGUNTA) || 3);
+async function preguntarSiYaQuedo(force = false) {
+  const hechos = { preguntados: 0 };
+  const hora = Number(new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: 'numeric', hour12: false }).format(new Date()));
+  if (!force && (hora < 10 || hora >= 20)) return hechos;
+  const limite = Date.now() - TICKET_DIAS_PREGUNTA * 24 * 3600 * 1000;
+  for (const t of tickets.values()) {
+    if (!t || t.estado === 'resuelto' || t.preguntadoEn) continue;
+    if (new Date(t.createdAt).getTime() > limite) continue;
+    t.preguntadoEn = new Date().toISOString(); schedulePersist();
+    try {
+      await sendWhatsAppMessage(t.chatId,
+        `🔧 Hola. Hace unos días reportaste: "${String(t.problema || '').slice(0, 80)}" (folio ${t.folio}). ¿Ya quedó tu servicio?`,
+        [], { buttons: [{ id: 'tk_si_' + t.id, title: '✅ Sí, ya quedó' }, { id: 'tk_no_' + t.id, title: '❌ Sigue igual' }] });
+      hechos.preguntados++;
+    } catch (e) { console.warn('[tickets] no se pudo preguntar por', t.folio, e.message); }
+  }
+  return hechos;
+}
+
 async function sweepCorteReminders(force = false) {
   try {
     if (!CORTE_REMINDER_ENABLED && !force) return null;
@@ -4391,6 +4419,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const _emergencyNow = !_isBtn && isEmergency(text);
 
     // ===== Botones del recordatorio de corte (horario en oficina / datos de pago) =====
+    // Respuesta a "¿ya quedó tu servicio?" de un reporte de falla.
+    const _tkResp = _pt.match(/^tk_(si|no)_(tk[a-z0-9]+)$/);
+    if (_tkResp) {
+      const t = tickets.get(_tkResp[2]);
+      if (!t || String(t.chatId) !== String(chatId)) { await sendMsg(chatId, 'Ese reporte ya no está. Si sigues con la falla, escríbeme qué pasa y levanto uno nuevo.'); return; }
+      t.updatedAt = new Date().toISOString();
+      if (_tkResp[1] === 'si') {
+        t.estado = 'resuelto'; t.cerradoPor = 'cliente'; schedulePersist();
+        await sendMsg(chatId, `¡Qué bueno! Cierro tu reporte ${t.folio}. Si vuelve a fallar, escríbeme y lo abrimos de nuevo. 🙌`);
+      } else {
+        t.estado = 'abierto'; t.sigueIgual = (t.sigueIgual || 0) + 1; schedulePersist();
+        await sendMsg(chatId, `Lo siento. Le aviso al asesor que tu reporte ${t.folio} sigue sin resolverse para que lo atiendan con prioridad. 🙏`);
+        alertAdmin('ticket-sigue', `⚠️ El reporte ${t.folio} de ${t.name || chatId} (${String(t.problema || '').slice(0, 60)}) sigue SIN resolverse después de ${TICKET_DIAS_PREGUNTA} días: el cliente lo confirmó.`);
+      }
+      return;
+    }
+
     if (_pt === 'pago_horario') {
       await sendMsg(chatId, buildBusinessHoursMessage() + '\n\n🏢 En oficina puedes pagar en *efectivo* o con *tarjeta* (presencial). ¡Te esperamos!');
       return;
@@ -5254,6 +5299,23 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       if (choice === 6) { clearSession(chatId); await sendMsg(chatId, buildProductListText()); return; }
+      /*
+       * "No tengo internet" escrito en vez de tocar "3" es lo más normal del
+       * mundo. Antes eso se le mandaba a la IA, y si la IA no contestaba el
+       * cliente veía el menú otra vez, y otra, y otra. Lo obvio se atiende
+       * aquí sin IA: una falla abre el reporte y "quiero un asesor" lo pide.
+       */
+      const intencionMenu = detectNewIntent(text);
+      if (intencionMenu === 'support') {
+        if (isTechnicalIssue(text)) await startReportFlow(chatId, text, sendMsg);
+        else { setSession(chatId, { state: 'awaiting_report', data: {} }); await sendReplyObject(buildReportPrompt()); }
+        return;
+      }
+      if (intencionMenu === 'agent') {
+        setSession(chatId, { state: 'awaiting_agent_name', data: { initialRequest: text } });
+        await sendMsg(chatId, '¿Cuál es tu nombre?');
+        return;
+      }
       // Nothing matched — let AI handle it (same logic as default handler)
       const aiResult2 = await callMainAI(chatId, text);
       if (!aiResult2) { await sendReplyObject(buildFallbackReply(text)); return; }
@@ -5648,9 +5710,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
           `Problema: ${d.problemDescription}`,
           `Ubicación: ${locationLine}`
         ].join('\n'), nbhd?.zone || '').catch(() => {});
-        try { createTicket(chatId, d.knownName, d.problemDescription, locationLine); } catch (_) {}
+        let folioTk = '';
+        try { folioTk = (createTicket(chatId, d.knownName, d.problemDescription, locationLine) || {}).folio || ''; } catch (_) {}
         clearSession(chatId);
-        await sendMsg(chatId, `Listo, ${d.knownName}. Registramos tu reporte en ${locationLine}. Un técnico te contactará pronto. 🔧`);
+        // El folio va en el mensaje: es lo que el cliente dice cuando llama a preguntar.
+        await sendMsg(chatId, `Listo, ${d.knownName}. Registramos tu reporte en ${locationLine}${folioTk ? ` con folio *${folioTk}*` : ''}. Un técnico te contactará pronto. 🔧`);
       } else {
         setSession(chatId, { state: 'awaiting_report_name', data: { ...d, locationLine } });
         await sendMsg(chatId, '¿A qué nombre está el servicio?');
@@ -5973,6 +6037,12 @@ if (process.env.PRUEBAS === '1') {
     stripePagosRecientes.delete(tel);
     for (const c of caseLog) if (c.clientId === tel && c.type === 'pago') c.status = 'viejo';
     res.json({ ok: true });
+  });
+  app.post('/api/pruebas/ya-quedo', async (req, res) => {
+    // Envejece los reportes abiertos y pregunta.
+    const dias = Number((req.body || {}).dias || 4);
+    for (const t of tickets.values()) if (t.estado !== 'resuelto') t.createdAt = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
+    res.json(await preguntarSiYaQuedo(true));
   });
   app.post('/api/pruebas/cobro-automatico', async (_req, res) => {
     res.json(await barrerCobroAutomatico(true));
@@ -8850,6 +8920,8 @@ const port = Number(process.env.PORT || 3000);
   // ventana, dedup) impiden que mande nada de más.
   setTimeout(() => sweepCorteReminders().catch(() => {}), 45000);
   setInterval(() => sweepCorteReminders().catch(() => {}), 5 * 60000);
+  // Reportes de falla: cada 2 horas pregunta "¿ya quedó?" a los de hace 3 días.
+  setInterval(() => preguntarSiYaQuedo().catch(() => {}), 2 * 60 * 60000);
   // Cobro automático: cada hora mira si a alguien le toca aviso o cobro.
   setTimeout(() => barrerCobroAutomatico().catch(() => {}), 60000);
   setInterval(() => barrerCobroAutomatico().catch(() => {}), 60 * 60000);
