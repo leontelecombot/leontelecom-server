@@ -1254,8 +1254,14 @@ console.log('\n=== 19. CUANDO LA OFICINA DA POR BUENO UN COMPROBANTE, EL CLIENTE
     body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + G.slice(2), type: 'document', document: { id: 'doc1', filename: 'pago.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Gloria' } }] } }] }] }) });
   await respuestas(n, 1, 4000);
   n = enviados.length;
-  await entra(G, 'Gloria Núñez');
-  await respuestas(n, 1, 4000);
+  await entra(G, 'Nombre de titular: Gloria Núñez');
+  const rG = await respuestas(n, 1, 4000);
+  {
+    const loginG = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
+    const lg = await fetch(BASE + '/admin/api/comprobantes', { headers: { Authorization: 'Bearer ' + loginG.token } }).then((x) => x.json());
+    const cg = (lg.comprobantes || []).find((c) => c.telefono === G) || {};
+    es(/Coincide: Gloria Núñez/.test(cg.resumen || '') && /a nombre de: Gloria Núñez/.test(cg.resumen || ''), '"Nombre de titular: Gloria Núñez" se entiende como el nombre pelón y coincide con el padrón');
+  }
   // Con el comprobante sin revisar, el barrido de corte NO le manda "mañana te cortamos": le avisa a la oficina que lo revise hoy.
   {
     const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());

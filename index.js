@@ -5580,7 +5580,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         return;
       }
       // Lo que escribió es a nombre de quién está el servicio que paga.
-      const titular = String(text || '').trim().slice(0, 120);
+      const titular = limpiarTitular(text).slice(0, 120);
       await notifyAgentWithImage(chatId, _pdoc.userName, '💳 COMPROBANTE (PDF) del cliente',
         ['Archivo: ' + _pdoc.fname, '👤 Servicio a nombre de: ' + (titular || 'no especificado'), ...(titular ? [lineaCoincidencias(titular, normalizePhone(chatId))] : [])],
         '', { docUrl: _pdoc.docUrl, docName: _pdoc.fname, caseType: 'pago' });
@@ -5665,7 +5665,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       // ===== Etapa TITULAR: el cliente responde a nombre de quién está el servicio =====
       if (_pend.stage === 'titular') {
         if (_isBtn) { await sendMsg(chatId, '👤 Solo me falta el *nombre del titular* del servicio. Escríbemelo por favor 🙏'); return; }
-        const titular = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+        const titular = limpiarTitular(text).slice(0, 120);
         if (titular.length < 3) { await sendMsg(chatId, '👤 ¿Me escribes el *nombre completo del titular* del servicio, por favor?'); return; }
         pendingImage.delete(_pendKey);
         const lines = [...(_pend.lineasListas || []), '🧾 Servicio a nombre de: ' + titular, lineaCoincidencias(titular, normalizePhone(chatId))];
@@ -8557,9 +8557,22 @@ function mapWisphubAccount(c) {
  * el teléfono, el plan y el estado del servicio al que hay que abonarle. Si
  * hay varias coincidencias se listan todas; si no hay, se dice.
  */
+/*
+ * Lo que la gente escribe cuando se le pregunta a nombre de quién está el
+ * servicio: "Nombre de titular: Alejandra Soriano", "cliente: José Juan",
+ * "de Alejandra Juliani", "el servicio está a nombre de Fabiola Díaz", "si a
+ * nombre de Jannin". Se deja solo el nombre.
+ */
+function limpiarTitular(texto) {
+  return String(texto || '').replace(/\s+/g, ' ').trim()
+    .replace(/^(s[ií],?\s+|pues\s+|es\s+|est[aá]\s+)?(?:el\s+(servicio|internet|contrato|recibo)\s+(est[aá]|es|viene)\s+)?(a\s+nombre\s+de|nombre\s+(de\s+)?(la\s+|el\s+)?titular|titular|cliente|nombre|de|del|a nombre)\s*[:.\-]?\s+/i, '')
+    .replace(/^(a\s+nombre\s+de|nombre\s+(de\s+)?(la\s+|el\s+)?titular|titular|cliente|nombre|de|del)\s*[:.\-]?\s+/i, '')
+    .replace(/[.]+$/, '').trim();
+}
+
 function coincidenciasDeTitular(nombre) {
   // "mi mamá Gloria Núñez", "la señora Ana": el parentesco y el tratamiento sobran.
-  const limpio = String(nombre || '').replace(/^(mi|la|el|de mi|de la|del)\s+(mam[aá]|pap[aá]|esposa?|hij[oa]|herman[oa]|suegr[ao]|abuel[oa]|t[ií][ao]|vecin[oa]|se[ñn]ora?|patr[oó]n[a]?|jef[ea])\s+/i, '').replace(/^(se[ñn]ora?|don|do[ñn]a|sr\.?|sra\.?)\s+/i, '');
+  const limpio = limpiarTitular(nombre).replace(/^(mi|la|el|de mi|de la|del)\s+(mam[aá]|pap[aá]|esposa?|hij[oa]|herman[oa]|suegr[ao]|abuel[oa]|t[ií][ao]|vecin[oa]|se[ñn]ora?|patr[oó]n[a]?|jef[ea])\s+/i, '').replace(/^(se[ñn]ora?|don|do[ñn]a|sr\.?|sra\.?)\s+/i, '');
   const q = limpio.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
   if (q.length < 4) return [];
   const palabras = q.split(' ').filter((w) => w.length > 2);
