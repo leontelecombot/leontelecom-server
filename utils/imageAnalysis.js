@@ -8,9 +8,11 @@ const PROMPT = `Eres el asistente de León Telecom (proveedor de internet, cáma
 Devuelve SOLO un objeto JSON con esta forma exacta:
 {
   "tipo": "comprobante" | "equipo" | "emergencia" | "otro",
-  "nombre": "nombre de la persona que hizo el pago (SOLO si es comprobante; si no, cadena vacía)",
+  "nombre": "nombre de QUIEN PAGA: el titular de la cuenta ORIGEN ('Cuenta origen', 'De', 'Ordenante', 'Enviado por', 'Titular'). Si no aparece el nombre de quien paga, cadena vacía. NUNCA pongas aquí al beneficiario/cuenta destino.",
   "monto": "monto pagado con signo, ej. $500.00 (SOLO comprobante)",
-  "banco": "banco u operador si aparece (SOLO comprobante)",
+  "banco": "banco u operador de quien paga, si aparece (SOLO comprobante)",
+  "concepto": "texto del concepto/referencia/motivo si aparece (muchas veces trae el nombre del cliente del servicio)",
+  "destino": "nombre y/o banco de la cuenta DESTINO o beneficiario, tal como aparece (ej. 'David L*** V****** M*** · Banco Azteca ***689')",
   "fecha": "fecha si aparece",
   "descripcion": "1-2 frases describiendo qué se ve (para equipo/emergencia/otro)",
   "razon": "si algo no se lee o no puedes clasificar, explícalo breve"
@@ -18,6 +20,7 @@ Devuelve SOLO un objeto JSON con esta forma exacta:
 
 Guía de clasificación:
 - "comprobante": recibo, ticket o captura de una transferencia/pago (SPEI, banco, tienda, OXXO, etc.). Extrae el nombre de quien paga y el monto.
+  OJO: la cuenta DESTINO casi siempre es la de León Telecom (a nombre de David León, Banco Azteca, BBVA u otro). Ese NO es quien paga: va en "destino". Quien paga es el de la cuenta ORIGEN; si el recibo solo enseña la cuenta origen enmascarada (ej. "Guardadito ***8530") sin nombre, deja "nombre" vacío y llena "concepto".
 - "equipo": foto de un router, módem, cable, cámara, fuente u otro equipo (posible falla técnica). Describe qué equipo es y qué se ve (luces, daño, etc.).
 - "emergencia": foto de incendio, humo, poste o cable caído/quemado, accidente, o algo urgente. Descríbelo.
 - "otro": cualquier otra cosa.

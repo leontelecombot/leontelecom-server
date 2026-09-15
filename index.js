@@ -3041,7 +3041,7 @@ async function notifyAgentWithImage(chatId, userName, headline, bodyLines, image
         anclado = anclado || okDoc;
       }
       if (!anclado) {
-        // 3) Último recurso: que la información NUNCA se pierda.
+        // 3) Texto con el enlace del archivo: que la información NUNCA se pierda.
         const aviso = (imageUrl || opts.docUrl)
           ? '\n\n⚠️ No pude adjuntar el archivo aquí; míralo en: ' + (imageUrl || opts.docUrl)
           : '';
@@ -3049,7 +3049,26 @@ async function notifyAgentWithImage(chatId, userName, headline, bodyLines, image
         return;
       }
       if (buttons) await sendWhatsAppMessage(agent, btnTxt, [], { buttons });
-    } catch (e) { console.error('[notify anclado]', agent, e.message); }
+    } catch (e) {
+      /*
+       * 4) PLANTILLA. Aquí caía el hueco que la oficina veía como "el bot no
+       * manda los comprobantes": WhatsApp solo deja mandar mensajes normales
+       * (foto, texto, botones) a quien le escribió al bot en las últimas 24 h.
+       * Un asesor que no le escribió desde ayer (mañanas, lunes) no recibía
+       * NADA, el error se quedaba en la consola y el caso solo aparecía al
+       * pedir PENDIENTES. La plantilla no tiene ventana; lleva la información,
+       * el enlace del archivo y cómo responder.
+       */
+      console.warn('[notify anclado] envío normal falló a', agent, '(¿ventana de 24h?), probando plantilla:', e.message);
+      try {
+        const enlace = imageUrl || opts.docUrl ? ` · Archivo: ${imageUrl || opts.docUrl}` : '';
+        await sendWhatsAppTemplate(agent, `${msg}${enlace} · Responde: RECIBIDO ${num} o ATENDER ${num} (o escribe PENDIENTES para verlo con botones).`);
+        console.log('[notify anclado] rescatado por plantilla a', agent);
+      } catch (e2) {
+        console.error('[notify anclado] plantilla también falló a', agent, ':', e2.message);
+        alertAdmin('aviso-no-entregado', `No pude entregar un caso con archivo (${userName || num}) al asesor ${agent}: falló el envío normal y la plantilla. El caso está en el panel y sale con PENDIENTES.`);
+      }
+    }
   })));
 }
 
@@ -3069,7 +3088,18 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
 
     // ---- COMPROBANTE: extrae nombre + monto y pide confirmación con botones ----
     if (tipo === 'comprobante') {
-      const nombre = String(a.nombre || '').trim();
+      /*
+       * "Nombre" es quien PAGA (cuenta origen). En los recibos de Banco Azteca
+       * y parecidos el nombre visible es el de la cuenta DESTINO (David León),
+       * y la IA lo ponía como pagador: el caso decía "pagó David L*** V***".
+       * Si el nombre leído parece el de León Telecom, se descarta y se usa el
+       * concepto (que suele traer el nombre del cliente).
+       */
+      const destino = String(a.destino || '').trim();
+      const concepto = String(a.concepto || '').trim();
+      let nombre = String(a.nombre || '').trim();
+      const pareceLeon = (t) => /le[oó]n\s*telecom|david\s+l\S*\s+v/i.test(String(t || ''));
+      if (pareceLeon(nombre)) nombre = '';
       const monto = String(a.monto || '').trim();
       // ¿El cliente ya había dicho por texto "a nombre de X"? Lo cotejamos.
       const _st = statedTitular.get(String(chatId));
@@ -3077,12 +3107,13 @@ async function handleIncomingImage(chatId, userName, imageBase64, platform, send
       statedTitular.delete(String(chatId));
       // Registramos el caso YA (aunque el cliente no confirme, no se pierde y sale en el resumen).
       const _c = logCase(chatId, userName, 'pago',
-        `Comprobante recibido (esperando confirmación): pagó ${nombre || '¿?'} / ${monto || '¿?'}${titular ? ' · a nombre de ' + titular : ''}`,
+        `Comprobante recibido (esperando confirmación): pagó ${nombre || (concepto ? '¿? (concepto: ' + concepto + ')' : '¿?')} / ${monto || '¿?'}${titular ? ' · a nombre de ' + titular : ''}${destino && !pareceLeon(destino) ? ' · ⚠️ cuenta destino: ' + destino : ''}`,
         { imageUrl: url });
       pendingImage.set(String(chatId), { url, analysis: a, userName, ts: Date.now(), caseId: _c && _c.id, titular });
       let det = '📄 Recibí tu comprobante de pago. En la imagen detecté:\n\n';
-      det += '👤 Nombre: ' + (nombre || '_no lo pude leer bien_') + '\n';
       det += '💵 Monto: ' + (monto || '_no lo pude leer bien_');
+      if (nombre) det += '\n👤 Pagó: ' + nombre;
+      if (concepto) det += '\n📝 Concepto: ' + concepto;
       if (a.fecha) det += '\n📅 Fecha: ' + a.fecha;
       if (titular) det += '\n\n📝 Y tú me dijiste que es a nombre de: *' + titular + '*.';
       det += '\n\n¿Los datos son correctos?';
@@ -3455,7 +3486,7 @@ async function deliverPendingCases(agentNumber) {
   const pend = caseLog.filter(c => c.status === 'pendiente');
   if (!pend.length) { await sendWhatsAppMessage(agentNumber, '✅ No hay casos pendientes por ahora. ¡Todo al día! 🙌'); return; }
   const fmtHora = new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
-  await sendWhatsAppMessage(agentNumber, `📥 Tienes *${pend.length}* caso(s) pendiente(s). Te los mando con sus botones 👇 (🌙 = fuera de horario)`);
+  await sendWhatsAppMessage(agentNumber, `📥 Tienes *${pend.length}* caso(s) pendiente(s). Te los mando con sus botones 👇 (🌙 = llegó fuera del horario de oficina; los casos se avisan al momento a cualquier hora)`);
   const lote = pend.slice(0, 20);
   for (const c of lote) {
     try {
@@ -5965,13 +5996,18 @@ async function handleChatMessage(chatId, text, sendMsg) {
       };
       const confirmarOriginal = async () => {
         const a = _pend.analysis || {};
+        const pareceLeonA = (t) => /le[oó]n\s*telecom|david\s+l\S*\s+v/i.test(String(t || ''));
+        const pagoQuien = pareceLeonA(a.nombre) ? '' : String(a.nombre || '').trim();
         const lines = [
           '💳 Datos del comprobante (confirmados por el cliente):',
-          '👤 Nombre: ' + (String(a.nombre || '').trim() || 'no especificado'),
+          '👤 Pagó (cuenta origen): ' + (pagoQuien || 'no aparece el nombre'),
           '💵 Monto: ' + (String(a.monto || '').trim() || 'no especificado')
         ];
+        if (a.concepto) lines.push('📝 Concepto: ' + String(a.concepto).trim());
         if (a.banco) lines.push('🏦 Banco/Operador: ' + a.banco);
         if (a.fecha) lines.push('📅 Fecha: ' + a.fecha);
+        // Si el dinero NO fue a la cuenta de León, el asesor debe verlo antes de dar el pago por bueno.
+        if (a.destino && !pareceLeonA(a.destino)) lines.push('⚠️ Cuenta destino: ' + String(a.destino).trim() + ' (revisar que sea la de León Telecom)');
         await pedirTitular(lines, '💳 COMPROBANTE DE PAGO');
       };
       if (_pend.stage === 'correccion') {

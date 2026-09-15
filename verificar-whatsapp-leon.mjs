@@ -53,12 +53,21 @@ const MANANA = (() => { const d = new Date(Date.now() + 24 * 3600 * 1000); retur
 
 // ── WhatsApp de mentira: guarda lo que el bot manda ────────────────────────
 const enviados = [];   // { a, texto, botones: [{id,title}] }
+// Números a los que WhatsApp ya "cerró la ventana de 24 h": rechaza todo menos plantillas (error 131047).
+const ventanaCerrada = new Set();
+const rechazados = [];  // { a, tipo }
 const metaFalso = createServer((req, res) => {
   let cuerpo = '';
   req.on('data', (c) => { cuerpo += c; });
   req.on('end', () => {
     try {
       const m = JSON.parse(cuerpo || '{}');
+      if (ventanaCerrada.has(String(m.to || '')) && m.type !== 'template') {
+        rechazados.push({ a: String(m.to || ''), tipo: m.type });
+        res.statusCode = 400; res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ error: { message: '(#131047) Re-engagement message', type: 'OAuthException', code: 131047 } }));
+        return;
+      }
       const texto = m.type === 'interactive' ? (m.interactive?.body?.text || '')
         : m.type === 'template' ? ((((m.template || {}).components || []).find((c) => c.type === 'body') || {}).parameters || []).map((x) => x.text).join(' ')
         : (m.text?.body || '');
@@ -1650,6 +1659,26 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
     es(pg.st === 200 && filasPg[0] === 'fecha,telefono,nombre,monto,via,pagadoPor,cubreHasta,servicio,referencia' && filasPg.some((l) => /^\d{4}-\d\d-\d\d \d\d:\d\d,9512222222,Ana Pérez,450\.00,tarjeta,9511111111,\d{4}-\d\d-\d\d,/.test(l)), 'el CSV de pagos trae el de Ana pagado por Andrés con monto, vía, quién pagó y hasta cuándo cubre');
     const sinToken = await fetch(BASE + '/admin/api/exportar/pagos.csv');
     es(sinToken.status === 401, 'sin sesión no se baja nada');
+  }
+  // EL HUECO REAL DE LA OFICINA: "el bot a veces no manda los comprobantes". Si el asesor no le ha
+  // escrito al bot en 24 h, WhatsApp rechaza foto, texto y botones (131047). Antes el caso solo salía
+  // con PENDIENTES; ahora llega por plantilla con la información, el enlace y cómo responder.
+  {
+    ventanaCerrada.add(ASESOR);
+    n = enviados.length; const nr = rechazados.length;
+    await fetch(BASE + '/webhook/whatsapp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + E.slice(2), type: 'document', document: { id: 'doc-elena', filename: 'pago-elena.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Elena' } }] } }] }] }) });
+    await respuestas(n, 1, 4000);
+    n = enviados.length; await entra(E, 'Elena Cruz');
+    r = await respuestas(n, 2, 6000);
+    const pl = r.find((m) => m.a === ASESOR && m.tipo === 'template' && /COMPROBANTE/i.test(m.texto));
+    es(rechazados.length > nr && rechazados.some((x) => x.a === ASESOR), 'con la ventana de 24 h cerrada, WhatsApp rechaza el envío normal al asesor (como en la vida real)');
+    es(!!pl && /Elena/.test(pl.texto) && /RECIBIDO 529515555555/.test(pl.texto) && /PENDIENTES/.test(pl.texto), 'y aun así el comprobante le llega por plantilla, con la información y cómo responder');
+    es(r.some((m) => m.a === E && /comprobante/i.test(m.texto)), 'y a Elena se le confirma que su comprobante ya está con la oficina');
+    ventanaCerrada.delete(ASESOR);
+    // El caso también queda en el panel, por si acaso.
+    const lista = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
+    es((lista.comprobantes || []).some((c) => c.telefono === E), 'y el comprobante de Elena está en el panel por revisar');
   }
   // La ayuda del asesor menciona NO PRORROGA.
   n = enviados.length;

@@ -214,6 +214,22 @@ tarjeta del panel. Mientras dura, el aviso de corte se calla; el día antes de q
 venza se le recuerda (salvo que tenga automático, que se cobra solo). El panel dice
 cuánto le queda a cada prórroga, si ya pagó y si ya se le avisó.
 
+## Por qué "a veces no llegaban los comprobantes" (15 sep 2026)
+
+No era el horario: el bot avisa al momento a cualquier hora (el 🌙 en PENDIENTES solo
+marca que el cliente escribió fuera del horario de oficina). Era la **ventana de 24 h de
+WhatsApp**: Meta solo deja mandar foto, texto y botones a quien le escribió al bot en las
+últimas 24 h. Si el asesor no le había escrito desde el día anterior (mañanas, lunes),
+el comprobante se rechazaba (error 131047), el error se quedaba en la consola y el caso
+solo aparecía al pedir PENDIENTES. Ahora, si el envío normal falla, el comprobante llega
+**por plantilla** con la información, el enlace del archivo y cómo responder; si la
+plantilla también falla, se avisa al administrador y el caso sigue en el panel.
+
+También se corrigió la lectura del recibo: en Banco Azteca y parecidos el nombre visible
+es el de la cuenta DESTINO (David León) y la IA lo ponía como "pagó David L***". Ahora
+"pagó" es quien paga (cuenta origen); si no aparece, se usa el concepto; y si el dinero
+fue a una cuenta que no parece la de León, el asesor lo ve marcado.
+
 ## Exportar a Excel (CSV)
 
 En Cobranza cada tarjeta tiene su botón ⬇️ CSV: **Pagos** (fecha, teléfono, nombre,
@@ -429,13 +445,13 @@ node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  51 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  # 284 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
+node verificar-whatsapp-leon.mjs  # 291 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**654 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
+**661 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.
