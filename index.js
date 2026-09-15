@@ -5376,6 +5376,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
           const ajenaMenu = cuentaAjena(chatId);
           const servicioMenu = servicioEnSesion(chatId);
           const varios = ajenaMenu || servicioMenu ? [] : await serviciosDeLaCuenta(normalizePhone(chatId));
+          // Con dos contratos se pregunta CUÁL antes que CÓMO: primero qué se paga, luego con qué.
+          if (varios.length > 1 && await preguntarContratoSiHayVarios(chatId, sendMsg, 'pagar')) return;
           if (varios.length <= 1) {
             const cobro = await montoACobrar(chatId, ajenaMenu, servicioMenu);
             if (cobro.ok) encabezado += `${ajenaMenu ? `La mensualidad de *${(wisphubClients.get(ajenaMenu) || {}).name || 'esa cuenta'}*` : 'Tu mensualidad'} es de *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.\n\n`;

@@ -716,12 +716,9 @@ console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE P
 {
   let n = enviados.length;
   await entra(F, 'pagar');
-  await respuestas(n);
-  n = enviados.length;
-  await toca(F, 'pago_tarjeta');
   let r = await respuestas(n);
   const bot = conBotones(r);
-  es(dice(r, /Tienes \*2 servicios\*/), 'antes de cotizar, le dice que tiene 2 servicios y pregunta cuál');
+  es(dice(r, /Tienes \*2 servicios\*/) && !dice(r, /¿Cómo quieres pagar\?/), 'con dos contratos, "pagar" pregunta primero CUÁL (no cómo), sin cotizar todavía');
   es(dice(r, /Local, Av\. Juárez\*: 🔴 suspendido · corte \d\d\/\d\d · debe \*\$500\.00\*/) && dice(r, /Casa, Col\. Centro\*: 🟢 activo .* al corriente/), 'y en la misma pregunta ve cuál debe y cuánto, para no tener que adivinar');
   es(bot.botones.length === 2 && bot.botones.some((b) => /Local/.test(b.title)) && bot.botones.some((b) => /Casa/.test(b.title)), 'con un botón por contrato (casa y local)');
   es(bot.botones.some((b) => /🔴/.test(b.title) && /Local/.test(b.title)), 'y el suspendido marcado en rojo');
@@ -733,7 +730,7 @@ console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE P
   n = enviados.length;
   await entra(F, 'El local');
   r = await respuestas(n);
-  es(dice(r, /Tu mensualidad es de \*\$500\.00\*/), 'escribe "el local" y se cotiza la deuda del LOCAL ($500), no la de la casa');
+  es(dice(r, /Tu mensualidad es de \*\$500\.00\*/) && dice(r, /¿Cómo quieres pagar\?/), 'escribe "el local" y entonces sí: se cotiza la deuda del LOCAL ($500) y se pregunta cómo pagar');
 
   n = enviados.length;
   const antes = stripe.sesiones.length;
