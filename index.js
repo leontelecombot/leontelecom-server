@@ -1285,6 +1285,7 @@ function buildStateSnapshot() {
     fichasOxxo: Object.fromEntries([...fichasOxxo].filter(([, v]) => v && Date.now() - v.cuando < 4 * 86400000)),
     ultimoLinkPago: Object.fromEntries([...ultimoLinkPago].filter(([, v]) => v && Date.now() - v.cuando < 3 * 3600000)),
     autoOfrecido: Object.fromEntries([...autoOfrecido].filter(([, v]) => Date.now() - v < 30 * 60000)),
+    resumenCobranzaFecha,
     stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX),
     /*
      * Los avisos de Stripe ya procesados.
@@ -1482,6 +1483,7 @@ function hydrateState(s) {
   for (const [k, v] of Object.entries(s.fichasOxxo || {})) if (v && v.cuando) fichasOxxo.set(String(k), v);
   for (const [k, v] of Object.entries(s.ultimoLinkPago || {})) if (v && v.url) ultimoLinkPago.set(String(k), v);
   for (const [k, v] of Object.entries(s.autoOfrecido || {})) if (Number(v)) autoOfrecido.set(String(k), Number(v));
+  if (typeof s.resumenCobranzaFecha === 'string') resumenCobranzaFecha = s.resumenCobranzaFecha;
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;
@@ -3877,6 +3879,52 @@ function fechaMasDias(dias) {
   const d = new Date(); d.setDate(d.getDate() + dias);
   return fechaLocalISO(d);
 }
+/*
+ * RESUMEN DIARIO DE COBRANZA para la oficina, a las 9 de la mañana, por
+ * plantilla a los números de asesor: lo que hoy toca mirar en cinco líneas.
+ * Se manda una vez por día (queda en el estado como resumenCobranzaFecha).
+ */
+let resumenCobranzaFecha = '';
+async function resumenCobranzaDiario(force = false) {
+  const hoy = fechaLocalISO();
+  if (!force) {
+    if (resumenCobranzaFecha === hoy) return { repetido: true };
+    const hora = Number(new Intl.DateTimeFormat('es-MX', { timeZone: BUSINESS_TZ, hour: 'numeric', hour12: false }).format(new Date()));
+    if (hora < 9 || hora >= 11) return { fueraDeHora: true };
+  }
+  const manana = fechaMasDias(1);
+  let debenManana = 0, yaPagaron = 0, conProrroga = 0, conAuto = 0;
+  const nombres = [];
+  for (const [tel, c] of wisphubClients.entries()) {
+    if (parseFechaCorte(c.fechaCorte) !== manana || !clienteDebe(c)) continue;
+    if (pagoRecienteDe(tel, manana)) { yaPagaron++; continue; }
+    if (prorrogaVigente(tel)) { conProrroga++; continue; }
+    if ((stripeClientes.get(tel) || {}).cobroAutomatico && !/^(rechazado|sin-tarjeta)$/.test(String(((autoCobros[tel] || {})[manana] || {}).estado || ''))) { conAuto++; continue; }
+    debenManana++; if (nombres.length < 6) nombres.push(c.name || tel);
+  }
+  const vencen = Object.entries(prorrogas).filter(([, p]) => p && p.hasta === manana).length;
+  const rechazados = Object.entries(autoCobros).filter(([tel, log]) => (stripeClientes.get(tel) || {}).cobroAutomatico && Object.values(log || {}).some((per) => per && /^(rechazado|sin-tarjeta)$/.test(per.estado)) && !pagoRecienteDe(tel)).length;
+  const sinRevisar = caseLog.filter((c) => c.type === 'pago' && c.status === 'pendiente').length;
+  const desde = Date.now() - 86400000;
+  let pagosBot = 0, montoBot = 0;
+  for (const lista of stripePagosRecientes.values()) for (const p of lista || []) if (p && p.cuando >= desde) { pagosBot++; montoBot += Number(p.monto) || 0; }
+  const texto = [
+    `📋 RESUMEN DE COBRANZA · ${hoy.split('-').reverse().join('/')}`,
+    `• Cortan mañana y deben: ${debenManana}${nombres.length ? ` (${nombres.join(', ')}${debenManana > nombres.length ? '…' : ''})` : ''}`,
+    `• Ya cubiertos para mañana: ${yaPagaron} pagaron, ${conProrroga} con prórroga, ${conAuto} con automático`,
+    `• Prórrogas que vencen mañana: ${vencen}`,
+    `• Automáticos rechazados sin pagar: ${rechazados}`,
+    `• Comprobantes sin revisar: ${sinRevisar}${sinRevisar ? ' (panel → Cobranza)' : ''}`,
+    `• Pagos por el bot en 24 h: ${pagosBot} por $${montoBot.toFixed(2)}`,
+  ].join('\n');
+  let enviados = 0;
+  for (const tel of AGENT_WHATSAPP_NUMBERS) {
+    try { await avisarPorIniciativa(tel, texto); enviados++; } catch (e) { console.warn('[resumen] no salió a', tel, '·', e.message); }
+  }
+  resumenCobranzaFecha = hoy; schedulePersist();
+  return { enviados, debenManana, yaPagaron, conProrroga, conAuto, vencen, rechazados, sinRevisar, pagosBot, montoBot };
+}
+
 let _ultimoBarridoAuto = null;
 async function barrerCobroAutomatico(force = false) {
   const hechos = { avisados: 0, cobrados: 0, rechazados: 0, sinDeuda: 0, sinTarjeta: 0 };
@@ -6773,6 +6821,9 @@ if (process.env.PRUEBAS === '1') {
     for (const t of tickets.values()) if (t.estado !== 'resuelto') t.createdAt = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
     res.json(await preguntarSiYaQuedo(true));
   });
+  app.post('/api/pruebas/resumen-cobranza', async (_req, res) => {
+    res.json(await resumenCobranzaDiario(true));
+  });
   app.post('/api/pruebas/cobro-automatico', async (_req, res) => {
     res.json(await barrerCobroAutomatico(true));
   });
@@ -9087,6 +9138,9 @@ app.get('/admin/api/corte-reminders/stats', verifyAdminToken, requirePermission(
 // usuario del panel, aunque solo tuviera 'productos', podía dispararlo. Se exige
 // 'broadcast' o 'clients' (superadmin/admin pasan siempre) para no quitarle el botón a
 // quien hoy sí lo usa.
+app.post('/admin/api/cobranza/resumen', verifyAdminToken, requirePermission('clients'), async (_req, res) => {
+  res.json(await resumenCobranzaDiario(true));
+});
 app.post('/admin/api/corte-reminders/run', verifyAdminToken, requireAnyPermission(['broadcast', 'clients']), async (req, res) => {
   const r = await sweepCorteReminders(true);
   res.json(r || { error: 'No se pudo correr (¿plantilla o Wisphub sin configurar?)' });
@@ -9741,6 +9795,9 @@ const port = Number(process.env.PORT || 3000);
   // Cobro automático: cada hora mira si a alguien le toca aviso o cobro.
   setTimeout(() => barrerCobroAutomatico().catch(() => {}), 60000);
   setInterval(() => barrerCobroAutomatico().catch(() => {}), 60 * 60000);
+  // Resumen de cobranza a la oficina: se intenta cada 20 min y sale una vez, entre 9 y 11.
+  setTimeout(() => resumenCobranzaDiario().catch(() => {}), 90000);
+  setInterval(() => resumenCobranzaDiario().catch(() => {}), 20 * 60000);
 
   // 3e) Volcado del historial de conversaciones al almacén aparte (cada 60s)
   setInterval(() => flushConversations().catch(() => {}), 60000);

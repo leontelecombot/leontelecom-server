@@ -1275,6 +1275,18 @@ console.log('\n=== 17c. "CANCELÉ Y ME ESTÁN COBRANDO" ===');
   es(r.some((m) => m.a === I && /CANCELAR AUTOMÁTICO/.test(m.texto)) && r.some((m) => m.a === ASESOR && /COBRO AUTOMÁTICO activo/.test(m.texto)), 'si tiene automático, se le dice cómo quitarlo y el asesor lo sabe');
 }
 
+console.log('\n=== 17d. EL RESUMEN DE COBRANZA DE LAS 9 ===');
+{
+  const ASESOR = '529519999999';
+  let n = enviados.length;
+  const r0 = await fetch(BASE + '/api/pruebas/resumen-cobranza', { method: 'POST' }).then((x) => x.json());
+  const r = await respuestas(n, 1, 4000);
+  const msg = r.find((m) => m.a === ASESOR && /RESUMEN DE COBRANZA/.test(m.texto));
+  es(!!msg && msg.tipo === 'template', 'al asesor le llega por plantilla el resumen de cobranza del día');
+  es(!!msg && /Cortan mañana y deben: \d+/.test(msg.texto) && /Ya cubiertos para mañana: \d+ pagaron, \d+ con prórroga, \d+ con automático/.test(msg.texto) && /Comprobantes sin revisar: \d+/.test(msg.texto) && /Pagos por el bot en 24 h: \d+ por \$/.test(msg.texto), 'con quién debe mañana, quién ya está cubierto, prórrogas, automáticos rechazados, comprobantes y pagos por el bot');
+  es(r0.enviados === 1 && r0.pagosBot >= 3 && r0.montoBot > 1000, `y las cifras salen del estado real (${r0.pagosBot} pagos por $${r0.montoBot})`);
+}
+
 console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
 {
   let n = enviados.length;

@@ -514,6 +514,7 @@
           <div><label style="font-size:.78em;color:var(--muted)">Días</label><br><input id="prDias" type="number" min="1" max="31" value="3" style="width:70px"></div>
           <div style="flex:1;min-width:160px"><label style="font-size:.78em;color:var(--muted)">Motivo (opcional)</label><br><input id="prMotivo" placeholder="se le descompuso el carro" style="width:100%"></div>
           <button class="btn btn-primary" onclick="darProrroga()">Dar prórroga</button>
+          <button class="btn btn-edit" style="width:auto" onclick="mandarResumenCobranza(this)" title="Manda a los asesores, por WhatsApp, el resumen de cobranza del día (quién debe mañana, prórrogas, automáticos, comprobantes)">📋 Resumen de cobranza ahora</button>
         </div>
         <div id="prLista"><div class="empty">Cargando…</div></div>
       </div>
@@ -1718,6 +1719,14 @@
     showAlert('prAlert', 'Prórroga para ' + (nombre || tel) + ': elige los días y confirma.', 'success');
     const card = t && t.closest('.card'); if(card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const d = document.getElementById('prDias'); if(d) setTimeout(() => d.focus(), 300);
+  }
+  async function mandarResumenCobranza(btn){
+    if(btn){ btn.disabled = true; btn.textContent = 'Mandando…'; }
+    try{
+      const d = await (await fetchAuth('/admin/api/cobranza/resumen', { method:'POST' })).json();
+      showAlert('prAlert', d.enviados ? `Resumen enviado a ${d.enviados} asesor(es): ${d.debenManana} deben mañana, ${d.sinRevisar} comprobantes sin revisar.` : 'No se pudo mandar (¿números de asesor o plantilla sin configurar?).', d.enviados ? 'success' : 'error');
+    }catch(e){ showAlert('prAlert','No se pudo mandar el resumen.','error'); }
+    if(btn){ btn.disabled = false; btn.textContent = '📋 Resumen de cobranza ahora'; }
   }
   async function darProrroga(){
     const telefono = document.getElementById('prTel').value.trim();
