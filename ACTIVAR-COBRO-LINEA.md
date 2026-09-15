@@ -445,13 +445,13 @@ node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  51 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  # 291 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
+node verificar-whatsapp-leon.mjs  # 296 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**661 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
+**666 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.

@@ -3549,16 +3549,23 @@ const VENTANA_AVISAR_ANTES_MS = 2 * 3600 * 1000; // tocarle el hombro 2 h antes
  * Es preventivo; el reintento con plantilla al fallar un aviso sigue estando
  * como red por debajo.
  */
-async function sweepAgentWindow() {
+// A quiénes hay que cuidarles la ventana: los asesores y quien decide las prórrogas
+// (sus botones de "dar 3 días" solo llegan con la ventana abierta).
+function numerosConVentana() {
+  return [...new Set([...AGENT_WHATSAPP_NUMBERS, PRORROGA_WHATSAPP_NUMBER].filter(Boolean))];
+}
+async function sweepAgentWindow(force = false) {
+  const hechos = { recordados: [] };
   try {
-    if (!AGENT_WHATSAPP_NUMBERS.length) return;
+    const numeros = numerosConVentana();
+    if (!numeros.length) return hechos;
     // Nunca de madrugada: un recordatorio a las 3 a.m. nadie lo va a tocar y
     // solo despierta a alguien. Entre 8:00 y 21:00 de México.
     const { minutesOfDay } = mexicoNow();
-    if (minutesOfDay < 480 || minutesOfDay > 1260) return;
+    if (!force && (minutesOfDay < 480 || minutesOfDay > 1260)) return hechos;
 
     const ahora = Date.now();
-    for (const num of AGENT_WHATSAPP_NUMBERS) {
+    for (const num of numeros) {
       const ultimo = agentLastInbound.get(num);
       // Sin dato = nunca ha escrito, o se perdió en un reinicio. Se asume lo
       // peor (ventana cerrada) y se le avisa: equivocarse hacia el aviso de más
@@ -3584,6 +3591,7 @@ async function sweepAgentWindow() {
           await sendWhatsAppTemplate(num, `${texto} (Responde cualquier cosa a este chat.)`);
         }
         agentPingSent.set(num, new Date().toISOString());
+        hechos.recordados.push(num);
         schedulePersist();
         console.log(`[ventana] Recordatorio enviado a ${num} (quedaban ${horas} h)`);
       } catch (e) {
@@ -3591,6 +3599,7 @@ async function sweepAgentWindow() {
       }
     }
   } catch (e) { console.error('[ventana] sweep error:', e.message); }
+  return hechos;
 }
 
 /**
@@ -7143,7 +7152,15 @@ if (process.env.PRUEBAS === '1') {
     for (const t of tickets.values()) if (t.estado !== 'resuelto') t.createdAt = new Date(Date.now() - dias * 24 * 3600 * 1000).toISOString();
     res.json(await preguntarSiYaQuedo(true));
   });
-  app.post('/api/pruebas/entiende-prorroga', (req, res) => {
+  app.post('/api/pruebas/ventana', async (req, res) => {
+  if (process.env.PRUEBAS !== '1') return res.status(404).end();
+  const num = _normAgentNum(String((req.body || {}).numero || ''));
+  const horas = Number((req.body || {}).horas || 0);
+  if (num && horas) { agentLastInbound.set(num, new Date(Date.now() - horas * 3600 * 1000).toISOString()); agentPingSent.delete(num); }
+  const r = await sweepAgentWindow(true);
+  res.json({ ok: true, ...r, ultimo: num ? agentLastInbound.get(num) || null : null, numeros: numerosConVentana() });
+});
+app.post('/api/pruebas/entiende-prorroga', (req, res) => {
   if (process.env.PRUEBAS !== '1') return res.status(404).end();
   const frases = Array.isArray((req.body || {}).frases) ? req.body.frases : [];
   res.json({ resultados: frases.map((f) => ({ frase: String(f), es: isProrrogaRequest(String(f)) })) });
@@ -8449,7 +8466,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
    * aquí para saber cuándo está por cerrarse y avisarle antes, y se borra el
    * recordatorio pendiente porque ya no hace falta.
    */
-  if (isAgentNumber(from)) {
+  if (isAgentNumber(from) || esQuienApruebaProrrogas(from)) {
     const num = _normAgentNum(from);
     agentLastInbound.set(num, new Date().toISOString());
     agentPingSent.delete(num);

@@ -1680,6 +1680,27 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
     const lista = await fetch(BASE + '/admin/api/comprobantes', { headers: H_ }).then((x) => x.json());
     es((lista.comprobantes || []).some((c) => c.telefono === E), 'y el comprobante de Elena está en el panel por revisar');
   }
+  // PREVENTIVO: antes de que se cierre la ventana, al asesor y al jefe se les toca el hombro por plantilla.
+  {
+    const ventana = async (numero, horas) => fetch(BASE + '/api/pruebas/ventana', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ numero, horas }) }).then((x) => x.json());
+    const v0 = await ventana('', 0);
+    es(Array.isArray(v0.numeros) && v0.numeros.includes(ASESOR) && v0.numeros.includes(JEFE), 'la ventana de 24 h se cuida para los asesores Y para el jefe');
+    // El asesor acaba de escribir (sección anterior): no se le molesta.
+    es(!v0.recordados.includes(ASESOR), 'al asesor que escribió hace un rato no se le recuerda nada');
+    // El jefe lleva 23 h sin escribirle al bot: le llega el recordatorio por plantilla, una vez.
+    n = enviados.length;
+    const v1 = await ventana(JEFE, 23);
+    r = await respuestas(n, 1);
+    const rec = r.find((m) => m.a === JEFE && m.tipo === 'template' && /toca el botón|Responde cualquier cosa/.test(m.texto));
+    es(v1.recordados.includes(JEFE) && !!rec && /se cierra en ~1 h/.test(rec.texto), 'al jefe, a 1 h de que se le cierre la ventana, le llega el recordatorio por plantilla');
+    n = enviados.length;
+    const v2 = await ventana('', 0);
+    es(!v2.recordados.includes(JEFE) && enviados.length === n, 'y no se le repite en el mismo día');
+    // En cuanto el jefe escribe cualquier cosa, la ventana se reabre y se olvida el recordatorio.
+    await entra(JEFE, 'ok'); await respuestas(n, 1, 2500);
+    const v3 = await ventana('', 0);
+    es(!v3.recordados.includes(JEFE) && new Date(v3.numeros ? (await ventana('', 0)).ultimo || Date.now() : 0).getTime() <= Date.now(), 'cuando escribe, la ventana se reabre y ya no hay nada que recordar');
+  }
   // La ayuda del asesor menciona NO PRORROGA.
   n = enviados.length;
   await entra(ASESOR, 'ayuda');
