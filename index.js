@@ -1070,10 +1070,14 @@ function getSession(chatId) {
 
 function setSession(chatId, session) {
   sessions.set(String(chatId), session);
+  // Las de pago se guardan: son las que no pueden perderse en un reinicio.
+  if (session && /^pago_(otro_|servicio_)/.test(String(session.state || ''))) schedulePersist();
 }
 
 function clearSession(chatId) {
+  const habia = sessions.get(String(chatId));
   sessions.delete(String(chatId));
+  if (habia && /^pago_(otro_|servicio_)/.test(String(habia.state || ''))) schedulePersist();
 }
 
 // In-memory folio store - tracks active appointment folios for cancellation
@@ -1249,6 +1253,14 @@ function buildStateSnapshot() {
     stripePagosRecientes: Object.fromEntries(stripePagosRecientes),
     prorrogas,
     autoCobros,
+    /*
+     * Solo las sesiones de PAGO (a quién le paga, qué contrato, cuántos
+     * meses). Son las que duelen si el servidor se reinicia a media
+     * conversación: el cliente ya dijo "es la cuenta de mi mamá", toca
+     * Tarjeta, y de pronto el bot le cotiza la suya. Caducan solas a la
+     * media hora, así que guardar las demás no aporta nada.
+     */
+    sesionesDePago: Object.fromEntries([...sessions].filter(([, v]) => v && /^pago_(otro_|servicio_)/.test(String(v.state || '')))),
     stripeRegistrosPendientes: stripeRegistrosPendientes.slice(-REGISTRO_PENDIENTE_MAX),
     /*
      * Los avisos de Stripe ya procesados.
@@ -1437,6 +1449,12 @@ function hydrateState(s) {
   if (s.corteReminders && typeof s.corteReminders === 'object') corteReminders = s.corteReminders;
   if (s.prorrogas && typeof s.prorrogas === 'object') prorrogas = s.prorrogas;
   if (s.autoCobros && typeof s.autoCobros === 'object') autoCobros = s.autoCobros;
+  if (s.sesionesDePago && typeof s.sesionesDePago === 'object') {
+    const limite = Date.now() - 30 * 60 * 1000;   // misma vigencia que la sesión de pago
+    for (const [k, v] of Object.entries(s.sesionesDePago)) {
+      if (v && v.data && Number(v.data.desde) > limite) sessions.set(String(k), v);
+    }
+  }
   if (typeof s.lastCorteRunDate === 'string') lastCorteRunDate = s.lastCorteRunDate;
   if (Array.isArray(s.corteRunLog)) corteRunLog = s.corteRunLog.filter(r => r && r.fecha).slice(0, CORTE_RUN_LOG_MAX);
   if (Array.isArray(s.corteTemplates)) corteTemplates = s.corteTemplates;

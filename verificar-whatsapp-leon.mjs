@@ -223,8 +223,7 @@ const restaurar = () => {
   else if (fs.existsSync(RUTA_STORE)) fs.unlinkSync(RUTA_STORE);
 };
 
-const srv = spawn('node', ['index.js'], {
-  env: {
+const ENV_SERVIDOR = {
     ...process.env,
     PORT: String(PUERTO),
     PRUEBAS: '1',
@@ -247,9 +246,8 @@ const srv = spawn('node', ['index.js'], {
     CORTE_REMINDER_ENABLED: 'true',
     WHATSAPP_AVISO_TEMPLATE: 'aviso_prueba',
     SERVER_BASE_URL: BASE,
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+};
+const srv = spawn('node', ['index.js'], { env: ENV_SERVIDOR, stdio: ['ignore', 'pipe', 'pipe'] });
 const log = [];
 srv.stdout.on('data', (d) => log.push(String(d)));
 srv.stderr.on('data', (d) => log.push(String(d)));
@@ -808,6 +806,33 @@ console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ==
   es(fd.prorroga && /carro/.test(fd.prorroga.motivo), 'Diego: se ve su prórroga con el motivo');
   const g = await buscar(G); const fg = (g.results || g.clients || g.clientes || [g])[0] || g;
   es(!fg.ultimoPagoEnLinea && !fg.prorroga && !fg.adelantadoHasta && !fg.cobroAutomatico, 'Gloria: nada de eso, porque no ha pasado nada con ella');
+}
+
+console.log('\n=== 14. SI EL SERVIDOR SE REINICIA A MEDIA CONVERSACIÓN, NO SE PIERDE A QUIÉN LE PAGA ===');
+{
+  // A dice que va a pagar la de Ana Pérez y se queda a punto de elegir cómo.
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n = enviados.length;
+  await entra(A, 'a nombre de Ana Pérez');
+  await respuestas(n);
+  n = enviados.length;
+  await toca(A, 'pago_otro_es_0');
+  await respuestas(n);
+  // Se espera a que se guarde el estado y se reinicia el servidor.
+  await new Promise((r) => setTimeout(r, 2500));
+  srv.kill('SIGKILL');
+  await new Promise((r) => setTimeout(r, 500));
+  const srv2 = spawn('node', ['index.js'], { env: ENV_SERVIDOR, stdio: ['ignore', 'pipe', 'pipe'] });
+  srv2.stdout.on('data', (d) => log.push(String(d))); srv2.stderr.on('data', (d) => log.push(String(d)));
+  let vivo2 = false;
+  for (let i = 0; i < 60 && !vivo2; i++) { try { await fetch(BASE + '/'); vivo2 = true; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+  es(vivo2, 'el servidor volvió a levantar');
+  await new Promise((r) => setTimeout(r, 1200));
+  n = enviados.length;
+  await toca(A, 'pago_tarjeta');
+  const r = await respuestas(n);
+  es(dice(r, /La mensualidad de \*Ana Pérez\* es de/), 'después del reinicio, sigue cotizando la cuenta de Ana Pérez, no la suya');
+  srv2.kill('SIGKILL');
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);
