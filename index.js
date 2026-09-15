@@ -3154,7 +3154,10 @@ async function handleAgentCommand(agentNumber, text) {
       return;
     }
     // Si ya fue gestionado (no queda pendiente), avisamos y no repetimos el "gracias".
-    const eraPago = caseLog.some((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
+    const casoPago = caseLog.find((c) => c.clientId === clientId && c.status === 'pendiente' && c.type === 'pago');
+    const eraPago = !!casoPago;
+    // Si el comprobante era de OTRA cuenta ("Coincide: Ana · 52951…"), el titular también se entera.
+    const titularAjeno = (String((casoPago || {}).resumen || '').match(/Coincide: [^·\n]+· (\d{12})/) || [])[1];
     const marcados = markCases(clientId, 'recibido', agentNumber);
     if (!marcados && !pendingAgentRequests.has(clientId)) {
       // Si quedó anotado quién lo gestionó, se dice; si es un caso viejo de
@@ -3178,7 +3181,12 @@ async function handleAgentCommand(agentNumber, text) {
         ? '✅ Tu pago quedó registrado. ¡Gracias! 🙌' + (suspendidoAun ? ' Tu servicio se reactiva en unos minutos; si en una hora sigue sin navegar, reinicia tu módem o escríbenos.' : '')
         : '✅ ¡Recibido, gracias! 🙌');
     } catch (e) { console.error('[Agent] RECIBIDO notify client error:', e.message); }
-    await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId}). El bot sigue atendiéndolo.`);
+    if (titularAjeno && titularAjeno !== clientId) {
+      try {
+        await avisarPorIniciativa(titularAjeno, '✅ Recibimos el pago de tu servicio de internet (lo mandó otra persona por ti) y ya quedó registrado. ¡Gracias! 🙌');
+      } catch (e) { console.error('[Agent] RECIBIDO aviso al titular:', e.message); }
+    }
+    await sendWhatsAppMessage(agentNumber, `✅ Marcado como recibido. Le avisé a *${cName}* (${clientId})${titularAjeno && titularAjeno !== clientId ? ` y al titular (${titularAjeno})` : ''}. El bot sigue atendiéndolo.`);
     // Avisa a los demás asesores que este caso ya fue gestionado.
     await notifyOtherAgents(agentNumber, `✅ El caso de *${cName}* (${clientId}) ya fue *marcado como recibido* por ${describeAgent(agentNumber)}.`);
     return;

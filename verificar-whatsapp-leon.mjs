@@ -976,6 +976,20 @@ console.log('\n=== 19. CUANDO LA OFICINA DA POR BUENO UN COMPROBANTE, EL CLIENTE
   es(!!aG && /Tu pago quedó registrado/.test(aG.texto), 'a Gloria le llega "tu pago quedó registrado" (no un "recibido" genérico)');
   es(!!aG && /se reactiva en unos minutos/.test(aG.texto), 'y como estaba suspendida, le dice que se reactiva');
   es(!!aG && aG.tipo === 'template', 'por plantilla, porque el comprobante pudo ser de hace días');
+
+  // Ahora Andrés manda el comprobante de la cuenta de Diego: al dar por bueno, Diego también se entera.
+  n = enviados.length;
+  await fetch(BASE + '/webhook/whatsapp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { messages: [{ from: '521' + A.slice(2), type: 'document', document: { id: 'doc2', filename: 'pago-diego.pdf', mime_type: 'application/pdf' } }], contacts: [{ profile: { name: 'Andrés' } }] } }] }] }) });
+  await respuestas(n, 1, 4000);
+  n = enviados.length;
+  await entra(A, 'Diego Ruiz');
+  await respuestas(n, 1, 4000);
+  n = enviados.length;
+  await entra('529519999999', 'RECIBIDO 951 111 1111');
+  const r2 = await respuestas(n, 3);
+  es(r2.some((m) => m.a === D && /lo mandó otra persona por ti/.test(m.texto)), 'Diego (el titular) se entera de que su pago quedó registrado aunque el comprobante lo mandó Andrés');
+  es(r2.some((m) => m.a === '529519999999' && /y al titular/.test(m.texto)), 'y al asesor se le dice que también se le avisó al titular');
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);
