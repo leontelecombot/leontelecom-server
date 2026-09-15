@@ -4128,6 +4128,10 @@ async function sweepCorteReminders(force = false) {
          * dinero en la cabeza. Solo a quien de verdad le va a salir la opción;
          * a los demás no se les promete nada.
          */
+        const fichaViva = fichasOxxo.get(phone);
+        if (fichaViva && Date.now() - fichaViva.cuando < 4 * 86400000) {
+          msgCorte = (msgCorte.trim() + ' 🏪 Si ya pagaste tu ficha de OXXO, no hagas caso a este aviso: la tienda tarda unas horas en reportarlo y en cuanto llegue se registra solo.').slice(0, 900);
+        }
         if (autoFallo) {
           msgCorte = (msgCorte.trim() + (autoFallo === 'sin-tarjeta'
             ? ' ⚠️ Tu cobro automático de este mes no se hizo porque ya no hay una tarjeta guardada.'
@@ -4640,6 +4644,13 @@ async function preguntarServicioDelComprobante(chatId, titular, sendMsg) {
   } catch (e) { console.warn('[comprobante] no se pudo preguntar el servicio:', e.message); return false; }
 }
 
+/*
+ * Fichas de OXXO generadas y todavía sin reportar. La tienda tarda horas (a
+ * veces un día) en avisar: si en medio corre el aviso de corte, el que ya
+ * pagó en caja no debe recibir "mañana te cortamos" a secas.
+ */
+const fichasOxxo = new Map();   // telefono (cuenta) -> { cuando, sesionId }
+
 // El último link o ficha que se le mandó a cada quien, por si "no me abre".
 const ultimoLinkPago = new Map();   // chatId -> { url, forma, cuando, reintento }
 
@@ -4789,6 +4800,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         });
         if (paraOtro) clearSession(chatId);
         ultimoLinkPago.set(String(chatId), { url: pago.url, forma: _pt, cuando: Date.now() });
+        if (forma === 'oxxo') fichasOxxo.set(telCuenta, { cuando: Date.now(), sesionId: pago.sesionId || '' });
 
         // Cuando paga por otro, el servicio que se reactiva no es el suyo.
         const suServicio = paraOtro ? `el servicio de *${c.name || telCuenta}*` : 'tu servicio';
@@ -7555,6 +7567,7 @@ app.post('/webhook/stripe', async (req, res) => {
 
     if (o.metadata && o.metadata.tipo === 'mensualidad-leontelecom'
         && evento.type === 'checkout.session.async_payment_failed') {
+      fichasOxxo.delete(String(o.metadata.telefono || '').replace(/\D/g, ''));
       const tel = String(o.metadata.telefono || '').replace(/\D/g, '');
       const quien = String(o.metadata.pagadoPor || tel).replace(/\D/g, '');
       if (quien) {
@@ -7589,6 +7602,7 @@ app.post('/webhook/stripe', async (req, res) => {
       const telefono = String(o.metadata.telefono || '').replace(/\D/g, '');
       const pagadoPor = String(o.metadata.pagadoPor || telefono).replace(/\D/g, '');
       if (telefono) {
+        fichasOxxo.delete(telefono);
         markCases(telefono, 'recibido', 'stripe-auto');
         const doble = registrarPagoYRevisarDoble({
           telefono, monto: (o.amount_total || 0) / 100,

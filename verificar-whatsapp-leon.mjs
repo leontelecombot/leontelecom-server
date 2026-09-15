@@ -997,8 +997,15 @@ console.log('\n=== 11f. LA CLABE DE LA CUENTA DE OTRO DICE DE QUIÉN ES ===');
 console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN TIENE PRÓRROGA ===');
 {
   const ASESOR = '529519999999';
-  // El asesor le da 3 días a Diego con un solo mensaje.
+  // Andrés le saca una ficha de OXXO a Gloria (que se paga en caja y tarda en reportarse).
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
   let n = enviados.length;
+  await entra(A, 'a nombre de Gloria Núñez'); await respuestas(n);
+  n = enviados.length; await toca(A, 'pago_otro_es_0'); await respuestas(n);
+  n = enviados.length; await toca(A, 'pago_con_oxxo'); await respuestas(n);
+  es(stripe.sesiones.at(-1).telefono === G && stripe.sesiones.at(-1).forma === 'oxxo', 'queda una ficha de OXXO viva para la cuenta de Gloria');
+  // El asesor le da 3 días a Diego con un solo mensaje.
+  n = enviados.length;
   await entra(ASESOR, 'PRORROGA 951 444 4444 3 se le descompuso el carro');
   let r = await respuestas(n, 2);
   es(r.some((m) => m.a === ASESOR && /Prórroga registrada para \*Diego Ruiz\*/.test(m.texto)), 'el asesor registra una prórroga con "PRORROGA <tel> 3"');
@@ -1034,6 +1041,7 @@ console.log('\n=== 12. EL AVISO DE CORTE NO LE LLEGA A QUIEN YA PAGÓ NI A QUIEN
   es(c.sent === 1, `se manda UN aviso de corte (a Gloria, que sí debe) · enviados ${c.sent}`);
   es(!r.some((m) => m.a === A), 'Andrés NO: pagó seis meses adelantados y está cubierto');
   es(r.some((m) => m.a === G), 'Gloria recibe el aviso');
+  es(r.some((m) => m.a === G && /Si ya pagaste tu ficha de OXXO, no hagas caso/.test(m.texto)), 'y como tiene una ficha de OXXO viva, el aviso le aclara que si ya la pagó no haga caso');
   es(!r.some((m) => m.a === B), 'Ana Pérez NO: pagó por el bot hace un rato, aunque Wisphub todavía la tenga como deudora');
   es(!r.some((m) => m.a === D), 'Diego NO: tiene prórroga');
   es(c.yaPagaron === 2 && c.conProrroga === 1, `y la corrida lo cuenta: ${c.yaPagaron} ya pagaron, ${c.conProrroga} con prórroga`);
