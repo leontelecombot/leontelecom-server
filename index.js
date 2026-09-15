@@ -8850,6 +8850,15 @@ app.get('/admin/api/client-lookup', verifyAdminToken, requirePermission('clients
       if (out.length >= 20) break;
     }
   }
+  // El padrón sincronizado guarda una fila por teléfono, así que quien tiene
+  // dos contratos aparece con uno solo. Con pocos resultados se le pregunta a
+  // Wisphub por todos sus servicios para que la ficha los enseñe.
+  if (out.length && out.length <= 5) {
+    for (const c of out) {
+      const varios = await serviciosDeLaCuenta(c.phone);
+      if (varios.length > 1) c.contratos = varios;
+    }
+  }
   res.json({ results: out, source: 'sync', lastSync: lastWisphubSync, total: out.length });
 });
 

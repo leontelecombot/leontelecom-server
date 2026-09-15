@@ -1122,6 +1122,11 @@ console.log('\n=== 13. LA FICHA DEL CLIENTE EN EL PANEL LO DICE DE UN VISTAZO ==
   }
   const i = await buscar(I); const fi = (i.results || i.clients || i.clientes || [i])[0] || i;
   es(fi.cobroAutomatico && fi.autoEstado && fi.autoEstado.estado === 'rechazado' && /rechazada/.test(fi.autoEstado.texto), 'Inés: se ve que su automático de este mes fue rechazado, para no decirle "no te preocupes"');
+  // Buscado por nombre (el padrón guarda una fila por teléfono), Fermín trae sus dos contratos; Gloria no trae la lista.
+  const fer = await buscar('Fermín'); const ff = (fer.results || [])[0] || {};
+  es(Array.isArray(ff.contratos) && ff.contratos.length === 2 && ff.contratos.some((x) => /Local/.test(x.etiqueta) && /Suspendido/.test(x.estado)) && ff.contratos.some((x) => /Casa/.test(x.etiqueta) && x.fechaCorte), 'Fermín buscado por nombre: la ficha trae sus 2 contratos con estado y corte');
+  const glo = await buscar('Gloria'); const fgl = (glo.results || [])[0] || {};
+  es(fgl.name && !fgl.contratos, 'Gloria buscada por nombre: sin lista de contratos, porque tiene uno');
 }
 
 console.log('\n=== 14. SI EL SERVIDOR SE REINICIA A MEDIA CONVERSACIÓN, NO SE PIERDE A QUIÉN LE PAGA ===');
@@ -1517,5 +1522,10 @@ console.log('\n=== 20. DESDE EL PANEL: COMPROBANTES POR REVISAR Y "PAGO RECIBIDO
 }
 
 console.log(`\n${ok} bien, ${mal} mal`);
+// MANTENER=segundos: deja el servidor y los falsos vivos (para mirar el panel con un navegador) y luego restaura.
+if (Number(process.env.MANTENER) > 0) {
+  console.log(`\n[mantener] panel en ${BASE}/admin (admin / prueba-local-larga) durante ${process.env.MANTENER} s…`);
+  await new Promise((r) => setTimeout(r, Number(process.env.MANTENER) * 1000));
+}
 if (mal) { console.log('\n--- registro del servidor (últimas líneas) ---\n' + log.join('').split('\n').slice(-40).join('\n')); }
 salir(mal ? 1 : 0);

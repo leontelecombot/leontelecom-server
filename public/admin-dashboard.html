@@ -1374,9 +1374,17 @@
       + '<div style="font-size:.84em;color:var(--muted);margin:4px 0">📱 '+esc(c.phone||'—')+' · Plan: '+esc(c.plan||'—')+(c.precioPlan?(' ($'+esc(String(c.precioPlan))+')'):'')+'</div>'
       + '<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:.9em;margin-top:6px">'
       +   '<div>💰 Saldo: <strong>'+saldo+'</strong></div>'
-      +   '<div>📅 Corte: <strong>'+esc(c.fechaCorte||'—')+'</strong></div>'
+      +   '<div>📅 Corte: <strong>'+esc(c.fechaCorte?fechaCorta(c.fechaCorte):'—')+'</strong></div>'
       +   '<div>🧾 Facturas: <strong>'+fact+'</strong></div>'
       + '</div>'
+      // Con varios contratos en el mismo teléfono, la oficina necesita verlos
+      // todos: el aviso, la prórroga y el pago se deciden contrato por contrato.
+      + ((c.contratos||[]).length>1
+          ? '<div style="font-size:.85em;margin-top:6px;padding:8px 10px;background:#f6f3ff;border-radius:8px">🏠 <strong>'+c.contratos.length+' contratos en este teléfono</strong>'
+            + '<ul style="margin:4px 0 0 18px;padding:0">'
+            + c.contratos.map(function(x){ var susp=/suspend|cort/i.test(String(x.estado||'')); return '<li>'+esc(x.etiqueta||('Servicio '+x.id))+': '+(susp?'🔴 suspendido':'🟢 activo')+(x.fechaCorte?' · corte '+esc(fechaCorta(x.fechaCorte)):'')+(x.precio?' · $'+Number(x.precio).toFixed(2):'')+'</li>'; }).join('')
+            + '</ul></div>'
+          : '')
       /*
        * ¿Le sale la opción de pagar en línea, y por qué no?
        *
