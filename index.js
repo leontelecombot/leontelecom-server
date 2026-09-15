@@ -4860,7 +4860,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId, 'No encontré una cuenta con eso. Escríbeme el *número de teléfono* que tiene registrado, o el *nombre completo* como aparece en su contrato. Si prefieres salir, escribe *menú*.');
         return;
       }
-      setSession(chatId, { state: 'pago_otro_confirmar', data: { candidatos: encontrados, desde: Date.now() } });
+      setSession(chatId, { state: 'pago_otro_confirmar', data: { candidatos: encontrados, meses: _ses.data.meses || 1, desde: Date.now() } });
       /*
        * WhatsApp corta los títulos a 20 letras. Dos "María del Carmen López"
        * distintas se verían iguales; si chocan, se les pega el final del
@@ -4883,7 +4883,7 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const elegido = (_ses.data.candidatos || [])[Number(_pt.slice(-1))];
       if (!elegido) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *OTRO* para buscar de nuevo.'); return; }
       // Se deja la cuenta elegida en la sesión: el cobro de tarjeta/OXXO la lee.
-      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, desde: Date.now() } });
+      setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: elegido.tel, meses: _ses.data.meses || 1, desde: Date.now() } });
       let cuanto = '';
       try {
         // Con varios contratos no se adelanta un monto que puede ser del otro: se pregunta cuál al pagar.
@@ -4919,7 +4919,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
     const _aNombreDe = (text.match(/a nombre de\s+(?:la\s+se[ñn]ora?\s+|el\s+se[ñn]or\s+|don\s+|do[ñn]a\s+)?([^\n,.;]{4,60})/i) || [])[1];
     if (_aNombreDe && !_enOtraCosa && !_conComprobante && !_isBtn
         && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
-      setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
+      // "3 meses a nombre de mi mamá": los meses viajan con la búsqueda hasta el cobro.
+      const _mesesAjenos = (_pt.match(/(\d{1,2}|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\s*meses/) || [])[1];
+      const _palabrasM = { dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12 };
+      const _nMeses = _mesesAjenos ? Math.min(12, Math.max(1, _palabrasM[_mesesAjenos] || Number(_mesesAjenos) || 1)) : 1;
+      setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now(), ...(_nMeses > 1 ? { meses: _nMeses } : {}) } });
       // "a nombre de mi mamá Ana Pérez": el parentesco sobra para buscar.
       const nombreLimpio = _aNombreDe.trim().replace(/^(mi|la|el|de mi|de la|del)\s+(mam[aá]|pap[aá]|esposa?|hij[oa]|herman[oa]|suegr[ao]|abuel[oa]|t[ií][ao]|vecin[oa]|se[ñn]ora?|patr[oó]n[a]?|jef[ea])\s+/i, '').trim();
       return handleChatMessage(chatId, nombreLimpio || _aNombreDe.trim(), sendMsg);

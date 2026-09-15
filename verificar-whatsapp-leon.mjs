@@ -94,6 +94,7 @@ const stripeFalso = createServer((req, res) => {
         pagadoPor: p.get('metadata[pagadoPor]'),
         forma: p.get('payment_method_types[0]'),
         mensualidad: p.get('metadata[mensualidad]'),
+        meses: p.get('metadata[meses]') || '1',
         customer: p.get('customer') || '',
         guardarTarjeta: p.get('metadata[guardarTarjeta]') || 'no',
         futuro: p.get('payment_intent_data[setup_future_usage]') || '',
@@ -668,6 +669,25 @@ console.log('\n=== 9c. QUIEN PAGÓ POR OTRO PREGUNTA SI YA QUEDÓ ===');
   const r = await respuestas(n);
   es(dice(r, /el pago que hiciste para \*Ana Pérez\* ya está registrado/), 'Andrés pagó lo de Ana Pérez y pregunta "¿ya quedó?": se le confirma ese pago, no se le pide comprobante');
   es(!dice(r, /mándame la foto/), 'y no se le pide la foto');
+
+  // "Quiero pagar 3 meses a nombre de Ana Pérez": los meses no se pierden al buscar la cuenta.
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  let n2 = enviados.length;
+  await entra(A, 'Quiero pagar 3 meses a nombre de Ana Pérez');
+  let r2 = await respuestas(n2);
+  const bot2 = conBotones(r2);
+  es(bot2 && bot2.botones.length === 2, 'con "3 meses a nombre de Ana Pérez" busca la cuenta y pregunta cuál Ana');
+  n2 = enviados.length;
+  await toca(A, 'pago_otro_es_' + bot2.botones.findIndex((x) => x.title === 'Ana Pérez'));
+  r2 = await respuestas(n2);
+  es(dice(r2, /Su mensualidad es de \*\$1320\.00\* \(3 meses\)/), 'y al elegirla cotiza los 3 meses ($440 que debe + 2 meses de $440), sin que tenga que repetirlo');
+  n2 = enviados.length;
+  const antes2 = stripe.sesiones.length;
+  await toca(A, 'pago_con_tarjeta');
+  await respuestas(n2);
+  const s2 = stripe.sesiones[antes2];
+  es(s2 && s2.telefono === B && s2.meses === '3' && s2.mensualidad === '132000', 'el link va a la cuenta de Ana con 3 meses y $1,320');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
 }
 
 console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE PAGA ESE ===');
