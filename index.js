@@ -4572,6 +4572,11 @@ async function startReportFlow(chatId, text, sendMsg) {
   }
 }
 
+// Frases que NO son la respuesta a "¿cuál vas a pagar?" aunque lleguen en ese paso.
+function _pideDatosPagoTemprano(pt) {
+  return /^(pagar|menu|men[uú]|hola|buen|salir|cancelar|otro|a nombre de)/.test(String(pt || ''));
+}
+
 async function handleChatMessage(chatId, text, sendMsg) {
   try {
     // Anti-flood: si UN número manda demasiados mensajes en poco tiempo, ignoramos el
@@ -4889,8 +4894,35 @@ async function handleChatMessage(chatId, text, sendMsg) {
      */
     const _ses = sesionDePagoAjeno(chatId);
     // Eligió cuál de sus servicios paga: se guarda y se sigue por donde iba.
-    if (_ses.state === 'pago_servicio_elegir' && /^pago_servicio_\d$/.test(_pt)) {
-      const el = (_ses.data.servicios || [])[Number(_pt.slice(-1))];
+    /*
+     * "¿Cuál vas a pagar?" también se contesta escribiendo: "el local", "la
+     * casa", "el de Juárez", "el suspendido", "el primero", "los dos" no (uno
+     * a la vez). Se busca la palabra en la etiqueta del contrato; si solo uno
+     * coincide, es ese.
+     */
+    let _ptServicio = _pt;
+    if (_ses.state === 'pago_servicio_elegir' && !_isBtn && !/^pago_servicio_\d$/.test(_pt)) {
+      const lista = _ses.data.servicios || [];
+      const quitarAcentos = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const q = quitarAcentos(_pt).replace(/[¡!¿?.,]/g, ' ').replace(/\b(el|la|los|las|de|del|que|es|mi|quiero|pagar|pago|ese|esa|este|esta|uno|una)\b/g, ' ').trim();
+      let idx = -1;
+      const ordinal = q.match(/^(primer[oa]?|1|segund[oa]?|2|tercer[oa]?|3)$/);
+      if (ordinal) idx = /^(primer|1)/.test(ordinal[1]) ? 0 : /^(segund|2)/.test(ordinal[1]) ? 1 : 2;
+      else if (/^(suspendid[oa]|cortad[oa]|sin servicio|debe|deb[oa])$/.test(q)) {
+        const susp = lista.map((x, i) => (/suspend|cort/i.test(x.estado) ? i : -1)).filter((i) => i >= 0);
+        if (susp.length === 1) idx = susp[0];
+      } else if (q.length >= 3) {
+        const hits = lista.map((x, i) => (quitarAcentos(x.etiqueta).includes(q) ? i : -1)).filter((i) => i >= 0);
+        if (hits.length === 1) idx = hits[0];
+      }
+      if (idx >= 0 && lista[idx]) _ptServicio = 'pago_servicio_' + idx;
+      else if (q.length >= 3 && !/^(men[uú]|salir|cancelar|volver)$/.test(q) && !_pideDatosPagoTemprano(_pt)) {
+        await sendMsg(chatId, 'No supe cuál de los dos: toca el botón del servicio que vas a pagar. 👆');
+        return;
+      }
+    }
+    if (_ses.state === 'pago_servicio_elegir' && /^pago_servicio_\d$/.test(_ptServicio)) {
+      const el = (_ses.data.servicios || [])[Number(_ptServicio.slice(-1))];
       if (!el) { clearSession(chatId); await sendMsg(chatId, 'Esa opción ya no está. Escribe *pagar* para empezar de nuevo.'); return; }
       setSession(chatId, { state: 'pago_otro_listo', data: { pagarPara: _ses.data.pagarPara || '', servicioId: el.id, usuario: el.usuario, etiqueta: el.etiqueta, meses: _ses.data.meses || 1, desde: Date.now() } });
       return handleChatMessage(chatId, _ses.data.siguiente || (_ses.data.viaClabe ? 'pago_clabe' : 'pago_tarjeta'), sendMsg);

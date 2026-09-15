@@ -724,12 +724,15 @@ console.log('\n=== 10. UN TELÉFONO CON DOS CONTRATOS: SE PREGUNTA CUÁL, Y SE P
   es(dice(r, /Local, Av\. Juárez\*: 🔴 suspendido · corte \d\d\/\d\d · debe \*\$500\.00\*/) && dice(r, /Casa, Col\. Centro\*: 🟢 activo .* al corriente/), 'y en la misma pregunta ve cuál debe y cuánto, para no tener que adivinar');
   es(bot.botones.length === 2 && bot.botones.some((b) => /Local/.test(b.title)) && bot.botones.some((b) => /Casa/.test(b.title)), 'con un botón por contrato (casa y local)');
   es(bot.botones.some((b) => /🔴/.test(b.title) && /Local/.test(b.title)), 'y el suspendido marcado en rojo');
-  const cual = bot.botones.findIndex((b) => /Local/.test(b.title));
-
+  // Contesta escribiendo, no con el botón: "el de la casa" no vale (queremos el local)... primero algo ambiguo, luego claro.
   n = enviados.length;
-  await toca(F, 'pago_servicio_' + cual);
+  await entra(F, 'el de internet');
   r = await respuestas(n);
-  es(dice(r, /Tu mensualidad es de \*\$500\.00\*/), 'elige el local y se cotiza la deuda del LOCAL ($500), no la de la casa');
+  es(dice(r, /No supe cuál de los dos/), 'si escribe algo que no distingue ("el de internet"), le pide tocar el botón');
+  n = enviados.length;
+  await entra(F, 'El local');
+  r = await respuestas(n);
+  es(dice(r, /Tu mensualidad es de \*\$500\.00\*/), 'escribe "el local" y se cotiza la deuda del LOCAL ($500), no la de la casa');
 
   n = enviados.length;
   const antes = stripe.sesiones.length;
