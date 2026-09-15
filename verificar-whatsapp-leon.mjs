@@ -1291,6 +1291,10 @@ console.log('\n=== 19c. CON PRÓRROGA, EL AUTOMÁTICO SE COBRA UN DÍA ANTES DE 
   const h = await fetch(BASE + '/api/pruebas/cobro-automatico', { method: 'POST' }).then((x) => x.json());
   await respuestas(n, 1, 1500);
   es(h.cobrados === 0 && stripe.cobros.length === cobrosAntes && h.conProrroga === 1, `con prórroga de 5 días, hoy no se le cobra aunque su corte sea mañana · ${JSON.stringify(h)}`);
+  n = enviados.length;
+  await entra(I, 'pagar');
+  r = await respuestas(n);
+  es(dice(r, /Tienes prórroga hasta el \*\d\d\/\d\d\/\d{4}\*/) && dice(r, /¿Cómo quieres pagar\?/), 'y si escribe "pagar", el menú le recuerda hasta cuándo tiene prórroga antes de preguntar cómo');
   // Se le deja la prórroga en 1 día: vence mañana, así que HOY se cobra.
   const login = await fetch(BASE + '/admin/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'prueba-local-larga' }) }).then((x) => x.json());
   await fetch(BASE + '/admin/api/prorrogas', { method: 'POST', headers: { Authorization: 'Bearer ' + login.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ telefono: I, dias: 1 }) });

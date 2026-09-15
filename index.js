@@ -5365,6 +5365,11 @@ async function handleChatMessage(chatId, text, sendMsg) {
             + (regMenu.cobroAutomatico ? ' Y como tienes *cobro automático*, el siguiente se cobra solo.' : '')
             + '\n\nSi quieres adelantar el siguiente, elige cómo.\n\n';
         }
+        // Con prórroga vigente, que sepa hasta cuándo tiene antes de elegir cómo pagar.
+        const prMenu = !cuentaAjena(chatId) ? prorrogaVigente(normalizePhone(chatId)) : null;
+        if (prMenu && !vistoMenu) {
+          encabezado += `⏳ Tienes prórroga hasta el *${prMenu.hasta.split('-').reverse().join('/')}*: no se te corta antes de esa fecha, y puedes pagar cuando quieras.\n\n`;
+        }
         // Si se sabe cuánto debe, se le dice ANTES de preguntar cómo: es la
         // primera duda de cualquiera ("¿cuánto es?").
         try {
