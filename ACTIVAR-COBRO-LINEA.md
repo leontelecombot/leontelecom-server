@@ -194,6 +194,20 @@ aviso de corte se calla; el día antes de que venza se le recuerda (salvo que
 tenga automático, que se cobra solo). El panel dice cuánto le queda a cada
 prórroga, si ya pagó y si ya se le avisó.
 
+## Varios contratos en un teléfono
+
+Cada pago (link, CLABE, automático, comprobante aceptado) guarda de qué contrato es.
+Lo pagado o adelantado del local no calla el aviso de la casa. El barrido de corte mira
+contrato por contrato solo a los teléfonos que ya se sabe que tienen varios (una CLABE
+por contrato o el automático de uno), y el aviso dice cuál es. Cuando alguien con dos
+contratos manda comprobante, el bot le pregunta para cuál es y lo anota en el caso.
+
+## Lo que la oficina recibe cada mañana
+
+A las 9 sale por plantilla a los asesores el resumen de cobranza (quién corta mañana y
+debe, cubiertos, prórrogas que vencen, automáticos rechazados, comprobantes sin revisar,
+pagos por el bot en 24 h). El panel lo muestra en "Hoy en cobranza" y puede mandarlo.
+
 ## A quién NO se le manda "mañana te cortamos"
 
 A quien pagó por el bot este mes, a quien va adelantado (`adelantadoHasta`, por
@@ -387,13 +401,13 @@ node verificar-webhook-leon.mjs   #  53 del cableado en index.js
 node verificar-wisphub.mjs        #  51 de la reactivación
 node verificar-rescate-leon.mjs   #  62 del dinero atorado y los contracargos
 node verificar-cuenta-leon.mjs    # 110 de la cuenta de León y el piloto
-node verificar-whatsapp-leon.mjs  # 208 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel
+node verificar-whatsapp-leon.mjs  # 248 de la conversación: pagar por otro, contratos, meses, automático, prórrogas, corte, reinicio, fallas, comprobantes, panel, resumen diario
 node revisar-stripe.mjs           # la cuenta de Stripe a detalle
 node revisar-listo.mjs            # TODO junto: ¿ya puedo encender?
 node demo-cobro-leon.mjs          # demo visual en :4310
 ```
 
-**578 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
+**618 comprobaciones en total.** Ninguna toca Stripe, Wisphub ni WhatsApp de verdad: hay un
 Stripe falso que reproduce el retraso de indexado, la idempotencia y los rechazos
 del banco, y un Wisphub falso que se puede tirar a voluntad para ver qué hace el
 sistema cuando no contesta.
