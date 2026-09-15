@@ -5242,6 +5242,16 @@ async function handleChatMessage(chatId, text, sendMsg) {
         && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
       return handleChatMessage(chatId, 'pago_clabe', sendMsg);
     }
+    /*
+     * "¿Cómo quieres pagar?" también se contesta escribiendo: "tarjeta", "con
+     * tarjeta", "oxxo", "en oxxo", "transferencia". Sin más vueltas.
+     */
+    const _formaEscrita = _pt.replace(/[¡!¿?.,\s]+/g, ' ').trim().match(/^(?:quiero |prefiero |mejor |pago |pagar |pagarlo |voy a pagar )?(?:con |en |por |la |el )?(tarjeta(?: de (?:cr[eé]dito|d[eé]bito))?|oxxo|transferencia|dep[oó]sito|spei)(?: por favor| porfa| porfavor)?$/);
+    if (_formaEscrita && !_enOtraCosa && !_conComprobante && !_isBtn
+        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+      const f = _formaEscrita[1];
+      return handleChatMessage(chatId, /^tarjeta/.test(f) ? 'pago_con_tarjeta' : f === 'oxxo' ? 'pago_con_oxxo' : 'pago_clabe', sendMsg);
+    }
     if (/^(pagar|quiero pagar|como (puedo )?pag|cómo (puedo )?pag|donde pag|dónde pag|datos de pago|m[eé]todos de pago|formas de pago|cu[aá]nto (debo|tengo que pagar|es|pago|es mi)|mi saldo|mi adeudo|qu[eé] debo)/.test(_pt)
         || (_pideDatosPago && !_enOtraCosa && !_conComprobante && !_isBtn)) {
       /*

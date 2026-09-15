@@ -1145,6 +1145,15 @@ console.log('\n=== 18. PEDIR LOS DATOS DE PAGO COMO LO PIDE LA GENTE ===');
   await entra(A, 'mi clabe?');
   r = await respuestas(n);
   es(dice(r, /\*CLABE:\* \d{18}/), 'y "mi clabe?" también');
+  // La forma de pago escrita, sin tocar botón.
+  n = enviados.length;
+  await entra(A, 'Con tarjeta por favor');
+  r = await respuestas(n);
+  es(dice(r, /pagar con tu tarjeta/), '"con tarjeta por favor" saca el link de tarjeta de una vez');
+  n = enviados.length;
+  await entra(A, 'oxxo');
+  r = await respuestas(n);
+  es(dice(r, /ficha para pagar en OXXO/), 'y "oxxo" saca la ficha');
   n = enviados.length;
   await entra(D, 'Para pagar en transferencia?');
   r = await respuestas(n);
