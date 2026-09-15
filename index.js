@@ -4784,7 +4784,12 @@ async function handleChatMessage(chatId, text, sendMsg) {
         const porTel = digitos.length >= 7 && tel.endsWith(digitos.slice(-10));
         const porNombre = nombreBuscado.length >= 4 && String(c.name || '').toLowerCase().includes(nombreBuscado);
         if ((porTel || porNombre) && tel !== normalizePhone(chatId)) encontrados.push({ tel, name: c.name || tel });
-        if (encontrados.length >= 3) break;
+        if (encontrados.length >= 4) break;
+      }
+      // Más de tres es demasiado para los botones de WhatsApp: mejor afinar la búsqueda.
+      if (encontrados.length > 3) {
+        await sendMsg(chatId, `Hay varias personas con "${text.trim().slice(0, 40)}". Escríbeme el *nombre con apellidos* completo, o mejor su *número de teléfono*, para dar con la cuenta correcta.`);
+        return;
       }
       if (!encontrados.length) {
         await sendMsg(chatId, 'No encontré una cuenta con eso. Escríbeme el *número de teléfono* que tiene registrado, o el *nombre completo* como aparece en su contrato. Si prefieres salir, escribe *menú*.');

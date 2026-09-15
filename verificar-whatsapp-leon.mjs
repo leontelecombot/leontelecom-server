@@ -465,6 +465,11 @@ console.log('\n=== 5. SIN CALLEJONES SIN SALIDA ===');
   let n = enviados.length;
   await entra(A, 'OTRO');
   await respuestas(n);
+  // Un nombre demasiado común: en el padrón de prueba "clie" no aparece, pero "Pérez" da 2; se prueba con un apellido que abarca 4+ (todos los nombres tienen letras 'e'): se usa una letra que cubre a casi todos.
+  n = enviados.length;
+  await entra(A, 'ez');
+  let r0 = await respuestas(n);
+  es(dice(r0, /No encontré/) || dice(r0, /Hay varias personas/) , 'dos letras no bastan, o si hay demasiadas coincidencias pide afinar');
   n = enviados.length;
   await entra(A, '951 111 1111');   // su propio número
   let r = await respuestas(n);
