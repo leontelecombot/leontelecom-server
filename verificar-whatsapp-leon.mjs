@@ -616,7 +616,13 @@ console.log('\n=== 9b. LO QUE LA GENTE ESCRIBE DE VERDAD ===');
   let n = enviados.length;
   await entra(A, 'Buen día, pago del señor Diego Ruiz');
   let r = await respuestas(n);
-  es(!dice(r, /¿Es la cuenta de/), '"pago del señor X" sin "a nombre de" no se adivina (sería peligroso)');
+  if (!dice(r, /¿Es la cuenta de \*Diego Ruiz\*\?/)) console.log('    recibió:', JSON.stringify(r.map((m) => m.texto.slice(0, 100))));
+  es(dice(r, /¿Es la cuenta de \*Diego Ruiz\*\?/), '"pago del señor Diego Ruiz" (así avisan de verdad) encuentra a Diego y pide confirmar');
+  await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
+  n = enviados.length;
+  await entra(A, 'pago de servicio de Fulano Perengano');
+  r = await respuestas(n);
+  es(!dice(r, /¿Es la cuenta de/) && !dice(r, /No encontré/), 'pero con un nombre que no está en el padrón no se mete al flujo de pagar por otro');
   await entra(A, 'menú'); await respuestas(enviados.length, 1, 1500);
 
   n = enviados.length;

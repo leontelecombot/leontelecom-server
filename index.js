@@ -4997,6 +4997,22 @@ async function handleChatMessage(chatId, text, sendMsg) {
       }
       return;
     }
+    /*
+     * "Pago del señor Félix Ramos", "pago de servicio de Víctor Caballero":
+     * también así avisan que pagan por otro. Aquí solo se toma como pago por
+     * otro si el nombre existe en el padrón; si no, sigue el flujo normal.
+     */
+    const _pagoDe = (text.match(/^(?:buen(?:[oa]s?)?\s+(?:d[ií]as?|tardes|noches)[,.]?\s*)?(?:pago|pagar|abono)\s+(?:de|del|para)\s+(?:(?:el\s+)?servicio\s+(?:de|del)\s+|internet\s+(?:de|del)\s+)?(?:(?:el|la)\s+)?(?:se[ñn]ora?|don|do[ñn]a|sr\.?|sra\.?)?\s*([^\n,.;]{6,60})$/i) || [])[1];
+    if (_pagoDe && !_aNombreDe && !_enOtraCosa && !_conComprobante && !_isBtn
+        && stripeLeon.permitido(normalizePhone(chatId), TELEFONO_PILOTO_STRIPE)) {
+      const norm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+      const q = norm(_pagoDe);
+      const hay = q.length >= 6 && [...wisphubClients.entries()].some(([tel, c]) => tel !== normalizePhone(chatId) && norm(c.name).includes(q));
+      if (hay) {
+        setSession(chatId, { state: 'pago_otro_buscar', data: { desde: Date.now() } });
+        return handleChatMessage(chatId, _pagoDe.trim(), sendMsg);
+      }
+    }
     if (/^(oficina|en la oficina|pagar en oficina|otras formas)[\s.!]*$/.test(_pt) && !_enOtraCosa) {
       return handleChatMessage(chatId, 'pago_otras', sendMsg);
     }
