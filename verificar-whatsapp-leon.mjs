@@ -1566,12 +1566,26 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   es(r.some((m) => m.a === E && m.tipo === 'template' && /te dimos hasta el \*(lunes|martes|miércoles|jueves|viernes|sábado|domingo) \d\d\/\d\d\/\d{4}\*/.test(m.texto)), 'y a Elena le llega por plantilla hasta qué día tiene');
   pr = await fetch(BASE + '/admin/api/prorrogas', { headers: H_ }).then((x) => x.json());
   es(!(pr.pendientes || []).some((x) => x.telefono === E) && (pr.prorrogas || []).some((x) => x.telefono === E && /WhatsApp/.test(x.motivo)), 'en el panel ya no está pendiente y la prórroga dice que la pidió por WhatsApp');
-  // Hugo también pide; esta vez se le niega con el botón y se le dice cómo pagar.
+  // Hugo ya tiene pago visto este periodo (su comprobante): no se molesta al jefe en vano.
   n = enviados.length;
   await entra(H, 'me esperan tantito con el pago? la otra semana pago');
+  r = await respuestas(n, 1);
+  const yaP = r.find((m) => m.a === H && /Ya tenemos tu pago del \*\d{1,2}\/\d{1,2}\/\d{4}\*/.test(m.texto));
+  es(!!yaP && /no necesitas prórroga/.test(yaP.texto) && yaP.botones.length === 2 && yaP.botones[1].id === 'prorroga_proximo', 'a Hugo, que ya pagó este mes, se le dice que no necesita prórroga y se le pregunta si es para el siguiente');
+  es(!r.some((m) => m.a === JEFE), 'y al jefe no le llega nada');
+  n = enviados.length;
+  await toca(H, 'prorroga_ya');
+  r = await respuestas(n, 1);
+  es(dice(r, /Tu servicio sigue activo/) && !r.some((m) => m.a === JEFE), '"No, ya quedó" cierra amable, sin solicitud');
+  // Si es para el próximo pago, sí va al jefe, con esa nota.
+  n = enviados.length;
+  await entra(H, 'me esperan tantito con el pago? la otra semana pago');
+  await respuestas(n, 1);
+  n = enviados.length;
+  await toca(H, 'prorroga_proximo');
   r = await respuestas(n, 2);
   const solH = r.find((m) => m.a === JEFE && /SOLICITUD DE PRÓRROGA/.test(m.texto));
-  es(!!solH && /Hugo/.test(solH.texto), 'la de Hugo también llega a quien decide');
+  es(!!solH && /Hugo/.test(solH.texto) && /SIGUIENTE pago/.test(solH.texto) && /Ojo: el bot ya le vio un pago/.test(solH.texto), 'la de Hugo llega al jefe solo si es para el siguiente pago, y con la nota de que este ya está pagado');
   n = enviados.length;
   await toca(JEFE, 'NO PRORROGA 9518888888');
   r = await respuestas(n, 2);
@@ -1582,12 +1596,13 @@ console.log('\n=== 21. LA PRÓRROGA SE PIDE POR WHATSAPP Y LA DECIDE UNA SOLA PE
   // Desde el panel también se puede negar una pedida.
   n = enviados.length;
   await entra(H, 'de verdad necesito unos días más para pagar');
-  await respuestas(n, 2);
+  await respuestas(n, 1);
+  n = enviados.length; await toca(H, 'prorroga_proximo'); await respuestas(n, 2);
   // La ficha de Hugo enseña la solicitud pendiente, con cuánto lleva y lo que escribió.
   {
     const d = await fetch(BASE + '/admin/api/client-lookup?q=' + H, { headers: H_ }).then((x) => x.json());
     const f = (d.results || [])[0] || {};
-    es(f.prorrogaPedida && f.prorrogaPedida.horas === 0 && /unos días más/.test(f.prorrogaPedida.texto) && f.prorrogaPedida.recordado === false, 'la ficha de Hugo dice que pidió prórroga hace menos de 1 h, con lo que escribió, para resolverla desde ahí');
+    es(f.prorrogaPedida && f.prorrogaPedida.horas === 0 && /SIGUIENTE pago/.test(f.prorrogaPedida.texto) && f.prorrogaPedida.recordado === false, 'la ficha de Hugo dice que pidió prórroga hace menos de 1 h y para qué, para resolverla desde ahí');
   }
   // Mientras está pedida, cuenta en el resumen de cobranza y en "Hoy en cobranza".
   {

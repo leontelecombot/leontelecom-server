@@ -5850,7 +5850,8 @@ async function handleChatMessage(chatId, text, sendMsg) {
     // el mensaje al horario: en horario "te contactará en breve", fuera de horario
     // "te contactará <próximo horario>" (sin dar número). El caso queda registrado
     // para el resumen matutino si es fuera de horario.
-    if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && isProrrogaRequest(text)) {
+    if (_pt === 'prorroga_ya') { await sendMsg(chatId, '👍 Perfecto. Tu servicio sigue activo; si necesitas algo más, aquí estoy.'); return; }
+    if (!_emergencyNow && !_isBtn && !pendingImage.has(_pendKey) && !pendingDoc.has(_pendKey) && (isProrrogaRequest(text) || _pt === 'prorroga_proximo')) {
       addMessageToHistory(chatId, 'user', text);
       const _nom = nameOf(getProfile(chatId));
       // Si ya tiene una prórroga, se le recuerda hasta cuándo; no se abre otro caso.
@@ -5859,13 +5860,22 @@ async function handleChatMessage(chatId, text, sendMsg) {
         await sendMsg(chatId, `⏳ Ya tienes una prórroga hasta el *${fechaConDia(_prV.hasta)}*: no se te corta antes de esa fecha. Si necesitas más días, escribe *asesor* y lo revisa una persona.`);
         return;
       }
+      // Si el bot ya le vio el pago de este periodo, no hay nada que pedir: se le dice, y solo
+      // si es para el siguiente pago se le pasa al jefe (con esa nota), sin molestarlo en vano.
+      const _pgV = pagoRecienteDe(normalizePhone(chatId));
+      if (_pgV && !/^prorroga_(proximo|ya)$/.test(_pt)) {
+        const cuandoTxt = new Date(_pgV.cuando).toLocaleDateString('es-MX', { timeZone: BUSINESS_TZ });
+        await sendMsg(chatId, `✅ Ya tenemos tu pago del *${cuandoTxt}* (${canalTexto(_pgV.canal)}), así que este mes no necesitas prórroga: tu servicio sigue. ¿O lo pides para el *siguiente* pago?`,
+          [], { buttons: [{ id: 'prorroga_ya', title: '👍 No, ya quedó' }, { id: 'prorroga_proximo', title: '📅 Es para el próximo' }] });
+        return;
+      }
       // Si ya la pidió hace poco y nadie ha contestado, no se manda dos veces.
       const _ped = prorrogasPedidas[normalizePhone(chatId)];
       if (_ped && Date.now() - _ped.cuando < 24 * 3600 * 1000) {
         await sendMsg(chatId, '📅 Tu solicitud de prórroga ya está con la oficina; en cuanto la respondan te aviso por aquí. Si mientras puedes pagar, escribe *pagar*.');
         return;
       }
-      const _fue = await pedirProrrogaAQuienDecide(chatId, _nom, text).catch(() => false);
+      const _fue = await pedirProrrogaAQuienDecide(chatId, _nom, _pt === 'prorroga_proximo' ? 'Pide tiempo para el SIGUIENTE pago (el de este periodo ya lo tiene visto el bot)' : text).catch(() => false);
       const _who = (_nom && looksLikeName(_nom)) ? `${_nom}, ` : '';
       await sendMsg(chatId, _fue
         ? `📅 ${_who}ya pasé tu solicitud a la oficina. ${isWithinBusinessHours() ? 'En cuanto la revisen' : `La revisan ${describeNextOpening()} y en cuanto respondan`} te aviso por aquí hasta qué día tienes. Si mientras puedes pagar, escribe *pagar*.`
