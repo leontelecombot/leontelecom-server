@@ -4974,13 +4974,16 @@ async function handleChatMessage(chatId, text, sendMsg) {
       const bonita = corte ? corte.split('-').reverse().join('/') : '';
       const suspendido = /suspend|cort/i.test(String(c.status || ''));
       let monto = '';
-      try { const cobro = await montoACobrar(chatId, ''); if (cobro.ok && clienteDebe(c)) monto = ` Tienes pendiente *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`; } catch (_) { /* sin monto */ }
+      // Si el bot ya vio su pago (aunque Wisphub siga diciendo que debe), no se le cobra en el mensaje.
+      const vistoC = pagoRecienteDe(telC);
+      if (vistoC) monto = /^adelantado hasta /.test(vistoC.canal) ? ` ✅ Estás pagado hasta el *${vistoC.canal.slice(-10).split('-').reverse().join('/')}*.` : ` ✅ Ya tenemos tu pago de este mes (${canalTexto(vistoC.canal)}).`;
+      else try { const cobro = await montoACobrar(chatId, ''); if (cobro.ok && clienteDebe(c)) monto = ` Tienes pendiente *$${cobro.monto.toFixed(2)}*${cobro.deTexto}.`; } catch (_) { /* sin monto */ }
       const prC = prorrogaVigente(telC);
       const prTexto = prC ? `\n⏳ Tienes prórroga hasta el *${prC.hasta.split('-').reverse().join('/')}*: no se te corta antes.` : '';
       await sendMsg(chatId,
         (suspendido ? '🔴 Tu servicio está *suspendido*.' : (corte ? `📅 Tu fecha de corte es el *${bonita}*.` : '📅 No tengo tu fecha de corte a la mano.'))
         + monto + prTexto
-        + (suspendido || monto ? '\n\nEscribe *pagar* y te digo cómo, o *cuánto debo* para ver el detalle.' : '\n\nEstás al corriente. 🙌'));
+        + (vistoC ? ' Estás al corriente. 🙌' : (suspendido || monto ? '\n\nEscribe *pagar* y te digo cómo, o *cuánto debo* para ver el detalle.' : '\n\nEstás al corriente. 🙌')));
       return;
     }
     /*
@@ -5078,11 +5081,22 @@ async function handleChatMessage(chatId, text, sendMsg) {
       if (esPiloto) {
         // Quien tiene cobro automático no necesita hacer nada: que lo sepa antes de pagar dos veces.
         const regMenu = stripeClientes.get(normalizePhone(chatId)) || {};
-        if (regMenu.cobroAutomatico && !cuentaAjena(chatId)) {
+        const vistoMenu = !cuentaAjena(chatId) && mesesEnSesion(chatId) <= 1 ? pagoRecienteDe(normalizePhone(chatId)) : null;
+        if (regMenu.cobroAutomatico && !cuentaAjena(chatId) && !vistoMenu) {
           const corteMenu = parseFechaCorte((wisphubClients.get(normalizePhone(chatId)) || {}).fechaCorte);
           encabezado = '🔁 Tienes *cobro automático*: '
             + (corteMenu ? `se cobra solo a tu tarjeta un día antes del ${corteMenu.split('-').reverse().join('/')}` : 'se cobra solo a tu tarjeta un día antes de tu fecha de pago')
             + '. No tienes que hacer nada.\n\nSi de todos modos quieres pagar ahora, elige cómo (y ese mes ya no se te cobra en automático).\n\n';
+        }
+        // Y quien ya pagó este mes también debe saberlo antes de pagar dos veces
+        // (salvo que venga a adelantar meses a propósito).
+        if (vistoMenu) {
+          encabezado += (/^adelantado hasta /.test(vistoMenu.canal)
+            ? `✅ Ya estás pagado hasta el *${vistoMenu.canal.slice(-10).split('-').reverse().join('/')}*.`
+            : `✅ Ya tenemos tu pago de este mes (${canalTexto(vistoMenu.canal)}).`)
+            + ' No tienes que pagar nada ahora.'
+            + (regMenu.cobroAutomatico ? ' Y como tienes *cobro automático*, el siguiente se cobra solo.' : '')
+            + '\n\nSi quieres adelantar el siguiente, elige cómo.\n\n';
         }
         // Si se sabe cuánto debe, se le dice ANTES de preguntar cómo: es la
         // primera duda de cualquiera ("¿cuánto es?").
